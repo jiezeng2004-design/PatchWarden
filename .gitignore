@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.safe-bifrost/
+.env
+*.log
+safe-bifrost.config.json
+release/
+safe-bifrost-release.zip
+safe-bifrost-release.tar.gz
+safe-bifrost-*.tgz

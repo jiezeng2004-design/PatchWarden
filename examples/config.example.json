@@ -1,0 +1,25 @@
+{
+  "workspaceRoot": "D:/ai_agent/test-project",
+  "plansDir": ".safe-bifrost/plans",
+  "tasksDir": ".safe-bifrost/tasks",
+  "agents": {
+    "codex": {
+      "command": "codex",
+      "args": ["exec", "--cd", "{repo}", "{prompt}"]
+    },
+    "opencode": {
+      "command": "opencode",
+      "args": ["run", "{prompt}"]
+    }
+  },
+  "allowedTestCommands": [
+    "npm test",
+    "npm run test",
+    "pnpm test",
+    "yarn test",
+    "pytest",
+    "cargo test",
+    "go test ./..."
+  ],
+  "maxReadFileBytes": 200000
+}

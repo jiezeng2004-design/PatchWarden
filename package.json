@@ -1,0 +1,58 @@
+{
+  "name": "safe-bifrost",
+  "version": "0.1.0",
+  "description": "A secure local MCP bridge: clients save plans, local agents execute tasks, and results are returned through workspace-scoped files.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "safe-bifrost": "dist/index.js",
+    "safe-bifrost-runner": "dist/runner/cli.js"
+  },
+  "files": [
+    "dist/",
+    "src/",
+    "examples/",
+    "scripts/",
+    "README.md",
+    "LICENSE",
+    "tsconfig.json"
+  ],
+  "scripts": {
+    "build": "node ./node_modules/typescript/bin/tsc",
+    "start": "node dist/index.js",
+    "dev": "npm run build && node dist/index.js",
+    "runner": "node dist/runner/cli.js",
+    "test": "node dist/smoke-test.js",
+    "test:mcp": "npm run build && node scripts/mcp-smoke.js",
+    "pretest": "npm run build",
+    "pack:clean": "npm run build && node scripts/pack-clean.js",
+    "verify:package": "npm run build && npm pack --dry-run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "codex",
+    "opencode",
+    "local-agent"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jiezeng2004-design/safe-bifrost.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jiezeng2004-design/safe-bifrost/issues"
+  },
+  "homepage": "https://github.com/jiezeng2004-design/safe-bifrost#readme",
+  "license": "MIT"
+}
