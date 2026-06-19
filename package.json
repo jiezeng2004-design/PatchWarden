@@ -1,6 +1,6 @@
 {
   "name": "safe-bifrost",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A secure local MCP bridge: clients save plans, local agents execute tasks, and results are returned through workspace-scoped files.",
   "type": "module",
   "main": "dist/index.js",
