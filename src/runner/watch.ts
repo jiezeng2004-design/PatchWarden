@@ -105,7 +105,7 @@ async function tick() {
       executedTasks.add(taskId);
 
       try {
-        const result = runTask(taskId);
+        const result = await runTask(taskId);
         console.error(`[watcher] ${taskId} → ${result.status}`);
       } catch (err) {
         console.error(`[watcher] ${taskId} → error: ${err instanceof Error ? err.message : String(err)}`);

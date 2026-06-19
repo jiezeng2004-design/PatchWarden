@@ -23,7 +23,7 @@ if (!taskId) {
 
 console.error(`[runner] Starting task: ${taskId}`);
 
-const result = runTask(taskId);
+const result = await runTask(taskId);
 
 console.error(`[runner] Task ${result.task_id}: ${result.status}`);
 if (result.error) {

@@ -4,7 +4,7 @@ import { getTasksDir, getPlansDir, getConfig } from "../config.js";
 import { guardPath, guardWorkspacePath, guardReadPath } from "../security/pathGuard.js";
 import { guardTestCommand } from "../security/commandGuard.js";
 
-export type TaskStatus = "pending" | "running" | "done" | "failed";
+export type TaskStatus = "pending" | "running" | "done" | "failed" | "canceled";
 
 export interface CreateTaskInput {
   plan_id: string;
@@ -68,7 +68,9 @@ export function createTask(input: CreateTaskInput): CreateTaskOutput {
     task_id: taskId,
     plan_id: input.plan_id,
     agent: input.agent,
-    repo_path: safeRepoPath,
+    workspace_root: resolve(config.workspaceRoot),
+    repo_path: input.repo_path || ".",
+    resolved_repo_path: safeRepoPath,
     test_command: testCmd,
     status,
     created_at: new Date().toISOString(),

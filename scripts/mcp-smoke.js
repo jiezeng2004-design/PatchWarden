@@ -83,14 +83,19 @@ try {
   const tools = await client.listTools();
   const names = tools.tools.map((tool) => tool.name).sort();
   const expected = [
+    "audit_task",
+    "cancel_task",
     "create_task",
     "get_diff",
     "get_plan",
     "get_result",
     "get_task_status",
+    "get_task_stdout_tail",
     "get_test_log",
+    "list_tasks",
     "list_workspace",
     "read_workspace_file",
+    "retry_task",
     "save_plan",
   ];
   if (JSON.stringify(names) !== JSON.stringify(expected)) {

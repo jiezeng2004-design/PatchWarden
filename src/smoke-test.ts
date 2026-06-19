@@ -33,6 +33,11 @@ import { getTaskStatus } from "./tools/getTaskStatus.js";
 import { getResult, getDiff, getTestLog } from "./tools/taskOutputs.js";
 import { listWorkspace } from "./tools/listWorkspace.js";
 import { readWorkspaceFile } from "./tools/readWorkspaceFile.js";
+import { listTasks } from "./tools/listTasks.js";
+import { cancelTask } from "./tools/cancelTask.js";
+import { retryTask } from "./tools/retryTask.js";
+import { getTaskStdoutTail } from "./tools/getTaskStdoutTail.js";
+import { auditTask } from "./tools/auditTask.js";
 
 // Resolve the actual node binary path (spawnSync needs it on WSL/Windows)
 let nodeBin = process.execPath;
@@ -204,6 +209,7 @@ const sensitiveFiles = [
   "keys/private.key",
   "cookies.sqlite",
   ".git-credentials",
+  "config.json",
 ];
 
 for (const sf of sensitiveFiles) {
@@ -486,6 +492,7 @@ test("H2. watcher rejects task with external repo_path", () => {
   const statusPath = join(tamperTask.path, "status.json");
   const data = JSON.parse(readFileSync(statusPath, "utf-8"));
   data.repo_path = "/etc";
+  data.resolved_repo_path = "/etc";
   writeFileSync(statusPath, JSON.stringify(data, null, 2), "utf-8");
 
   // Run the CLI — it should detect the invalid repo_path and fail
@@ -535,6 +542,162 @@ test("H3. watcher rejects task with bad test_command", () => {
   if (!rejected) throw new Error("createTask should reject invalid test_command");
   console.log(`    createTask correctly rejected bad test_command`);
 });
+
+// ════════════════════════════════════════════════════════════════
+// Section I: New v0.2.0 tools (listTasks, cancelTask, retryTask, stdout, audit)
+// ════════════════════════════════════════════════════════════════
+
+console.log("\n── I. v0.2.0 task management tools ──");
+
+let mgmtPlanId = "";
+let mgmtTaskId = "";
+let mgmtTaskId2 = "";
+
+test("I1. list_tasks returns tasks array", () => {
+  mgmtPlanId = savePlan({ title: "Mgmt Test", content: "# Test" }).plan_id;
+  mgmtTaskId = createTask({ plan_id: mgmtPlanId, agent: "codex" }).task_id;
+  mgmtTaskId2 = createTask({ plan_id: mgmtPlanId, agent: "codex", repo_path: "." }).task_id;
+  const result = listTasks({ limit: 5 });
+  if (!Array.isArray(result.tasks)) throw new Error("tasks not array");
+  if (result.tasks.length < 2) throw new Error(`Expected >=2 tasks, got ${result.tasks.length}`);
+});
+
+test("I2. list_tasks filters by status pending", () => {
+  const result = listTasks({ status: "pending", limit: 10 });
+  const allPending = result.tasks.every((t) => t.status === "pending");
+  if (!allPending) throw new Error("Not all tasks are pending");
+});
+
+test("I3. cancel_task cancels pending task", () => {
+  const task = createTask({ plan_id: mgmtPlanId, agent: "codex" });
+  const result = cancelTask(task.task_id);
+  if (result.new_status !== "canceled") throw new Error(`Expected canceled, got ${result.new_status}`);
+  // Verify task status updated
+  const status = getTaskStatus(task.task_id);
+  if (status.status !== "canceled") throw new Error(`Status should be canceled, got ${status.status}`);
+});
+
+test("I4. cancel_task on done/failed returns unchanged", () => {
+  // Use a task that has already been executed (from section G)
+  const result = cancelTask(mgmtTaskId); // may be failed or pending — should not crash
+  if (!result.message) throw new Error("Expected message");
+});
+
+test("I5. retry_task creates new task", () => {
+  const newResult = retryTask(mgmtTaskId);
+  if (newResult.new_task_id === mgmtTaskId) throw new Error("New task ID should differ");
+  if (newResult.plan_id !== mgmtPlanId) throw new Error("Should inherit plan_id");
+});
+
+test("I6. get_task_stdout_tail returns tail text", () => {
+  // Run a task first to generate output
+  const tailPlan = savePlan({ title: "Tail Test", content: "# Tail" });
+  const tailTask = createTask({ plan_id: tailPlan.plan_id, agent: "codex" });
+  // Execute via CLI
+  const cliPath = resolve(projectRoot, "dist/runner/cli.js");
+  spawnSync(nodeBin, [cliPath, tailTask.task_id], { cwd: wsRoot, encoding: "utf-8", timeout: 60_000 });
+
+  const tail = getTaskStdoutTail(tailTask.task_id, 10);
+  if (typeof tail.stdout_tail !== "string") throw new Error("stdout_tail should be string");
+  if (typeof tail.lines !== "number") throw new Error("lines should be number");
+});
+
+test("I7. audit_task runs and returns checks array", () => {
+  const auditResult = auditTask(mgmtTaskId);
+  if (!auditResult.verdict) throw new Error("Missing verdict");
+  if (!Array.isArray(auditResult.checks)) throw new Error("checks not array");
+  if (!Array.isArray(auditResult.risks)) throw new Error("risks not array");
+  console.log(`    Verdict: ${auditResult.verdict}, Checks: ${auditResult.checks.length}, Risks: ${auditResult.risks.length}`);
+});
+
+test("I8. sensitiveGuard does NOT block task_id containing 'token'", () => {
+  // Regression: ensure task operations don't get blocked by sensitiveGuard
+  const tokenPlan = savePlan({ title: "Token Test Plan", content: "# Token validation" });
+  const tokenTask = createTask({ plan_id: tokenPlan.plan_id, agent: "codex" });
+  // get_task_status should work even though plan contains "token" in name
+  const status = getTaskStatus(tokenTask.task_id);
+  if (!status || !status.status) throw new Error("get_task_status should succeed");
+  // list_tasks should include it
+  const list = listTasks({ limit: 50 });
+  const found = list.tasks.find((t) => t.task_id === tokenTask.task_id);
+  if (!found) throw new Error("Task with 'token' plan should appear in list_tasks");
+});
+
+// ════════════════════════════════════════════════════════════════
+// Section J: audit_task enhanced tests (v0.2.0 round 2)
+// ════════════════════════════════════════════════════════════════
+
+console.log("\n── J. audit_task enhanced tests ──");
+
+const testProjDir = resolve(wsRoot, "test-proj");
+const testDocsDir = join(testProjDir, "docs");
+try { mkdirSync(testProjDir, { recursive: true }); mkdirSync(testDocsDir, { recursive: true }); } catch {}
+
+writeFileSync(join(testProjDir, "package.json"), JSON.stringify({
+  name: "test-proj", scripts: { test: "echo ok", build: "echo build" }
+}, null, 2), "utf-8");
+
+writeFileSync(join(testDocsDir, "claims.md"), [
+  "# Claims", "Run: npm run missing-docs", "GitHub release created for v1.0.0",
+].join("\n"), "utf-8");
+
+writeFileSync(join(testProjDir, "README.md"), [
+  "# Test Project", "Run `npm run missing-readme` to start.",
+].join("\n"), "utf-8");
+
+let auditPlanId = "";
+let auditTaskId = "";
+
+test("J1. audit_task passes relative repo_path", () => {
+  auditPlanId = savePlan({ title: "Audit Repo Test", content: "# Test" }).plan_id;
+  auditTaskId = createTask({ plan_id: auditPlanId, agent: "codex", repo_path: "test-proj" }).task_id;
+  const cliPath = resolve(projectRoot, "dist/runner/cli.js");
+  spawnSync(nodeBin, [cliPath, auditTaskId], { cwd: wsRoot, encoding: "utf-8", timeout: 60_000 });
+  const result = auditTask(auditTaskId);
+  const rpCheck = result.checks.find((c: any) => c.name === "repo_path_consistency");
+  if (!rpCheck || rpCheck.result === "fail") throw new Error(`repo_path should pass, got ${rpCheck?.result}`);
+  console.log(`    repo_path_consistency: ${rpCheck.result}`);
+});
+
+test("J2. audit_task detects docs missing-script", () => {
+  const tasksDir = resolve(wsRoot, config.tasksDir);
+  writeFileSync(join(tasksDir, auditTaskId, "test.log"), "$ npm test\nExit code: 0\nall good", "utf-8");
+  writeFileSync(join(tasksDir, auditTaskId, "result.md"), "# Result\n\nDone.", "utf-8");
+  const result = auditTask(auditTaskId);
+  const scriptChecks = result.checks.filter((c: any) => c.name.startsWith("npm_script_"));
+  if (scriptChecks.length === 0) throw new Error("Should detect missing npm scripts from docs");
+  const allWarn = scriptChecks.every((c: any) => c.result === "warn");
+  if (!allWarn) throw new Error("Missing script checks should be warn");
+  console.log(`    Missing scripts: ${scriptChecks.map((c: any) => c.name).join(", ")}`);
+});
+
+test("J3. audit_task detects unverified release claims", () => {
+  const result = auditTask(auditTaskId);
+  const releaseCheck = result.checks.find((c: any) => c.name === "release_claims_unverified");
+  if (!releaseCheck) throw new Error("Should detect release claims");
+  if (releaseCheck.result !== "warn") throw new Error(`Release claims should warn, got ${releaseCheck.result}`);
+  console.log(`    Release claims detected: ${releaseCheck.detail.slice(0, 60)}...`);
+});
+
+test("J4. audit_task fails on non-zero Exit code", () => {
+  const tasksDir = resolve(wsRoot, config.tasksDir);
+  writeFileSync(join(tasksDir, auditTaskId, "test.log"), "$ npm test\nExit code: 1\nFAILING", "utf-8");
+  const result = auditTask(auditTaskId);
+  const exitCheck = result.checks.find((c: any) => c.name === "test_exit_code");
+  if (!exitCheck) throw new Error("Should have test_exit_code check");
+  if (exitCheck.result !== "fail") throw new Error(`Exit code 1 should fail, got ${exitCheck.result}`);
+  console.log(`    Exit code: ${exitCheck.result}`);
+});
+
+test("J5. get_task_stdout_tail on pending task does not throw", () => {
+  const pPlan = savePlan({ title: "Pending Tail", content: "# P" });
+  const pTask = createTask({ plan_id: pPlan.plan_id, agent: "codex" });
+  const tail = getTaskStdoutTail(pTask.task_id);
+  if (!tail.stdout_tail?.includes("no output")) throw new Error(`Should return placeholder, got: ${tail.stdout_tail?.slice(0, 50)}`);
+  if (tail.source !== "none") throw new Error(`Source should be 'none', got ${tail.source}`);
+});
+
+try { rmSync(testProjDir, { recursive: true }); } catch {}
 
 // ════════════════════════════════════════════════════════════════
 // Summary

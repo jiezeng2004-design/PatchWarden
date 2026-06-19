@@ -8,8 +8,8 @@
  * Never modifies files, installs dependencies, or starts services.
  */
 
-import { existsSync, statSync, readFileSync } from "node:fs";
-import { resolve, normalize } from "node:path";
+import { existsSync, statSync, readFileSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { resolve, normalize, join } from "node:path";
 import { execSync } from "node:child_process";
 import { createServer } from "node:net";
 import { loadConfig, getConfig } from "./config.js";
@@ -199,6 +199,44 @@ const distChecks = [
 for (const { file, label, cmd: buildCmd } of distChecks) {
   check(`${label} exists`, existsSync(resolve(process.cwd(), file)),
     existsSync(resolve(process.cwd(), file)) ? file : `Missing — run: ${buildCmd}`);
+}
+
+// New tool registrations check
+const newTools = ["listTasks", "cancelTask", "retryTask", "getTaskStdoutTail", "auditTask"];
+for (const t of newTools) {
+  const compiled = resolve(process.cwd(), "dist/tools", `${t}.js`);
+  check(`Tool module: ${t}`, existsSync(compiled), existsSync(compiled) ? "compiled" : "missing");
+}
+
+// Task directory writable
+if (config) {
+  const tasksDir = resolve(config.workspaceRoot, config.tasksDir);
+  try {
+    mkdirSync(tasksDir, { recursive: true });
+    const testFile = join(tasksDir, ".doctor-write-test");
+    writeFileSync(testFile, "ok", "utf-8");
+    rmSync(testFile);
+    check("Task directory writable", true, tasksDir);
+  } catch {
+    warnCheck("Task directory writable", false, tasksDir);
+  }
+
+  // workspaceRoot writable
+  try {
+    const testFile = resolve(config.workspaceRoot, ".doctor-write-test");
+    writeFileSync(testFile, "ok", "utf-8");
+    rmSync(testFile);
+    check("workspaceRoot writable", true, config.workspaceRoot);
+  } catch {
+    warnCheck("workspaceRoot writable", false, config.workspaceRoot);
+  }
+}
+
+// allowedTestCommands has npm test
+if (config) {
+  const hasNpmTest = config.allowedTestCommands.some((c: string) => c === "npm test" || c === "npm run test");
+  warnCheck("allowedTestCommands includes npm test", hasNpmTest,
+    hasNpmTest ? "present" : "npm test is missing — add it to allowedTestCommands");
 }
 
 // 13. Agent command check

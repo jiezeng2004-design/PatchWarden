@@ -1,5 +1,5 @@
-import { execSync, spawnSync } from "node:child_process";
-import { writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
+import { execSync, spawn, spawnSync } from "node:child_process";
+import { writeFileSync, readFileSync, existsSync, mkdirSync, createWriteStream } from "node:fs";
 import { resolve, join } from "node:path";
 import { getTasksDir, getPlansDir, getConfig, resolveWorkspaceRoot } from "../config.js";
 import { guardPath, guardWorkspacePath } from "../security/pathGuard.js";
@@ -26,7 +26,7 @@ interface TaskRunResult {
  * 4. Collect outputs: git diff, test log, result.md
  * 5. Update status.json
  */
-export function runTask(taskId: string): TaskRunResult {
+export async function runTask(taskId: string): Promise<TaskRunResult> {
   const config = getConfig();
   const tasksDir = getTasksDir(config);
   const plansDir = getPlansDir(config);
@@ -45,7 +45,7 @@ export function runTask(taskId: string): TaskRunResult {
 
   const planId: string = statusData.plan_id;
   const agentName: string = statusData.agent;
-  const rawRepoPath: string = statusData.repo_path || wsRoot;
+  const rawRepoPath: string = statusData.resolved_repo_path || statusData.repo_path || wsRoot;
   const testCommand: string = statusData.test_command || "";
 
   // Validate repo_path is still within workspace (defense against tampered status.json)
@@ -83,22 +83,71 @@ export function runTask(taskId: string): TaskRunResult {
       return arg;
     });
 
-    // ── Phase 4: Execute ──
-    const result = spawnSync(agentCmd.command, resolvedArgs, {
+    // ── Phase 4: Execute with spawn (streaming stdout/stderr to log files) ──
+    const stdoutLog = join(taskDir, "stdout.log");
+    const stderrLog = join(taskDir, "stderr.log");
+    const stdoutStream = createWriteStream(stdoutLog, { flags: "a" });
+    const stderrStream = createWriteStream(stderrLog, { flags: "a" });
+
+    let agentStdout = "";
+    let agentStderr = "";
+    let spawnError = "";
+    let exitCode: number | null = null;
+
+    const child = spawn(agentCmd.command, resolvedArgs, {
       cwd: repoPath,
-      timeout: 600_000, // 10 minutes
-      maxBuffer: 10 * 1024 * 1024,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
     });
 
-    const stdout = result.stdout || "";
-    const stderr = result.stderr || "";
-    const spawnError = result.error instanceof Error ? result.error.message : "";
-    const exitCode = result.status ?? 1;
-    const fullStderr = spawnError
-      ? `${stderr}\n\nSpawn error: ${spawnError}`.trim()
-      : stderr;
+    // Record child PID for cancel support
+    const childPid = child.pid;
+    try {
+      const statusNow = JSON.parse(readFileSync(statusFile, "utf-8"));
+      statusNow.child_pid = childPid;
+      writeFileSync(statusFile, JSON.stringify(statusNow, null, 2), "utf-8");
+    } catch {}
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      const text = chunk.toString("utf-8");
+      agentStdout += text;
+      stdoutStream.write(text);
+    });
+
+    child.stderr.on("data", (chunk: Buffer) => {
+      const text = chunk.toString("utf-8");
+      agentStderr += text;
+      stderrStream.write(text);
+    });
+
+    await new Promise<void>((resolveExec) => {
+      child.on("close", (code) => {
+        exitCode = code;
+        stdoutStream.end();
+        stderrStream.end();
+        resolveExec();
+      });
+
+      child.on("error", (err) => {
+        spawnError = err.message;
+        stdoutStream.end();
+        stderrStream.end();
+        resolveExec();
+      });
+    });
+
+    // Check for cancel_requested (set by cancel_task during execution)
+    let wasCanceled = false;
+    try {
+      const latestStatus = JSON.parse(readFileSync(statusFile, "utf-8"));
+      if (latestStatus.cancel_requested) {
+        wasCanceled = true;
+        exitCode = null;
+      }
+    } catch {}
+
+    if (spawnError && !wasCanceled) {
+      throw new Error(`Agent spawn failed: ${spawnError}`);
+    }
 
     // ── Phase 5: Collect outputs ──
     const gitDiff = captureGitDiff(repoPath);
@@ -107,9 +156,10 @@ export function runTask(taskId: string): TaskRunResult {
       taskId,
       planId,
       agentName,
-      exitCode,
-      stdout,
-      fullStderr
+      wasCanceled ? null : exitCode,
+      agentStdout,
+      agentStderr,
+      wasCanceled
     );
 
     writeFileSync(join(taskDir, "git.diff"), gitDiff, "utf-8");
@@ -117,13 +167,17 @@ export function runTask(taskId: string): TaskRunResult {
     writeFileSync(join(taskDir, "result.md"), resultMd, "utf-8");
 
     // ── Phase 6: Update status ──
+    if (wasCanceled) {
+      updateStatus(taskDir, "canceled", "Canceled by user request during execution.");
+      return { task_id: taskId, status: "canceled", error: "Canceled by user request." };
+    }
     if (exitCode === 0) {
       updateStatus(taskDir, "done");
       return { task_id: taskId, status: "done", error: null };
     } else {
       const errMsg = [
         `Agent exited with code ${exitCode}`,
-        stderr ? `Stderr: ${stderr.slice(0, 1000)}` : "Stderr: (empty)",
+        agentStderr ? `Stderr: ${agentStderr.slice(0, 1000)}` : "Stderr: (empty)",
         spawnError ? `Spawn error: ${spawnError}` : "",
       ].filter(Boolean).join("\n");
       writeFileSync(join(taskDir, "error.log"), errMsg, "utf-8");
@@ -241,12 +295,23 @@ function buildResultMarkdown(
   agent: string,
   exitCode: number | null,
   stdout: string,
-  stderr: string
+  stderr: string,
+  canceled = false
 ): string {
-  const status = exitCode === 0 ? "done" : "failed";
-  const exitLabel = exitCode === null ? "unknown (signal)" : String(exitCode);
+  const isCanceled = canceled || exitCode === null;
+  const status = isCanceled ? "canceled" : exitCode === 0 ? "done" : "failed";
+  const exitLabel = isCanceled ? "canceled (user request)" : exitCode === null ? "unknown (signal)" : String(exitCode);
+  const summary = isCanceled
+    ? "Task was canceled by user request during execution. Partial output may be available above."
+    : exitCode === 0
+      ? "Agent executed successfully."
+      : `Agent exited with code ${exitLabel}.${stderr ? " See stderr for details." : ""}`;
+  const risks = isCanceled
+    ? "- Task was canceled — results may be incomplete."
+    : exitCode !== 0
+      ? "- Agent execution failed — verify git.diff and error.log"
+      : "- Review git.diff to confirm only expected files were modified";
 
-  // Extract file changes from stdout if available
   const filesMatch = stdout.match(/(?:Files (?:modified|changed)|Modifying)[:\s]*\n?((?:\s*[-*]\s*.+\n?)+)/i);
   const filesChanged = filesMatch ? filesMatch[1].trim() : "unknown";
 
@@ -272,15 +337,13 @@ function buildResultMarkdown(
     filesChanged,
     "",
     "## Test result",
-    exitCode === 0 ? "passed" : "failed",
+    isCanceled ? "canceled" : exitCode === 0 ? "passed" : "failed",
     "",
     "## Summary",
-    exitCode === 0
-      ? "Agent executed successfully."
-      : `Agent exited with code ${exitLabel}.${stderr ? " See stderr for details." : ""}`,
+    summary,
     "",
     "## Risks",
-    exitCode !== 0 ? "- Agent execution failed — verify git.diff and error.log" : "- Review git.diff to confirm only expected files were modified",
+    risks,
     "",
     "---",
     "",

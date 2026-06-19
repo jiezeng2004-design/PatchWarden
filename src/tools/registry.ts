@@ -16,6 +16,11 @@ import { getTaskStatus } from "../tools/getTaskStatus.js";
 import { getResult, getDiff, getTestLog } from "../tools/taskOutputs.js";
 import { listWorkspace } from "../tools/listWorkspace.js";
 import { readWorkspaceFile } from "../tools/readWorkspaceFile.js";
+import { listTasks } from "../tools/listTasks.js";
+import { cancelTask } from "../tools/cancelTask.js";
+import { retryTask } from "../tools/retryTask.js";
+import { getTaskStdoutTail } from "../tools/getTaskStdoutTail.js";
+import { auditTask } from "../tools/auditTask.js";
 import { runTask } from "../runner/runTask.js";
 
 // ── Tool definitions ──────────────────────────────────────────────
@@ -154,6 +159,73 @@ export function getToolDefs(): ToolDef[] {
         required: ["path"],
       },
     },
+    {
+      name: "list_tasks",
+      description:
+        "List recent tasks with optional status filter. Returns task_id, plan_id, title, agent, status, timestamps, repo_path, test_command, and error summary.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          status: {
+            type: "string",
+            description: "Filter by status: pending, running, done, failed, canceled",
+          },
+          limit: {
+            type: "number",
+            description: "Max tasks to return (default 20, max 100)",
+          },
+        },
+      },
+    },
+    {
+      name: "cancel_task",
+      description:
+        "Cancel a pending or running task. Pending tasks are marked canceled and won't be executed. Running tasks get a cancel_requested flag.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          task_id: { type: "string", description: "Task ID to cancel" },
+        },
+        required: ["task_id"],
+      },
+    },
+    {
+      name: "retry_task",
+      description:
+        "Create a new task with the same plan, agent, repo_path, and test_command as an existing task. The original task is unchanged.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          task_id: { type: "string", description: "Task ID to retry" },
+        },
+        required: ["task_id"],
+      },
+    },
+    {
+      name: "get_task_stdout_tail",
+      description:
+        "Read the last N lines of agent stdout/stderr. Reads from real-time stdout.log/stderr.log during execution, falls back to result.md after completion. Works on pending, running, and completed tasks. Default 80 lines.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          task_id: { type: "string", description: "Task ID" },
+          lines: { type: "number", description: "Tail line count (default 80, max 200)" },
+        },
+        required: ["task_id"],
+      },
+    },
+    {
+      name: "audit_task",
+      description:
+        "Independently audit a task's outputs. Verifies status, result.md, test.log, git.diff, repo_path consistency, cross-references agent claims with package.json scripts, and flags unverified release/publish claims. Writes independent-review.md to the task directory.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          task_id: { type: "string", description: "Task ID to audit" },
+        },
+        required: ["task_id"],
+      },
+    },
   ];
 
   // run_task: only available when explicitly enabled
@@ -177,7 +249,7 @@ export function getToolDefs(): ToolDef[] {
 
 // ── Request handler ───────────────────────────────────────────────
 
-export function handleToolCall(name: string, args: Record<string, unknown> | undefined) {
+export async function handleToolCall(name: string, args: Record<string, unknown> | undefined) {
   switch (name) {
     case "save_plan": {
       return toResult(
@@ -231,6 +303,32 @@ export function handleToolCall(name: string, args: Record<string, unknown> | und
       return toResult(readWorkspaceFile(String(args?.path ?? "")));
     }
 
+    case "list_tasks": {
+      return toResult(listTasks({
+        status: args?.status ? String(args.status) : undefined,
+        limit: args?.limit ? Number(args.limit) : undefined,
+      }));
+    }
+
+    case "cancel_task": {
+      return toResult(cancelTask(String(args?.task_id ?? "")));
+    }
+
+    case "retry_task": {
+      return toResult(retryTask(String(args?.task_id ?? "")));
+    }
+
+    case "get_task_stdout_tail": {
+      return toResult(getTaskStdoutTail(
+        String(args?.task_id ?? ""),
+        args?.lines ? Number(args.lines) : undefined
+      ));
+    }
+
+    case "audit_task": {
+      return toResult(auditTask(String(args?.task_id ?? "")));
+    }
+
     case "run_task": {
       const config = getConfig();
       if ((config as any).enableRunTaskTool !== true) {
@@ -239,7 +337,7 @@ export function handleToolCall(name: string, args: Record<string, unknown> | und
         );
       }
       const taskId = String(args?.task_id ?? "");
-      const result = runTask(taskId);
+      const result = await runTask(taskId);
       return toResult(result);
     }
 
@@ -264,7 +362,7 @@ export function registerTools(server: Server) {
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     try {
-      return handleToolCall(name, args);
+      return await handleToolCall(name, args);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return {

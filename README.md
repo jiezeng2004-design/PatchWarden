@@ -56,6 +56,11 @@ Safe-Bifrost exposes these tools:
 - `get_result`
 - `get_diff`
 - `get_test_log`
+- `list_tasks`
+- `cancel_task`
+- `retry_task`
+- `get_task_stdout_tail`
+- `audit_task`
 
 ## Install
 
@@ -244,6 +249,25 @@ Verify:
 - the connector uses `Channel`, not `Server URL`
 - authentication is set to `None` unless you have implemented OAuth
 - browser translation extensions are disabled on Platform pages
+
+## Recommended Workflow
+
+1. `list_workspace` — explore the project
+2. `save_plan` — ChatGPT writes the implementation plan
+3. `create_task` with `repo_path` — link plan to a sub-project directory
+4. `get_task_status` — check if watcher picked it up
+5. `get_task_stdout_tail` — monitor agent output while running
+6. `get_result` — read execution summary
+7. `get_diff` — review code changes
+8. `get_test_log` — verify test output
+9. `audit_task` — independent verification (checks claims vs reality)
+
+> **Important:**
+> - `task done` means the agent finished executing — it does NOT mean the work is correct or complete.
+> - `audit_task` provides an independent review, but still requires human judgment.
+> - Local `result.md` claims about `npm publish`, `git push`, or `GitHub release` are **unverified**.
+> - Publishing, tagging, pushing, and npm publish must be confirmed manually.
+> - Before running `doctor`, create `safe-bifrost.config.json` from the example template.
 
 ## Security Model
 

@@ -16,7 +16,7 @@ const SENSITIVE_PATTERNS = [
   /(?:^|[\\/])\.netrc$/i,
   /(?:^|[\\/])\.npmrc$/i,
   /(?:^|[\\/])\.pypirc$/i,
-  /token/i,
+  /(?:^|[\\/])token/i,
   // Private keys
   /(?:^|[\\/])[^.]+\.pem$/i,
   /(?:^|[\\/])[^.]+\.key$/i,
@@ -31,7 +31,7 @@ const SENSITIVE_PATTERNS = [
   /(?:^|[\\/])\.git-credentials$/i,
   /(?:^|[\\/])\.docker[\\/]config\.json$/i,
   /(?:^|[\\/])\.kube[\\/]config$/i,
-  /(?:^|[\\/])config\.json$/i, // generic config could contain secrets
+  /(?:^|[\\/])config\.json$/i, // generic config files often contain local tokens or service credentials
 ];
 
 // Files specifically inside .safe-bifrost are always allowed
