@@ -7,7 +7,8 @@ selected.
 Use the safe-bifrost connector tools to verify the workflow.
 
 Step 1:
-Call list_workspace for the configured workspace.
+Call health_check and list_agents. Continue only if the watcher and selected
+agent are available. Then call list_workspace for the configured workspace.
 
 Step 2:
 Call read_workspace_file for README.md.
@@ -23,20 +24,26 @@ one sentence: "This repository was updated through Safe-Bifrost."
 Do not modify other files. After the change, run the configured test command.
 
 Step 4:
-Call create_task with the returned plan_id, agent "opencode", and test_command
-"npm test".
+Call create_task with the returned plan_id, agent "opencode", an explicit
+repo_path for the target repository, and verify_commands ["npm test"]. Set
+timeout_seconds to 600.
 
 Step 5:
-Wait for the watcher to execute the task. Then call get_task_status. If the
-task is still running, wait and retry.
+Immediately call wait_for_task with wait_seconds 25. If it returns
+continuation_required: true, call wait_for_task again in this same assistant
+turn. Do not stop or reply to the user until terminal is true. Use
+get_task_progress or get_task_stdout_tail only when more detail is needed.
 
 Step 6:
-When the task is done or failed, call get_diff, get_test_log, and get_result.
+When terminal is true, review the included summary, call get_task_summary and
+audit_task, then call get_diff, get_test_log, and get_result_json as needed.
 
 Step 7:
 Summarize:
 - final task status
 - files changed
 - whether tests passed
+- whether any out-of-scope changes were detected
+- acceptance_status and audit verdict
 - whether the diff is acceptable
 ```

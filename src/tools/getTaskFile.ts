@@ -3,13 +3,33 @@ import { resolve, join } from "node:path";
 import { getTasksDir, getConfig } from "../config.js";
 import { guardReadPath } from "../security/pathGuard.js";
 import { guardSensitivePath } from "../security/sensitiveGuard.js";
+import { redactSensitiveContent } from "../security/contentRedaction.js";
 
 export interface GetTaskFileOutput {
   task_id: string;
   filename: string;
   content: string;
   path: string;
+  redacted?: boolean;
+  redaction_categories?: string[];
 }
+
+export const TASK_READ_ONLY_FILES = [
+  "result.md",
+  "result.json",
+  "git.diff",
+  "diff.patch",
+  "test.log",
+  "verify.log",
+  "verify.json",
+  "status.json",
+  "plan.md",
+  "error.log",
+  "progress.md",
+  "changed-files.json",
+  "rollback-plan.json",
+  "rollback_scope_violation_plan.md",
+];
 
 /**
  * Read a task output file: result.md, git.diff, test.log, etc.
@@ -19,9 +39,8 @@ export function getTaskFile(taskId: string, filename: string): GetTaskFileOutput
   const tasksDir = getTasksDir(config);
 
   // Only allow known filenames
-  const ALLOWED_FILES = ["result.md", "git.diff", "test.log", "status.json", "plan.md", "error.log"];
-  if (!ALLOWED_FILES.includes(filename)) {
-    throw new Error(`File "${filename}" is not allowed. Allowed: ${ALLOWED_FILES.join(", ")}`);
+  if (!TASK_READ_ONLY_FILES.includes(filename)) {
+    throw new Error(`File "${filename}" is not allowed. Allowed: ${TASK_READ_ONLY_FILES.join(", ")}`);
   }
 
   const taskDir = resolve(tasksDir, taskId);
@@ -41,11 +60,13 @@ export function getTaskFile(taskId: string, filename: string): GetTaskFileOutput
     );
   }
 
-  const content = readFileSync(filePath, "utf-8");
+  const redaction = redactSensitiveContent(readFileSync(filePath, "utf-8"));
   return {
     task_id: taskId,
     filename,
-    content,
+    content: redaction.content,
     path: filePath,
+    redacted: redaction.redacted,
+    redaction_categories: redaction.redaction_categories,
   };
 }

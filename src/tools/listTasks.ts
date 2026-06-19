@@ -2,8 +2,8 @@ import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { getTasksDir, getPlansDir, getConfig } from "../config.js";
 import { guardPath } from "../security/pathGuard.js";
-
-export type TaskStatus = "pending" | "running" | "done" | "failed" | "canceled";
+import { readTaskRuntime } from "../taskRuntime.js";
+import type { TaskPhase, TaskStatus } from "./createTask.js";
 
 export interface TaskEntry {
   task_id: string;
@@ -11,13 +11,18 @@ export interface TaskEntry {
   title: string;
   agent: string;
   status: TaskStatus;
+  phase: TaskPhase;
   created_at: string;
   updated_at: string;
   workspace_root: string;
   repo_path: string;
   resolved_repo_path: string;
   test_command: string;
+  verify_commands: string[];
   error: string | null;
+  last_heartbeat_at: string;
+  current_command: string | null;
+  timeout_seconds: number;
 }
 
 export interface ListTasksInput {
@@ -66,6 +71,7 @@ export function listTasks(input?: ListTasksInput): ListTasksOutput {
 
     try {
       const data = JSON.parse(readFileSync(statusFile, "utf-8"));
+      const runtime = readTaskRuntime(taskDir);
       if (filterStatus && data.status !== filterStatus) continue;
 
       // Read plan title from plans directory (not task dir)
@@ -87,13 +93,18 @@ export function listTasks(input?: ListTasksInput): ListTasksOutput {
         title,
         agent: data.agent || "",
         status: data.status || "pending",
+        phase: runtime.phase || data.phase || "queued",
         created_at: data.created_at || "",
         updated_at: data.updated_at || "",
         workspace_root: data.workspace_root || config.workspaceRoot,
         repo_path: data.repo_path || ".",
         resolved_repo_path: data.resolved_repo_path || data.repo_path || config.workspaceRoot,
         test_command: data.test_command || "",
+        verify_commands: Array.isArray(data.verify_commands) ? data.verify_commands : [],
         error: data.error || null,
+        last_heartbeat_at: runtime.last_heartbeat_at || data.last_heartbeat_at || data.updated_at || "",
+        current_command: runtime.current_command ?? data.current_command ?? null,
+        timeout_seconds: data.timeout_seconds || config.defaultTaskTimeoutSeconds,
       });
     } catch {
       // skip corrupted entries

@@ -32,9 +32,9 @@ Prompt in ChatGPT:
 Use safe-bifrost to:
 1. read README.md
 2. save a plan that appends a Usage section
-3. create a task for the configured local agent
-4. wait for the watcher
-5. read result, diff, and test log
+3. create a task with an explicit repo_path and verify_commands
+4. call wait_for_task repeatedly while continuation_required is true
+5. review get_task_summary, audit_task, result, diff, and verification logs
 ```
 
 Expected artifacts under the configured workspace:

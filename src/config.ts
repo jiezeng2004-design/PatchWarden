@@ -15,6 +15,8 @@ export interface SafeBifrostConfig {
   agents: Record<string, AgentConfig>;
   allowedTestCommands: string[];
   maxReadFileBytes: number;
+  defaultTaskTimeoutSeconds: number;
+  maxTaskTimeoutSeconds: number;
 }
 
 // ── Defaults ──────────────────────────────────────────────────────
@@ -33,8 +35,27 @@ const DEFAULT_CONFIG: SafeBifrostConfig = {
       args: ["run", "{prompt}"],
     },
   },
-  allowedTestCommands: ["npm test", "pnpm test", "pytest", "cargo test"],
+  allowedTestCommands: [
+    "npm test",
+    "npm run test",
+    "npm run lint",
+    "npm run format:check",
+    "npm run build",
+    "npm run dist",
+    "npm run doctor",
+    "pnpm test",
+    "pnpm run test",
+    "pnpm run lint",
+    "pnpm run format:check",
+    "pnpm run build",
+    "pnpm run dist",
+    "pnpm run doctor",
+    "pytest",
+    "cargo test",
+  ],
   maxReadFileBytes: 200_000,
+  defaultTaskTimeoutSeconds: 900,
+  maxTaskTimeoutSeconds: 3600,
 };
 
 // ── Load config ───────────────────────────────────────────────────
@@ -115,6 +136,15 @@ function normalizeConfig(config: SafeBifrostConfig): SafeBifrostConfig {
   }
   if (!Number.isFinite(config.maxReadFileBytes) || config.maxReadFileBytes <= 0) {
     throw new Error("maxReadFileBytes must be a positive number");
+  }
+  if (!Number.isInteger(config.defaultTaskTimeoutSeconds) || config.defaultTaskTimeoutSeconds <= 0) {
+    throw new Error("defaultTaskTimeoutSeconds must be a positive integer");
+  }
+  if (!Number.isInteger(config.maxTaskTimeoutSeconds) || config.maxTaskTimeoutSeconds <= 0) {
+    throw new Error("maxTaskTimeoutSeconds must be a positive integer");
+  }
+  if (config.defaultTaskTimeoutSeconds > config.maxTaskTimeoutSeconds) {
+    throw new Error("defaultTaskTimeoutSeconds cannot exceed maxTaskTimeoutSeconds");
   }
 
   return {

@@ -13,13 +13,20 @@ import { savePlan } from "../tools/savePlan.js";
 import { getPlan } from "../tools/getPlan.js";
 import { createTask } from "../tools/createTask.js";
 import { getTaskStatus } from "../tools/getTaskStatus.js";
-import { getResult, getDiff, getTestLog } from "../tools/taskOutputs.js";
+import { getResult, getResultJson, getDiff, getTestLog } from "../tools/taskOutputs.js";
 import { listWorkspace } from "../tools/listWorkspace.js";
 import { readWorkspaceFile } from "../tools/readWorkspaceFile.js";
 import { listTasks } from "../tools/listTasks.js";
 import { cancelTask } from "../tools/cancelTask.js";
+import { killTask } from "../tools/killTask.js";
 import { retryTask } from "../tools/retryTask.js";
 import { getTaskStdoutTail } from "../tools/getTaskStdoutTail.js";
+import { getTaskProgress } from "../tools/getTaskProgress.js";
+import { listAgents } from "../tools/listAgents.js";
+import { healthCheck } from "../tools/healthCheck.js";
+import { getTaskSummary } from "../tools/getTaskSummary.js";
+import { waitForTask } from "../tools/waitForTask.js";
+import { errorPayload } from "../errors.js";
 import { auditTask } from "../tools/auditTask.js";
 import { runTask } from "../runner/runTask.js";
 
@@ -37,6 +44,11 @@ export interface ToolDef {
 
 export function getToolDefs(): ToolDef[] {
   const config = getConfig();
+  const agentNames = Object.keys(config.agents).sort();
+  const agentDescription = agentNames.length > 0
+    ? `Configured local agent name. Available agents: ${agentNames.map((name) => JSON.stringify(name)).join(", ")}`
+    : "Configured local agent name. No agents are currently configured.";
+  const testCommands = [...config.allowedTestCommands].sort();
   const tools: ToolDef[] = [
     {
       name: "save_plan",
@@ -63,32 +75,70 @@ export function getToolDefs(): ToolDef[] {
       },
     },
     {
+      name: "health_check",
+      description:
+        "Check MCP server uptime, watcher heartbeat freshness, and configured agent availability.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+      },
+    },
+    {
+      name: "list_agents",
+      description:
+        "List configured local agents and check whether each executable currently exists. This does not start an agent or contact its model provider.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+      },
+    },
+    {
       name: "create_task",
       description:
-        "Create a task from a plan. Links a plan to a local agent for execution. The local watcher will pick up pending tasks automatically.",
+        "Create a repo-scoped task. After success, immediately call wait_for_task repeatedly in the same assistant turn until terminal=true, then review get_task_summary/audit_task.",
       inputSchema: {
         type: "object",
         properties: {
           plan_id: { type: "string", description: "Plan ID from save_plan" },
           agent: {
             type: "string",
-            description: 'Agent name: "codex" or "opencode"',
+            description: agentDescription,
+            ...(agentNames.length > 0 ? { enum: agentNames } : {}),
           },
           repo_path: {
             type: "string",
-            description: "Optional repo path (defaults to workspace root)",
+            description: "Required repository path inside workspaceRoot. No implicit workspace-root fallback is allowed.",
           },
           test_command: {
             type: "string",
-            description: "Optional test command from the allowlist",
+            description: testCommands.length
+              ? `Optional exact-match verification command. Allowed: ${testCommands.map((command) => JSON.stringify(command)).join(", ")}`
+              : "Optional exact-match verification command. No commands are currently allowed.",
+            ...(testCommands.length > 0 ? { enum: testCommands } : {}),
+          },
+          verify_commands: {
+            type: "array",
+            maxItems: 20,
+            items: {
+              type: "string",
+              ...(testCommands.length > 0 ? { enum: testCommands } : {}),
+            },
+            description: "Recommended allow-listed commands Safe-Bifrost runs independently after the agent exits.",
+          },
+          timeout_seconds: {
+            type: "integer",
+            minimum: 1,
+            maximum: config.maxTaskTimeoutSeconds,
+            default: config.defaultTaskTimeoutSeconds,
+            description: `Total task timeout in seconds (default ${config.defaultTaskTimeoutSeconds}, max ${config.maxTaskTimeoutSeconds})`,
           },
         },
-        required: ["plan_id", "agent"],
+        required: ["plan_id", "agent", "repo_path"],
       },
     },
     {
       name: "get_task_status",
-      description: "Check the status of a task: pending, running, done, or failed.",
+      description: "Check task status, execution phase, heartbeat, current command, timeout, and change evidence.",
       inputSchema: {
         type: "object",
         properties: {
@@ -100,6 +150,17 @@ export function getToolDefs(): ToolDef[] {
     {
       name: "get_result",
       description: "Read the execution result (result.md) for a completed task.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          task_id: { type: "string", description: "Task ID" },
+        },
+        required: ["task_id"],
+      },
+    },
+    {
+      name: "get_result_json",
+      description: "Read the structured result.json for deterministic task acceptance.",
       inputSchema: {
         type: "object",
         properties: {
@@ -168,7 +229,7 @@ export function getToolDefs(): ToolDef[] {
         properties: {
           status: {
             type: "string",
-            description: "Filter by status: pending, running, done, failed, canceled",
+            description: "Filter by status: pending, running, done, failed, failed_verification, failed_scope_violation, canceled",
           },
           limit: {
             type: "number",
@@ -180,11 +241,23 @@ export function getToolDefs(): ToolDef[] {
     {
       name: "cancel_task",
       description:
-        "Cancel a pending or running task. Pending tasks are marked canceled and won't be executed. Running tasks get a cancel_requested flag.",
+        "Request graceful cancellation. The runner that owns the child process performs termination; the MCP server never kills a PID read from task files.",
       inputSchema: {
         type: "object",
         properties: {
           task_id: { type: "string", description: "Task ID to cancel" },
+        },
+        required: ["task_id"],
+      },
+    },
+    {
+      name: "kill_task",
+      description:
+        "Request immediate termination of a pending or running task. The runner validates and kills only the child process it owns.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          task_id: { type: "string", description: "Task ID to terminate" },
         },
         required: ["task_id"],
       },
@@ -210,6 +283,43 @@ export function getToolDefs(): ToolDef[] {
         properties: {
           task_id: { type: "string", description: "Task ID" },
           lines: { type: "number", description: "Tail line count (default 80, max 200)" },
+        },
+        required: ["task_id"],
+      },
+    },
+    {
+      name: "get_task_progress",
+      description:
+        "Read progress.md for task phases and the most recent heartbeat/current command.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          task_id: { type: "string", description: "Task ID" },
+        },
+        required: ["task_id"],
+      },
+    },
+    {
+      name: "wait_for_task",
+      description:
+        "Long-poll a task for up to 30 seconds. If continuation_required=true, call wait_for_task again immediately and do not finish the assistant turn. Terminal responses include get_task_summary acceptance evidence.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          task_id: { type: "string", description: "Task ID from create_task" },
+          wait_seconds: { type: "integer", minimum: 1, maximum: 30, default: 25 },
+        },
+        required: ["task_id"],
+      },
+    },
+    {
+      name: "get_task_summary",
+      description:
+        "Return one structured acceptance summary: terminal status, scope violations, verification evidence, changed files, artifact availability, warnings, and errors.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          task_id: { type: "string", description: "Task ID" },
         },
         required: ["task_id"],
       },
@@ -273,6 +383,12 @@ export async function handleToolCall(name: string, args: Record<string, unknown>
           agent: String(args?.agent ?? ""),
           repo_path: args?.repo_path ? String(args.repo_path) : undefined,
           test_command: args?.test_command ? String(args.test_command) : undefined,
+          verify_commands: Array.isArray(args?.verify_commands)
+            ? args.verify_commands.map((command) => String(command))
+            : undefined,
+          timeout_seconds: args?.timeout_seconds !== undefined
+            ? Number(args.timeout_seconds)
+            : undefined,
         })
       );
     }
@@ -283,6 +399,10 @@ export async function handleToolCall(name: string, args: Record<string, unknown>
 
     case "get_result": {
       return toResult(getResult(String(args?.task_id ?? "")));
+    }
+
+    case "get_result_json": {
+      return toResult(getResultJson(String(args?.task_id ?? "")));
     }
 
     case "get_diff": {
@@ -310,8 +430,20 @@ export async function handleToolCall(name: string, args: Record<string, unknown>
       }));
     }
 
+    case "list_agents": {
+      return toResult(listAgents());
+    }
+
+    case "health_check": {
+      return toResult(healthCheck());
+    }
+
     case "cancel_task": {
       return toResult(cancelTask(String(args?.task_id ?? "")));
+    }
+
+    case "kill_task": {
+      return toResult(killTask(String(args?.task_id ?? "")));
     }
 
     case "retry_task": {
@@ -323,6 +455,21 @@ export async function handleToolCall(name: string, args: Record<string, unknown>
         String(args?.task_id ?? ""),
         args?.lines ? Number(args.lines) : undefined
       ));
+    }
+
+    case "get_task_progress": {
+      return toResult(getTaskProgress(String(args?.task_id ?? "")));
+    }
+
+    case "wait_for_task": {
+      return toResult(await waitForTask(
+        String(args?.task_id ?? ""),
+        args?.wait_seconds !== undefined ? Number(args.wait_seconds) : undefined
+      ));
+    }
+
+    case "get_task_summary": {
+      return toResult(getTaskSummary(String(args?.task_id ?? "")));
     }
 
     case "audit_task": {
@@ -364,9 +511,8 @@ export function registerTools(server: Server) {
     try {
       return await handleToolCall(name, args);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
       return {
-        content: [{ type: "text" as const, text: JSON.stringify({ error: message }) }],
+        content: [{ type: "text" as const, text: JSON.stringify(errorPayload(err)) }],
         isError: true,
       };
     }

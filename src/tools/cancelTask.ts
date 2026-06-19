@@ -1,26 +1,25 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { execSync } from "node:child_process";
 import { getTasksDir, getConfig } from "../config.js";
 import { guardReadPath } from "../security/pathGuard.js";
-import type { TaskStatus } from "./listTasks.js";
+import { writeTaskProgress } from "../taskProgress.js";
+import type { TaskStatus } from "./createTask.js";
 
 export function cancelTask(taskId: string) {
-  const config = getConfig();
-  const tasksDir = getTasksDir(config);
-  const taskDir = join(tasksDir, taskId);
-  const statusFile = join(taskDir, "status.json");
+  return requestTaskTermination(taskId, false);
+}
 
+export function requestTaskTermination(taskId: string, force: boolean) {
+  const config = getConfig();
+  const taskDir = join(getTasksDir(config), taskId);
+  const statusFile = join(taskDir, "status.json");
   guardReadPath(statusFile, config.workspaceRoot, config.tasksDir);
 
-  if (!existsSync(statusFile)) {
-    throw new Error(`Task not found: "${taskId}"`);
-  }
+  if (!existsSync(statusFile)) throw new Error(`Task not found: "${taskId}"`);
 
   const data = JSON.parse(readFileSync(statusFile, "utf-8"));
   const currentStatus: TaskStatus = data.status;
-
-  if (currentStatus === "done" || currentStatus === "failed" || currentStatus === "canceled") {
+  if (["done", "failed", "failed_verification", "failed_scope_violation", "canceled"].includes(currentStatus)) {
     return {
       task_id: taskId,
       previous_status: currentStatus,
@@ -30,14 +29,14 @@ export function cancelTask(taskId: string) {
   }
 
   const now = new Date().toISOString();
-
   if (currentStatus === "pending") {
     data.status = "canceled";
+    data.phase = "canceled";
     data.canceled_at = now;
-    data.cancel_reason = "Canceled by user request.";
+    data.cancel_reason = force ? "Killed before execution by user request." : "Canceled by user request.";
     data.updated_at = now;
     writeFileSync(statusFile, JSON.stringify(data, null, 2), "utf-8");
-
+    writeTaskProgress(taskDir, "canceled", { note: data.cancel_reason, heartbeatAt: now });
     return {
       task_id: taskId,
       previous_status: "pending",
@@ -46,47 +45,26 @@ export function cancelTask(taskId: string) {
     };
   }
 
-  // running → try to kill child process
-  const childPid = data.child_pid;
-  let killed = false;
-  let killError = "";
-  if (childPid && typeof childPid === "number") {
-    try {
-      if (process.platform === "win32") {
-        try {
-          execSync(`taskkill /PID ${childPid} /T /F`, { stdio: "ignore", timeout: 5000 });
-          killed = true;
-        } catch (e) {
-          killError = e instanceof Error ? e.message : String(e);
-        }
-      } else {
-        // Unix: SIGTERM
-        process.kill(childPid, "SIGTERM");
-        killed = true;
-      }
-    } catch (e) {
-      killError = e instanceof Error ? e.message : String(e);
-    }
-  }
-
   data.cancel_requested = true;
   data.cancel_requested_at = now;
+  data.force_kill_requested = force;
+  if (force) data.kill_requested_at = now;
+  data.phase = force ? "terminating" : "canceling";
   data.updated_at = now;
-  if (killed) {
-    data.status = "canceled";
-    data.canceled_at = now;
-    data.cancel_reason = "Terminated by user request.";
-  }
   writeFileSync(statusFile, JSON.stringify(data, null, 2), "utf-8");
+  writeTaskProgress(taskDir, data.phase, {
+    note: force ? "Immediate termination requested." : "Graceful cancellation requested.",
+    heartbeatAt: now,
+  });
 
   return {
     task_id: taskId,
     previous_status: "running",
-    new_status: killed ? "canceled" : "running",
+    new_status: "running",
     cancel_requested: true,
-    child_terminated: killed,
-    message: killed
-      ? "Running task terminated and marked canceled."
-      : "Cancel requested. Child PID not available or could not be killed. Task may still complete.",
+    force_kill_requested: force,
+    message: force
+      ? "Kill requested. The runner that owns the child process will terminate it."
+      : "Cancel requested. The runner will stop the child process safely.",
   };
 }

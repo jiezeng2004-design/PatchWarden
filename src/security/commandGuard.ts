@@ -1,4 +1,5 @@
 import { SafeBifrostConfig } from "../config.js";
+import { SafeBifrostError } from "../errors.js";
 
 /**
  * Command guard: ensure only allow-listed commands can execute.
@@ -21,8 +22,10 @@ export function guardAgentCommand(
 ): AllowedCommand {
   const agentCfg = config.agents[agent];
   if (!agentCfg) {
-    throw new Error(
-      `Agent "${agent}" is not configured. Allowed agents: ${Object.keys(config.agents).join(", ")}`
+    throw new SafeBifrostError(
+      "agent_not_configured",
+      `Agent "${agent}" is not configured. Allowed agents: ${Object.keys(config.agents).join(", ")}`,
+      "Call list_agents and use one of the configured agent names."
     );
   }
 
@@ -34,12 +37,30 @@ export function guardAgentCommand(
     return arg;
   });
 
-  // Validate command name is simple (no path traversal, no shell chars)
-  if (!/^[a-zA-Z0-9._-]+$/.test(agentCfg.command)) {
-    throw new Error(`Invalid agent command name: "${agentCfg.command}"`);
+  // Validate command or configured executable path.
+  // Absolute paths are allowed only because they come from the local config,
+  // never from the MCP caller. We still reject traversal and shell syntax.
+  if (!isSafeConfiguredCommand(agentCfg.command)) {
+    throw new SafeBifrostError(
+      "agent_command_invalid",
+      `Invalid agent command name: "${agentCfg.command}"`,
+      "Fix the locally configured executable path; MCP callers cannot override agent commands."
+    );
   }
 
   return { command: agentCfg.command, args: resolvedArgs };
+}
+
+function isSafeConfiguredCommand(command: string): boolean {
+  if (!command || typeof command !== "string") return false;
+  if (/[\x00-\x1F"'`|&;<>()$]/.test(command)) return false;
+
+  const normalized = command.replace(/\\/g, "/");
+  const parts = normalized.split("/");
+  if (parts.some((part) => part === "..")) return false;
+
+  const basename = parts[parts.length - 1] || "";
+  return /^[a-zA-Z0-9._-]+$/.test(basename);
 }
 
 export function guardTestCommand(
@@ -55,8 +76,10 @@ export function guardTestCommand(
   if (trimmed === "") return "";
 
   if (!config.allowedTestCommands.includes(trimmed)) {
-    throw new Error(
-      `Test command "${trimmed}" is not in the allowed list. Allowed: ${config.allowedTestCommands.join(", ")}`
+    throw new SafeBifrostError(
+      "test_command_not_allowlisted",
+      `Test command "${trimmed}" is not in the allowed list. Allowed: ${config.allowedTestCommands.join(", ")}`,
+      "Use an exact allowed command shown by create_task, or omit test_command."
     );
   }
 

@@ -15,11 +15,24 @@
   "allowedTestCommands": [
     "npm test",
     "npm run test",
+    "npm run lint",
+    "npm run format:check",
+    "npm run build",
+    "npm run dist",
+    "npm run doctor",
     "pnpm test",
+    "pnpm run test",
+    "pnpm run lint",
+    "pnpm run format:check",
+    "pnpm run build",
+    "pnpm run dist",
+    "pnpm run doctor",
     "yarn test",
     "pytest",
     "cargo test",
     "go test ./..."
   ],
-  "maxReadFileBytes": 200000
+  "maxReadFileBytes": 200000,
+  "defaultTaskTimeoutSeconds": 900,
+  "maxTaskTimeoutSeconds": 3600
 }

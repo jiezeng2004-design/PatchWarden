@@ -2,11 +2,14 @@ import { readFileSync, statSync } from "node:fs";
 import { getConfig } from "../config.js";
 import { guardReadPath } from "../security/pathGuard.js";
 import { guardSensitivePath } from "../security/sensitiveGuard.js";
+import { redactSensitiveContent } from "../security/contentRedaction.js";
 
 export interface ReadWorkspaceFileOutput {
   path: string;
   content: string;
   size: number;
+  redacted?: boolean;
+  redaction_categories?: string[];
 }
 
 export function readWorkspaceFile(relativePath: string): ReadWorkspaceFileOutput {
@@ -27,10 +30,12 @@ export function readWorkspaceFile(relativePath: string): ReadWorkspaceFileOutput
     throw new Error("File exceeds 5 MB size limit.");
   }
 
-  const content = readFileSync(safePath, "utf-8");
+  const redaction = redactSensitiveContent(readFileSync(safePath, "utf-8"));
   return {
     path: safePath,
-    content,
+    content: redaction.content,
     size: stat.size,
+    redacted: redaction.redacted,
+    redaction_categories: redaction.redaction_categories,
   };
 }

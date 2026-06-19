@@ -8,6 +8,7 @@ import {
   sep,
 } from "node:path";
 import { realpathSync } from "node:fs";
+import { SafeBifrostError } from "../errors.js";
 
 export function guardPath(
   requestedPath: string,
@@ -67,16 +68,23 @@ export function guardWorkspacePath(
   const wsDriveMatch = ws.match(/^([A-Za-z]):[/\\]/);
   if (winDriveMatch && wsDriveMatch) {
     if (winDriveMatch[1].toLowerCase() !== wsDriveMatch[1].toLowerCase()) {
-      throw new Error(
+      throw new SafeBifrostError(
+        "workspace_path_escape",
         `repo_path "${input}" is on drive ${winDriveMatch[1].toUpperCase()}: ` +
-          `but workspace is on drive ${wsDriveMatch[1].toUpperCase()}:. ` +
-          "All paths must be under the configured workspace."
+          `but workspace is on drive ${wsDriveMatch[1].toUpperCase()}:. All paths must be under the configured workspace.`,
+        "Pass a repo_path located under the configured workspaceRoot.",
+        true,
+        { path: input, operation: "resolve_repo_path", safe_alternative: "Use a repository path inside workspaceRoot." }
       );
     }
   } else if (winDriveMatch && !wsDriveMatch) {
-    throw new Error(
+    throw new SafeBifrostError(
+      "workspace_path_escape",
       `repo_path "${input}" appears to be a Windows path but workspace ` +
-        `"${workspaceRoot}" is a Unix path. All paths must be under the configured workspace.`
+        `"${workspaceRoot}" is a Unix path. All paths must be under the configured workspace.`,
+      "Use the same path style as workspaceRoot and keep repo_path inside it.",
+      true,
+      { path: input, operation: "resolve_repo_path", safe_alternative: "Use the workspaceRoot path style and an internal repository path." }
     );
   }
 
@@ -148,10 +156,20 @@ function assertInside(
     !checkCandidate.startsWith(checkRoot + sep)
   ) {
     if (message.startsWith("Path escapes workspace")) {
-      throw new Error(
-        `Path escapes workspace: "${requestedPath}" resolves to "${normalizedCandidate}" which is outside "${normalizedRoot}"`
+      throw new SafeBifrostError(
+        "workspace_path_escape",
+        `Path escapes workspace: "${requestedPath}" resolves to "${normalizedCandidate}" which is outside "${normalizedRoot}"`,
+        "Use a path inside the configured workspace and allowed prefix.",
+        true,
+        { path: requestedPath, operation: "path_access", safe_alternative: "Read a path inside the configured workspace and allowed prefix." }
       );
     }
-    throw new Error(message);
+    throw new SafeBifrostError(
+      "workspace_path_escape",
+      message,
+      "Use a path inside the configured workspace and allowed prefix.",
+      true,
+      { path: requestedPath, operation: "path_access", safe_alternative: "Read a path inside the configured workspace and allowed prefix." }
+    );
   }
 }

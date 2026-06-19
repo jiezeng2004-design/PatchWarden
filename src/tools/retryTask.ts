@@ -28,6 +28,8 @@ export function retryTask(taskId: string) {
     agent: data.agent,
     repo_path: data.repo_path,
     test_command: data.test_command,
+    verify_commands: data.verify_commands,
+    timeout_seconds: data.timeout_seconds,
   });
 
   // Record retry relationship in the new task

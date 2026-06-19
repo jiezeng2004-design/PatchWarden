@@ -3,7 +3,9 @@ param(
   [string]$Profile = "safe-bifrost",
   [string]$ProxyUrl = $(if ($env:HTTPS_PROXY) { $env:HTTPS_PROXY } else { "http://127.0.0.1:7892" }),
   [string]$TunnelClientExe = $env:TUNNEL_CLIENT_EXE,
-  [string]$OpencodeBin = $env:OPENCODE_BIN_DIR
+  [string]$OpencodeBin = $env:OPENCODE_BIN_DIR,
+  [string]$CredentialPath = $(if ($env:SAFE_BIFROST_CREDENTIAL_PATH) { $env:SAFE_BIFROST_CREDENTIAL_PATH } else { Join-Path $env:APPDATA "safe-bifrost\control-plane-api-key.dpapi" }),
+  [switch]$ForgetSavedApiKey
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,6 +16,7 @@ $McpStdioLauncher = Join-Path $ProjectRoot "scripts\safe-bifrost-mcp-stdio.cmd"
 $McpStdioLauncherForTunnel = $McpStdioLauncher -replace "\\", "/"
 $OpencodeConfigHome = Join-Path $env:LOCALAPPDATA "safe-bifrost\opencode-config"
 $ProfilePath = Join-Path $env:APPDATA "tunnel-client\$Profile.yaml"
+$script:PendingCredential = $null
 
 function Assert-File {
   param([string]$Path, [string]$Name)
@@ -28,8 +31,33 @@ function Set-SecretEnvIfMissing {
     return
   }
 
-  Write-Host "[input] Paste your OpenAI tunnel runtime API key. It will NOT be saved to disk."
+  if (Test-Path -LiteralPath $CredentialPath) {
+    try {
+      $encrypted = Get-Content -LiteralPath $CredentialPath -Raw
+      $secure = ConvertTo-SecureString $encrypted
+      $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+      try {
+        $env:CONTROL_PLANE_API_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+      } finally {
+        if ($bstr -ne [IntPtr]::Zero) {
+          [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+        }
+      }
+      if (-not $env:CONTROL_PLANE_API_KEY) {
+        throw "Saved credential decrypted to an empty value."
+      }
+      Write-Host "[ok] Loaded tunnel runtime API key from Windows DPAPI credential cache."
+      return
+    } catch {
+      throw "Could not decrypt saved tunnel API key at $CredentialPath. Run this script with -ForgetSavedApiKey, then start it again."
+    }
+  }
+
+  Write-Host "[input] Paste your OpenAI tunnel runtime API key."
+  Write-Host "        It will be encrypted with Windows DPAPI for this user and computer."
   $secure = Read-Host "CONTROL_PLANE_API_KEY" -AsSecureString
+  $script:PendingCredential = $secure
+
   $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
   try {
     $env:CONTROL_PLANE_API_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
@@ -42,6 +70,28 @@ function Set-SecretEnvIfMissing {
   if (-not $env:CONTROL_PLANE_API_KEY) {
     throw "CONTROL_PLANE_API_KEY was empty."
   }
+}
+
+function Save-PendingCredential {
+  if ($null -eq $script:PendingCredential) {
+    return
+  }
+  $credentialDirectory = Split-Path -Parent $CredentialPath
+  New-Item -ItemType Directory -Force -Path $credentialDirectory | Out-Null
+  $encrypted = ConvertFrom-SecureString $script:PendingCredential
+  Set-Content -LiteralPath $CredentialPath -Value $encrypted -Encoding UTF8 -NoNewline
+  $script:PendingCredential = $null
+  Write-Host "[saved] Encrypted credential cache: $CredentialPath"
+}
+
+if ($ForgetSavedApiKey) {
+  if (Test-Path -LiteralPath $CredentialPath) {
+    Remove-Item -LiteralPath $CredentialPath -Force
+    Write-Host "[ok] Removed saved Safe-Bifrost tunnel API key."
+  } else {
+    Write-Host "[ok] No saved Safe-Bifrost tunnel API key was found."
+  }
+  exit 0
 }
 
 if (-not $TunnelClientExe) {
@@ -134,6 +184,10 @@ Start-Process powershell.exe -ArgumentList @(
 
 Write-Host "[doctor] Checking tunnel-client profile through proxy $ProxyUrl..."
 & $TunnelClientExe doctor --profile $Profile --explain --http-proxy env:HTTPS_PROXY
+if ($LASTEXITCODE -ne 0) {
+  throw "tunnel-client doctor failed. The newly entered API key was not saved."
+}
+Save-PendingCredential
 
 Write-Host ""
 Write-Host "[run] Starting tunnel-client. Keep this window open."
