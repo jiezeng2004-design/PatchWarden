@@ -81,9 +81,10 @@ export function auditTask(taskId: string): AuditTaskOutput {
 
   // ── 1. Task status ──
   const taskStatus = statusData.status || "unknown";
+  const failedStatuses = new Set(["failed", "failed_verification", "failed_scope_violation", "canceled"]);
   checks.push({
     name: "task_status",
-    result: taskStatus === "done" ? "pass" : taskStatus === "failed" ? "fail" : "warn",
+    result: taskStatus === "done" ? "pass" : failedStatuses.has(taskStatus) ? "fail" : "warn",
     detail: `Task status is "${taskStatus}".`,
   });
 
@@ -96,6 +97,41 @@ export function auditTask(taskId: string): AuditTaskOutput {
     detail: hasResult ? "result.md found." : "result.md is missing.",
   });
   if (!hasResult) risks.push({ severity: "high", description: "No result.md — cannot verify what agent did." });
+
+  const resultJsonFile = join(taskDir, "result.json");
+  checks.push({
+    name: "result_json_exists",
+    result: existsSync(resultJsonFile) ? "pass" : "fail",
+    detail: existsSync(resultJsonFile) ? "result.json found." : "result.json is missing.",
+  });
+
+  const verifyJsonFile = join(taskDir, "verify.json");
+  checks.push({
+    name: "verify_json_exists",
+    result: existsSync(verifyJsonFile) ? "pass" : "warn",
+    detail: existsSync(verifyJsonFile) ? "verify.json found." : "verify.json is missing.",
+  });
+  if (existsSync(verifyJsonFile)) {
+    try {
+      const verify = JSON.parse(readFileSync(verifyJsonFile, "utf-8"));
+      checks.push({
+        name: "verify_status",
+        result: verify.status === "passed" ? "pass" : verify.status === "failed" ? "fail" : "warn",
+        detail: `Structured verification status is "${verify.status || "unknown"}".`,
+      });
+    } catch {
+      checks.push({ name: "verify_status", result: "fail", detail: "verify.json is invalid JSON." });
+    }
+  }
+
+  const outOfScope = Array.isArray(statusData.out_of_scope_changes) ? statusData.out_of_scope_changes : [];
+  checks.push({
+    name: "scope_changes",
+    result: outOfScope.length > 0 ? "fail" : "pass",
+    detail: outOfScope.length > 0
+      ? `${outOfScope.length} out-of-scope change(s) detected.`
+      : "No out-of-scope changes recorded.",
+  });
 
   // ── 3. test.log ──
   const testLogFile = join(taskDir, "test.log");

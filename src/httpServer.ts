@@ -67,7 +67,7 @@ function checkOwnerToken(req: IncomingMessage): boolean {
 /** Create a fresh MCP Server with tools registered */
 function createMcpServer(): Server {
   const server = new Server(
-    { name: "safe-bifrost", version: "0.2.0" },
+    { name: "safe-bifrost", version: "0.3.0" },
     { capabilities: { tools: {} } }
   );
   registerTools(server);

@@ -4,14 +4,34 @@ import { getTasksDir, getConfig } from "../config.js";
 import { guardReadPath } from "../security/pathGuard.js";
 import { guardSensitivePath } from "../security/sensitiveGuard.js";
 import type { TaskStatus } from "./createTask.js";
+import type { TaskPhase } from "./createTask.js";
+import { readTaskRuntime } from "../taskRuntime.js";
 
 export interface GetTaskStatusOutput {
   task_id: string;
   plan_id: string;
   agent: string;
+  workspace_root: string;
+  repo_path: string;
+  resolved_repo_path: string;
   status: TaskStatus;
+  phase: TaskPhase;
   created_at: string;
   updated_at: string;
+  last_heartbeat_at: string;
+  current_command: string | null;
+  timeout_seconds: number;
+  started_at?: string;
+  finished_at?: string;
+  changed_files?: Array<{ path: string; change: string }>;
+  out_of_scope_changes?: Array<{ path: string; change: string }>;
+  verify_status?: "passed" | "failed" | "skipped";
+  verify_commands?: string[];
+  diff_available?: boolean;
+  diff_truncated?: boolean;
+  workspace_dirty_before?: boolean;
+  workspace_dirty_after?: boolean;
+  workspace_dirty?: boolean;
   error: string | null;
 }
 
@@ -30,5 +50,12 @@ export function getTaskStatus(taskId: string): GetTaskStatusOutput {
   }
 
   const raw = readFileSync(statusFile, "utf-8");
-  return JSON.parse(raw) as GetTaskStatusOutput;
+  const status = JSON.parse(raw) as GetTaskStatusOutput;
+  const runtime = readTaskRuntime(taskDir);
+  return {
+    ...status,
+    phase: runtime.phase || status.phase || "queued",
+    last_heartbeat_at: runtime.last_heartbeat_at || status.last_heartbeat_at || status.updated_at,
+    current_command: runtime.current_command ?? status.current_command ?? null,
+  };
 }

@@ -17,8 +17,8 @@
  *   or: npm run watch
  */
 
-import { readdirSync, readFileSync, existsSync, writeFileSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { readdirSync, readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { resolve, join, dirname } from "node:path";
 import { loadConfig, getConfig, getTasksDir, resolveWorkspaceRoot } from "../config.js";
 import { guardWorkspacePath } from "../security/pathGuard.js";
 import { guardAgentCommand, guardTestCommand } from "../security/commandGuard.js";
@@ -32,6 +32,9 @@ const tasksDir = getTasksDir(config);
 const wsRoot = resolveWorkspaceRoot(config);
 
 const POLL_INTERVAL_MS = 4000;
+const WATCHER_HEARTBEAT_FILE = join(dirname(tasksDir), "watcher-heartbeat.json");
+const WATCHER_STARTED_AT = new Date().toISOString();
+mkdirSync(dirname(WATCHER_HEARTBEAT_FILE), { recursive: true });
 
 console.error(`[watcher] Workspace: ${wsRoot}`);
 console.error(`[watcher] Tasks:    ${tasksDir}`);
@@ -45,6 +48,12 @@ const executedTasks = new Set<string>();
 
 async function tick() {
   try {
+    writeFileSync(WATCHER_HEARTBEAT_FILE, JSON.stringify({
+      status: "running",
+      pid: process.pid,
+      started_at: WATCHER_STARTED_AT,
+      last_heartbeat_at: new Date().toISOString(),
+    }, null, 2), "utf-8");
     // Ensure tasks directory exists
     if (!existsSync(tasksDir)) return;
 

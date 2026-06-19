@@ -1,3 +1,5 @@
+import { SafeBifrostError } from "../errors.js";
+
 /**
  * Sensitive file guard: block reads of files likely to contain secrets.
  * Returns true if the file is ALLOWED (not sensitive).
@@ -55,8 +57,16 @@ export function isSensitivePath(filePath: string): boolean {
 
 export function guardSensitivePath(filePath: string): void {
   if (isSensitivePath(filePath)) {
-    throw new Error(
-      `Access denied: "${filePath}" matches a sensitive file pattern. Reading this file is not permitted.`
+    throw new SafeBifrostError(
+      "sensitive_path_blocked",
+      `Access denied: "${filePath}" matches a sensitive file pattern. Reading this file is not permitted.`,
+      "Read only non-sensitive task artifacts or workspace files.",
+      true,
+      {
+        path: filePath,
+        operation: "read",
+        safe_alternative: "Read a non-sensitive task artifact, or remove secret material and retry.",
+      }
     );
   }
 }

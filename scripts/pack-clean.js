@@ -22,6 +22,8 @@ const include = [
   "examples",
   "scripts",
   "src",
+  "Start-SafeBifrost-Tunnel.cmd",
+  "Reset-SafeBifrost-Tunnel-Key.cmd",
   ".gitignore",
   "LICENSE",
   "README.md",
@@ -34,6 +36,8 @@ const forbidden = [
   /(^|[\\/])node_modules([\\/]|$)/,
   /(^|[\\/])\.safe-bifrost([\\/]|$)/,
   /(^|[\\/])safe-bifrost\.config\.json$/,
+  /\.local\.(cmd|ps1)$/i,
+  /\.dpapi$/i,
   /(^|[\\/])\.env$/,
   /\.log$/,
 ];

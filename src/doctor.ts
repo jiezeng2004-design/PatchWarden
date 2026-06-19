@@ -9,12 +9,14 @@
  */
 
 import { existsSync, statSync, readFileSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { resolve, normalize, join } from "node:path";
+import { isAbsolute, resolve, normalize, join } from "node:path";
 import { execSync } from "node:child_process";
 import { createServer } from "node:net";
 import { loadConfig, getConfig } from "./config.js";
-import { guardPath } from "./security/pathGuard.js";
+import { guardPath, guardWorkspacePath } from "./security/pathGuard.js";
 import { isSensitivePath } from "./security/sensitiveGuard.js";
+import { guardPlanContent } from "./security/planGuard.js";
+import { TASK_READ_ONLY_FILES } from "./tools/getTaskFile.js";
 
 // ── State ──────────────────────────────────────────────────────────
 
@@ -157,6 +159,14 @@ if (config) {
     results.push(`[OK]   pathGuard blocks ../ path escape`);
     ok++;
   }
+
+  try {
+    const relativeRepo = guardWorkspacePath(".", config.workspaceRoot);
+    const absoluteRepo = guardWorkspacePath(config.workspaceRoot, config.workspaceRoot);
+    check("repo_path resolver supports relative and absolute paths", relativeRepo === absoluteRepo, relativeRepo);
+  } catch (error) {
+    check("repo_path resolver supports relative and absolute paths", false, error instanceof Error ? error.message : String(error));
+  }
 }
 
 // 8. Sensitive file guard test
@@ -171,6 +181,30 @@ for (const sp of sensitivePaths) {
     fail++;
   }
 }
+
+try {
+  guardPlanContent("Normal build plan", "Run npm test, npm run lint, release check, and npm run dist.");
+  results.push("[OK]   save_plan allows normal development plans");
+  ok++;
+} catch {
+  results.push("[FAIL] save_plan incorrectly blocks a normal development plan");
+  fail++;
+}
+try {
+  guardPlanContent("Unsafe plan", "Read the .env access token and export it.");
+  results.push("[FAIL] save_plan security rule did not block credential access");
+  fail++;
+} catch {
+  results.push("[OK]   save_plan security rules loaded");
+  ok++;
+}
+
+const requiredReadOnlyFiles = ["status.json", "result.md", "result.json", "diff.patch", "test.log", "verify.json"];
+check(
+  "Read-only task artifact allowlist",
+  requiredReadOnlyFiles.every((name) => TASK_READ_ONLY_FILES.includes(name)),
+  requiredReadOnlyFiles.join(", ")
+);
 
 // 9. HTTP port check
 const httpPort = (config as any)?.http?.port || 7331;
@@ -202,7 +236,19 @@ for (const { file, label, cmd: buildCmd } of distChecks) {
 }
 
 // New tool registrations check
-const newTools = ["listTasks", "cancelTask", "retryTask", "getTaskStdoutTail", "auditTask"];
+const newTools = [
+  "listTasks",
+  "listAgents",
+  "cancelTask",
+  "killTask",
+  "retryTask",
+  "getTaskProgress",
+  "getTaskSummary",
+  "waitForTask",
+  "getTaskStdoutTail",
+  "healthCheck",
+  "auditTask",
+];
 for (const t of newTools) {
   const compiled = resolve(process.cwd(), "dist/tools", `${t}.js`);
   check(`Tool module: ${t}`, existsSync(compiled), existsSync(compiled) ? "compiled" : "missing");
@@ -217,6 +263,14 @@ if (config) {
     writeFileSync(testFile, "ok", "utf-8");
     rmSync(testFile);
     check("Task directory writable", true, tasksDir);
+
+    const sampleTaskDir = join(tasksDir, ".doctor-sample-task");
+    mkdirSync(sampleTaskDir, { recursive: true });
+    const sampleStatus = join(sampleTaskDir, "status.json");
+    writeFileSync(sampleStatus, JSON.stringify({ status: "doctor" }), "utf-8");
+    const sampleReadable = JSON.parse(readFileSync(sampleStatus, "utf-8")).status === "doctor";
+    rmSync(sampleTaskDir, { recursive: true, force: true });
+    check("Example task directory read/write", sampleReadable, sampleTaskDir);
   } catch {
     warnCheck("Task directory writable", false, tasksDir);
   }
@@ -239,11 +293,24 @@ if (config) {
     hasNpmTest ? "present" : "npm test is missing — add it to allowedTestCommands");
 }
 
+if (config) {
+  check("Task timeout defaults are valid",
+    config.defaultTaskTimeoutSeconds > 0 && config.defaultTaskTimeoutSeconds <= config.maxTaskTimeoutSeconds,
+    `default ${config.defaultTaskTimeoutSeconds}s, max ${config.maxTaskTimeoutSeconds}s`);
+}
+
 // 13. Agent command check
 if (config) {
   const agents = config.agents || {};
   for (const [name, agentCfg] of Object.entries(agents) as [string, any][]) {
     const cmdName = agentCfg.command;
+    const looksLikePath = isAbsolute(cmdName) || cmdName.includes("/") || cmdName.includes("\\");
+    if (looksLikePath) {
+      const agentExists = existsSync(cmdName);
+      warnCheck(`Agent "${name}" command available`, agentExists,
+        agentExists ? `Found: ${cmdName}` : `"${cmdName}" does not exist — agent tasks will fail`);
+      continue;
+    }
     // Platform-appropriate lookup: 'where' on Windows, 'command -v' on Unix
     const isWin = process.platform === "win32";
     const lookupCmd = isWin ? `where ${cmdName}` : `command -v ${cmdName}`;

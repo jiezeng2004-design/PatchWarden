@@ -18,7 +18,7 @@ console.error(`[safe-bifrost] Workspace: ${config.workspaceRoot}`);
 console.error(`[safe-bifrost] Transport: stdio`);
 
 const server = new Server(
-  { name: "safe-bifrost", version: "0.2.0" },
+  { name: "safe-bifrost", version: "0.3.0" },
   { capabilities: { tools: {} } }
 );
 

@@ -17,8 +17,12 @@ or local private paths.
 2. Run `npm.cmd run build`.
 3. Use `scripts/safe-bifrost-mcp-stdio.cmd` as the tunnel MCP command.
 4. Start `npm.cmd run watch` in a separate terminal.
-5. Start `tunnel-client run`.
+5. Start `tunnel-client run` or use `Start-SafeBifrost-Tunnel.cmd`.
 6. Create a ChatGPT Connector using the tunnel channel.
+
+The Windows launcher prompts for the runtime API key once and stores only a
+Windows DPAPI-encrypted value under `%APPDATA%\safe-bifrost`. Use
+`Reset-SafeBifrost-Tunnel-Key.cmd` to remove the saved credential.
 
 ## Architecture
 

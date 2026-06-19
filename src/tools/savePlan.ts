@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { getPlansDir, getConfig } from "../config.js";
 import { guardPath } from "../security/pathGuard.js";
+import { guardPlanContent } from "../security/planGuard.js";
 
 export interface SavePlanInput {
   title: string;
@@ -17,6 +18,8 @@ export interface SavePlanOutput {
 export function savePlan(input: SavePlanInput): SavePlanOutput {
   const config = getConfig();
   const plansDir = getPlansDir(config);
+
+  guardPlanContent(input.title, input.content);
 
   const planId = `plan_${Date.now()}_${sanitizeTitle(input.title)}`;
   const planDir = resolve(plansDir, planId);
