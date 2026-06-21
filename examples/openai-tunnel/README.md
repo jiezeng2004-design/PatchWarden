@@ -19,10 +19,20 @@ or local private paths.
 4. Start `npm.cmd run watch` in a separate terminal.
 5. Start `tunnel-client run` or use `Start-SafeBifrost-Tunnel.cmd`.
 6. Create a ChatGPT Connector using the tunnel channel.
+7. After a tunnel/schema refresh, reconnect the Connector and validate from a
+   new ChatGPT conversation; an already-open conversation may retain its older
+   tool catalog.
 
 The Windows launcher prompts for the runtime API key once and stores only a
 Windows DPAPI-encrypted value under `%APPDATA%\safe-bifrost`. Use
 `Reset-SafeBifrost-Tunnel-Key.cmd` to remove the saved credential.
+
+Before the launcher starts the tunnel it performs a real MCP stdio handshake
+and requires the exact `chatgpt_core` manifest. Run
+`Check-SafeBifrost-Health.cmd` to see the version, profile, tool names, schema
+hash, process sources, and any mixed-version warnings. The check is read-only.
+The v0.4.0 core manifest contains 16 tools. A different count or schema hash
+requires a Connector refresh and validation from a new ChatGPT conversation.
 
 ## Architecture
 

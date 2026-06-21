@@ -1,6 +1,7 @@
 # Safe-Bifrost
 
-Current release: **v0.3.0**. See [v0.3.0 release notes](docs/release-v0.3.0.md).
+Development version: **v0.4.0** (not yet published). See the
+[v0.4.0 release notes](docs/release-v0.4.0.md).
 
 Safe-Bifrost is a local Model Context Protocol (MCP) bridge for safe
 plan-and-execute coding workflows.
@@ -41,6 +42,10 @@ tool.
   termination, and bounded task timeouts.
 - Server-side `wait_for_task` long polling so ChatGPT can remain in one tool
   loop until the agent reaches a terminal state.
+- `create_task` accepts a saved `plan_id`, an auditable `inline_plan`, or one
+  of five guarded task templates.
+- A supervised Windows tunnel launcher retries recoverable disconnects and
+  writes local, redacted runtime health state.
 - Structured `result.json`, `verify.json`, `diff.patch`, and
   `get_task_summary` acceptance evidence.
 - Workspace-wide before/after fingerprints that fail a task when changes are
@@ -53,14 +58,28 @@ tool.
   explicit credential theft, destructive disk deletion, and backdoor plans are blocked.
 - Task artifacts are returned with secret-like values redacted instead of
   failing the entire read.
+- Pending task artifacts return structured `available: false` evidence with
+  task phase, watcher health, pending reason, and the next safe tool call.
+- Structured `result.json`, `verify.json`, and `get_task_summary` values are
+  recursively redacted and report `redacted` plus `redaction_categories`.
 - Agent command allowlist through `safe-bifrost.config.json`.
 - Test command exact-match allowlist.
 - Windows-friendly helper scripts.
 - Read-only `doctor` command for local setup diagnostics.
 
-## MCP Tools
+## MCP Tools and Profiles
 
-Safe-Bifrost exposes these tools:
+Safe-Bifrost has two deterministic tool profiles. `full` is the default for
+ordinary local development and exposes all tools listed below. The Windows
+tunnel stdio wrapper explicitly uses `chatgpt_core`, a stable 16-tool profile
+ordered for the create/wait/review loop:
+
+`health_check`, `list_agents`, `list_workspace`, `read_workspace_file`,
+`save_plan`, `create_task`, `wait_for_task`, `get_task_summary`, `get_diff`,
+`get_result`, `get_result_json`, `get_test_log`, `get_task_status`, `list_tasks`,
+`cancel_task`, `audit_task`.
+
+The full profile exposes:
 
 - `list_workspace`
 - `read_workspace_file`
@@ -82,6 +101,7 @@ Safe-Bifrost exposes these tools:
 - `wait_for_task`
 - `get_task_summary`
 - `get_task_stdout_tail`
+- `get_task_log_tail`
 - `audit_task`
 
 ## Install
@@ -121,6 +141,7 @@ file.
   "workspaceRoot": "D:/path/to/test-or-project-workspace",
   "plansDir": ".safe-bifrost/plans",
   "tasksDir": ".safe-bifrost/tasks",
+  "toolProfile": "full",
   "agents": {
     "opencode": {
       "command": "opencode",
@@ -129,15 +150,14 @@ file.
   },
   "allowedTestCommands": [
     "npm test",
-    "npm run lint",
-    "npm run format:check",
     "npm run build",
-    "npm run dist",
-    "npm run doctor"
+    "npm run doctor",
+    "npm run check:tool-manifest"
   ],
   "maxReadFileBytes": 200000,
   "defaultTaskTimeoutSeconds": 900,
   "maxTaskTimeoutSeconds": 3600,
+  "watcherStaleSeconds": 30,
   "httpPort": 7331
 }
 ```
@@ -217,9 +237,16 @@ The launcher:
 - asks for your tunnel runtime API key on first use, then stores it encrypted
   with Windows DPAPI under `%APPDATA%\safe-bifrost`
 - asks for a tunnel ID if `SAFE_BIFROST_TUNNEL_ID` is not already set
-- starts the watcher in a separate PowerShell window
-- runs `tunnel-client doctor`
-- starts `tunnel-client run`
+- starts a hidden watcher owned by the launcher when no healthy external watcher exists
+- supervises only its owned watcher and retries stale/exited instances with a
+  capped 2/5/10/20/30-second backoff
+- runs machine-readable `tunnel-client doctor` checks
+- performs a real stdio MCP `initialize` plus `tools/list` preflight and stops
+  before tunnel startup if the core tools or v0.4.0 schemas are missing
+- supervises `tunnel-client run`, probes readiness, and retries recoverable
+  exits with a capped 5/10/20/30-second backoff
+- stops on non-retryable authentication, configuration, region, or control
+  plane errors instead of looping blindly
 
 Optional environment variables:
 
@@ -237,6 +264,35 @@ written to the repository or printed to logs. To remove it, run
 
 Never commit API keys, runtime keys, tunnel IDs, local account names, or
 private workspace IDs.
+
+If ChatGPT reports a tunnel 404 or cannot call any MCP tool, run:
+
+```text
+Check-SafeBifrost-Health.cmd
+```
+
+This local-only diagnostic reports source/dist version, the actual MCP process
+source, tool profile/count/names/schema hash, workspace/tasks access, watcher
+freshness, configured agents, tunnel readiness, and other detected
+Safe-Bifrost processes. It only warns about mixed versions and never ends a
+process. Runtime status is stored under `%LOCALAPPDATA%\safe-bifrost\runtime`
+and does not contain the API key or Tunnel ID.
+
+For an expanded read-only diagnosis, call
+`health_check({"detail":"self_diagnostic"})`. It adds allowlist counts,
+configured agents, recent task failures, and catalog consistency evidence
+without creating a task that depends on the watcher.
+
+If you need to fully restart everything (after a config change, version
+upgrade, or hung process), double-click:
+
+```text
+Restart-SafeBifrost.cmd
+```
+
+This stops only the process tree recorded as owned by the current launcher,
+rebuilds the project, clears stale runtime state, and opens a fresh tunnel
+launcher window. It does not stop unrelated or legacy Safe-Bifrost instances.
 
 ## Demo
 
@@ -281,6 +337,30 @@ Immediately call `wait_for_task` after `create_task`. If its response contains
 independent review. Each wait is capped at 30 seconds to stay below common
 connector and tunnel request timeouts.
 
+### ChatGPT still shows an older tool list
+
+Tool catalogs can remain attached to a connector session that was opened
+before the tunnel was refreshed. First run `Check-SafeBifrost-Health.cmd` and
+confirm `configured_tunnel_manifest.tool_profile` is `chatgpt_core`, its
+`tool_count` is 16, and the next tunnel status reports `core_tools_ready` as
+true. Then refresh or reconnect the Connector and open a
+new ChatGPT conversation. Do not use the old conversation as proof that the
+new schema was loaded. `health_check` exposes `server_version`, `schema_epoch`,
+and `tool_manifest_sha256` so the same tool names with stale schemas can still
+be distinguished.
+
+If an old conversation calls a tool that is no longer in the active profile,
+Safe-Bifrost returns `tool_catalog_mismatch` with the current tool manifest and
+refresh instructions instead of a generic unavailable-tool error.
+
+### Task remains queued and watcher is stale
+
+`create_task`, `get_task_status`, `list_tasks`, and pending artifact reads all
+return the same watcher evidence. A stale or missing watcher leaves the task
+saved but sets `execution_blocked: true`, `continuation_required: false`, and
+points to `health_check`. The Windows launcher automatically retries only the
+watcher process it created; external and legacy instances are never stopped.
+
 If logs show direct connection timeouts to `api.openai.com`, set a proxy:
 
 ```powershell
@@ -302,7 +382,10 @@ Verify:
 Start with `health_check` and `list_agents`. `create_task` requires an explicit
 `repo_path`; it never silently falls back to the workspace root. Prefer
 `verify_commands` from the exact schema allowlist. Immediately enter the
-`wait_for_task` loop and keep calling it while `continuation_required` is true.
+`wait_for_task(timeout_seconds: 25)` loop and keep calling it while
+`continuation_required` is true. The legacy `wait_seconds` name remains
+supported; if both aliases are sent, their values must match. Each wait
+defaults to 25 seconds and is capped at 30 seconds.
 Use `cancel_task` for graceful cancellation or `kill_task` for immediate
 termination. Final acceptance starts with `get_task_summary`, followed by
 `audit_task` and any detailed artifacts needed for review.
@@ -312,21 +395,30 @@ truly the intended repository. Prefer a relative subdirectory such as
 `desktop-pet-wangzai`; absolute paths are also accepted when they resolve
 inside `workspaceRoot`.
 
-Recommended `create_task` arguments (add the `plan_id` returned by
-`save_plan`):
+`create_task` requires exactly one plan source: `plan_id`, `inline_plan`, or
+`template`. The existing `save_plan` flow remains compatible. A shorter inline
+flow looks like:
 
 ```json
 {
   "agent": "opencode",
   "repo_path": "desktop-pet-wangzai",
+  "inline_plan": "Implement the requested small feature without changing unrelated files.",
   "verify_commands": [
-    "npm run lint",
-    "npm run format:check",
-    "npm test",
-    "npm run dist"
+    "npm run build",
+    "npm test"
   ]
 }
 ```
+
+Guarded templates are `inspect_only`, `feature_small`, `fix_tests`,
+`release_check`, and `rollback_scope_violation`. Template tasks also require a
+`goal`; the rollback review additionally requires `source_task_id` and never
+performs an automatic rollback. `inspect_only` and rollback review tasks fail
+with `failed_policy_violation` if they change repository files.
+
+`list_tasks` accepts `status`, `repo_path`, `active_only`, and `limit`. Each
+entry includes its computed `pending_reason` and watcher state.
 
 1. `list_workspace` — explore the project
 2. `save_plan` — ChatGPT writes the implementation plan
@@ -342,6 +434,8 @@ Recommended `create_task` arguments (add the `plan_id` returned by
 >   `rollback_scope_violation_plan.md`; Safe-Bifrost never auto-rolls back concurrent/user edits.
 > - `failed_verification` means at least one independent allow-listed command failed;
 >   inspect `verify.log` before retrying.
+> - `failed_policy_violation` means a no-changes template unexpectedly changed
+>   repository files; inspect the diff and use the backup-first follow-up prompt.
 > - `audit_task` provides an independent review, but still requires human judgment.
 > - Local `result.md` claims about `npm publish`, `git push`, or `GitHub release` are **unverified**.
 > - Publishing, tagging, pushing, and npm publish must be confirmed manually.
@@ -355,8 +449,11 @@ Recommended `create_task` arguments (add the `plan_id` returned by
 - `verify.json`: one structured record per independently executed allow-listed
   verification command, including cwd, exit code, output tails, and timing.
 - `verify.log`: readable form of the same independent verification evidence.
-- `diff.patch`: full textual patch captured after the task; `get_diff` truncates
-  only its response when necessary and returns `diff_patch_path` plus file stats.
+- `diff.patch`: complete task change evidence. `get_diff.patch_mode` is
+  `textual`, `no_changes`, or `hash_only`; hash-only responses include an
+  `unavailable_reason`. Large textual responses return a bounded patch head,
+  byte counts, truncation evidence, and the complete local `diff_patch_path`.
+- `file-stats.json`: standalone per-file additions/deletions and aggregate counts.
 - `rollback_scope_violation_plan.md`: review-only list of repo-external changes;
   it never includes normal in-repo changes and never performs rollback itself.
 
@@ -385,6 +482,9 @@ npm.cmd test
 npm.cmd run test:mcp
 npm.cmd run test:http-mcp
 npm.cmd run doctor
+npm.cmd run check:tool-manifest
+npm.cmd run test:tunnel-supervisor
+npm.cmd run test:watcher-supervisor
 npm.cmd run pack:clean
 ```
 

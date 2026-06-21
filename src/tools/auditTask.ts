@@ -81,7 +81,7 @@ export function auditTask(taskId: string): AuditTaskOutput {
 
   // ── 1. Task status ──
   const taskStatus = statusData.status || "unknown";
-  const failedStatuses = new Set(["failed", "failed_verification", "failed_scope_violation", "canceled"]);
+  const failedStatuses = new Set(["failed", "failed_verification", "failed_scope_violation", "failed_policy_violation", "canceled"]);
   checks.push({
     name: "task_status",
     result: taskStatus === "done" ? "pass" : failedStatuses.has(taskStatus) ? "fail" : "warn",
@@ -222,7 +222,7 @@ export function auditTask(taskId: string): AuditTaskOutput {
     }
 
     // Extract npm run xxx
-    const refs = content.match(/npm\s+run\s+(\S+)/gi) || [];
+    const refs = content.match(/npm(?:\.cmd)?\s+run\s+([a-zA-Z0-9:_-]+)/gi) || [];
     for (const ref of refs) {
       const scriptName = ref.replace(/npm\s+run\s+/i, "").replace(/[^a-zA-Z0-9:_-]/g, "");
       if (scriptName) allNpmRunRefs.add(scriptName);

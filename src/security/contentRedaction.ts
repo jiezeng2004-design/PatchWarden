@@ -4,6 +4,12 @@ export interface RedactionResult {
   redaction_categories: string[];
 }
 
+export interface StructuredRedactionResult<T> {
+  value: T;
+  redacted: boolean;
+  redaction_categories: string[];
+}
+
 interface RedactionRule {
   category: string;
   pattern: RegExp;
@@ -50,6 +56,29 @@ export function redactSensitiveContent(input: string): RedactionResult {
   }
   return {
     content,
+    redacted: categories.length > 0,
+    redaction_categories: [...new Set(categories)],
+  };
+}
+
+export function redactSensitiveValue<T>(input: T): StructuredRedactionResult<T> {
+  const categories: string[] = [];
+  const visit = (value: unknown): unknown => {
+    if (typeof value === "string") {
+      const result = redactSensitiveContent(value);
+      categories.push(...result.redaction_categories);
+      return result.content;
+    }
+    if (Array.isArray(value)) return value.map(visit);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key, visit(entry)])
+      );
+    }
+    return value;
+  };
+  return {
+    value: visit(input) as T,
     redacted: categories.length > 0,
     redaction_categories: [...new Set(categories)],
   };

@@ -11,6 +11,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { loadConfig } from "./config.js";
 import { registerTools } from "./tools/registry.js";
+import { SAFE_BIFROST_VERSION } from "./version.js";
 
 const config = loadConfig();
 
@@ -18,7 +19,7 @@ console.error(`[safe-bifrost] Workspace: ${config.workspaceRoot}`);
 console.error(`[safe-bifrost] Transport: stdio`);
 
 const server = new Server(
-  { name: "safe-bifrost", version: "0.3.0" },
+  { name: "safe-bifrost", version: SAFE_BIFROST_VERSION },
   { capabilities: { tools: {} } }
 );
 

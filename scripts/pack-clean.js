@@ -23,6 +23,8 @@ const include = [
   "scripts",
   "src",
   "Start-SafeBifrost-Tunnel.cmd",
+  "Restart-SafeBifrost.cmd",
+  "Check-SafeBifrost-Health.cmd",
   "Reset-SafeBifrost-Tunnel-Key.cmd",
   ".gitignore",
   "LICENSE",

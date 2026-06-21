@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { getTasksDir, getConfig } from "../config.js";
 import { guardReadPath } from "../security/pathGuard.js";
+import { redactSensitiveContent } from "../security/contentRedaction.js";
 
 export function getTaskStdoutTail(taskId: string, lines = 80) {
   const config = getConfig();
@@ -45,11 +46,16 @@ export function getTaskStdoutTail(taskId: string, lines = 80) {
     if (source === "none") source = "result.md";
   }
 
+  const stdoutRedacted = redactSensitiveContent(stdoutTail || "(no output yet — task may be pending or not started)");
+  const stderrRedacted = redactSensitiveContent(stderrTail || "(no stderr)");
+
   return {
     task_id: taskId,
     lines: stdoutTail ? stdoutTail.split("\n").length : 0,
-    stdout_tail: stdoutTail || "(no output yet — task may be pending or not started)",
-    stderr_tail: stderrTail || "(no stderr)",
+    stdout_tail: stdoutRedacted.content,
+    stderr_tail: stderrRedacted.content,
     source,
+    redacted: stdoutRedacted.redacted || stderrRedacted.redacted,
+    redaction_categories: [...new Set([...stdoutRedacted.redaction_categories, ...stderrRedacted.redaction_categories])],
   };
 }

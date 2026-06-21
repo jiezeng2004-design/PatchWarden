@@ -55,6 +55,8 @@ export interface ChangeArtifacts {
   }>;
   workspace_dirty_before: boolean;
   workspace_dirty_after: boolean;
+  patch_mode: "textual" | "no_changes" | "hash_only";
+  unavailable_reason: string | null;
 }
 
 export function captureRepoSnapshot(repoPath: string): RepoSnapshot {
@@ -171,6 +173,12 @@ export function buildChangeArtifacts(
     file_stats: fileStats,
     workspace_dirty_before: before.workspace_dirty,
     workspace_dirty_after: after.workspace_dirty,
+    patch_mode: changedFiles.length === 0 ? "no_changes" : body ? "textual" : "hash_only",
+    unavailable_reason: changedFiles.length > 0 && !body
+      ? (before.is_git && after.is_git
+          ? "Git could not produce a textual patch for the changed files; hash evidence remains available."
+          : "Repository is not a Git worktree; only bounded hash evidence is available.")
+      : null,
   };
 }
 

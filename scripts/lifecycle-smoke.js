@@ -15,6 +15,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 const tempRoot = mkdtempSync(join(tmpdir(), "safe-bifrost-lifecycle-"));
 const workspaceRoot = join(tempRoot, "workspace");
 const repoPath = join(workspaceRoot, "repo");
+const plainRepoPath = join(workspaceRoot, "plain-repo");
 const configPath = join(tempRoot, "safe-bifrost.config.json");
 let passed = 0;
 let failed = 0;
@@ -56,10 +57,21 @@ console.log("\n=== Safe-Bifrost Lifecycle Smoke Tests ===\n");
 
 try {
   mkdirSync(repoPath, { recursive: true });
+  mkdirSync(join(workspaceRoot, ".safe-bifrost"), { recursive: true });
+  writeFileSync(join(workspaceRoot, ".safe-bifrost", "watcher-heartbeat.json"), JSON.stringify({
+    status: "running",
+    pid: process.pid,
+    instance_id: "lifecycle-smoke-watcher",
+    launcher_pid: process.pid,
+    started_at: new Date().toISOString(),
+    last_heartbeat_at: new Date().toISOString(),
+  }), "utf-8");
   writeFileSync(join(repoPath, "README.md"), "# Lifecycle fixture\n", "utf-8");
   writeFileSync(join(repoPath, "main.js"), "console.log('fixture');\n", "utf-8");
   writeFileSync(join(repoPath, "second.js"), "console.log('second');\n", "utf-8");
   writeFileSync(join(repoPath, "delete-me.txt"), "delete fixture\n", "utf-8");
+  mkdirSync(plainRepoPath, { recursive: true });
+  writeFileSync(join(plainRepoPath, "README.md"), "# Non-Git fixture\n", "utf-8");
   git(["init"]);
   git(["add", "README.md", "main.js", "second.js", "delete-me.txt"]);
   git(["-c", "user.name=Safe-Bifrost Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture"]);
@@ -98,11 +110,16 @@ try {
           command: process.execPath,
           args: ["-e", "require('fs').unlinkSync('delete-me.txt')"],
         },
+        binarywriter: {
+          command: process.execPath,
+          args: ["-e", "require('fs').writeFileSync('fixture.bin',Buffer.from([0,1,2,3,255,0,10]))"],
+        },
       },
       allowedTestCommands: ["node --check main.js", "node --check second.js", "node --check missing.js"],
       maxReadFileBytes: 200000,
       defaultTaskTimeoutSeconds: 10,
       maxTaskTimeoutSeconds: 60,
+      watcherStaleSeconds: 3600,
     }, null, 2),
     "utf-8"
   );
@@ -121,7 +138,7 @@ try {
 
   await test("list_agents reports configured executables", async () => {
     const result = listAgents();
-    if (result.total !== 6 || result.agents.some((agent) => !agent.available)) {
+    if (result.total !== 7 || result.agents.some((agent) => !agent.available)) {
       throw new Error(`Unexpected agent availability: ${JSON.stringify(result)}`);
     }
   });
@@ -146,6 +163,9 @@ try {
       throw new Error(`new-file.txt addition missing: ${JSON.stringify(changed)}`);
     }
     const diff = getDiff(task.task_id);
+    if (diff.patch_mode !== "textual" || diff.unavailable_reason !== null) {
+      throw new Error(`Expected textual Git patch: ${JSON.stringify(diff)}`);
+    }
     if (!diff.content.includes("README.md") || !diff.content.includes("new-file.txt")) {
       throw new Error("git.diff did not include both tracked and untracked evidence");
     }
@@ -156,7 +176,7 @@ try {
     if (!diff.file_stats?.some((file) => file.path === "new-file.txt" && file.status === "added" && file.additions > 0)) {
       throw new Error(`Missing added file stats: ${JSON.stringify(diff.file_stats)}`);
     }
-    for (const artifact of ["result.json", "verify.json", "verify.log", "diff.patch"]) {
+    for (const artifact of ["result.json", "verify.json", "verify.log", "diff.patch", "file-stats.json"]) {
       if (!existsSync(join(task.path, artifact))) throw new Error(`${artifact} missing`);
     }
     const summary = getTaskSummary(task.task_id);
@@ -178,6 +198,23 @@ try {
         !degraded.warnings.some((warning) => warning.includes("diff.patch is missing")) ||
         !degraded.warnings.some((warning) => warning.includes("test.log is missing"))) {
       throw new Error(`Missing artifact warnings incomplete: ${JSON.stringify(degraded.warnings)}`);
+    }
+  });
+
+  await test("inspect_only template fails when the agent changes repository files", async () => {
+    const task = createTask({
+      template: "inspect_only",
+      goal: "Inspect the fixture without modifying files",
+      agent: "writer",
+      repo_path: "repo",
+    });
+    const result = await runTask(task.task_id);
+    if (result.status !== "failed_policy_violation") {
+      throw new Error(`Expected failed_policy_violation: ${JSON.stringify(result)}`);
+    }
+    const summary = getTaskSummary(task.task_id);
+    if (summary.change_policy !== "no_changes" || summary.suggested_next_action !== "review_unexpected_changes") {
+      throw new Error(`Unexpected policy summary: ${JSON.stringify(summary)}`);
     }
   });
 
@@ -210,6 +247,9 @@ try {
     if (diff.diff_available !== false || diff.changed_files?.length !== 0 || diff.message !== "No task file changes detected") {
       throw new Error(`No-diff response unclear: ${JSON.stringify(diff)}`);
     }
+    if (diff.patch_mode !== "no_changes" || diff.unavailable_reason !== null) {
+      throw new Error(`Expected explicit no_changes patch mode: ${JSON.stringify(diff)}`);
+    }
     rmSync(join(task.path, "result.json"), { force: true });
     const fallback = getTaskSummary(task.task_id);
     if (!fallback.terminal || fallback.result_json_available || !fallback.summary) {
@@ -226,6 +266,32 @@ try {
     const patchSize = readFileSync(join(task.path, "diff.patch"), "utf-8").length;
     if (!diff.truncated || !diff.patch_head || !diff.diff_patch_path || patchSize <= diff.content.length) {
       throw new Error(`Large diff contract mismatch: ${JSON.stringify({ diff, patchSize })}`);
+    }
+  });
+
+  await test("non-Git repositories return hash-only evidence with a reason", async () => {
+    const plan = savePlan({ title: "Non-Git evidence", content: "Modify files in a non-Git repository." });
+    const task = createTask({ plan_id: plan.plan_id, agent: "writer", repo_path: "plain-repo" });
+    const result = await runTask(task.task_id);
+    if (result.status !== "done") throw new Error(`Non-Git task failed: ${JSON.stringify(result)}`);
+    const diff = getDiff(task.task_id);
+    if (
+      diff.patch_mode !== "hash_only" ||
+      !diff.unavailable_reason?.includes("not a Git worktree") ||
+      !diff.changed_files?.some((file) => file.path === "README.md")
+    ) {
+      throw new Error(`Non-Git diff evidence mismatch: ${JSON.stringify(diff)}`);
+    }
+  });
+
+  await test("binary Git changes remain reviewable as a textual Git binary patch", async () => {
+    const plan = savePlan({ title: "Binary evidence", content: "Create a binary fixture." });
+    const task = createTask({ plan_id: plan.plan_id, agent: "binarywriter", repo_path: "repo" });
+    const result = await runTask(task.task_id);
+    if (result.status !== "done") throw new Error(`Binary task failed: ${JSON.stringify(result)}`);
+    const diff = getDiff(task.task_id);
+    if (diff.patch_mode !== "textual" || !diff.content.includes("GIT binary patch")) {
+      throw new Error(`Binary patch evidence mismatch: ${JSON.stringify(diff)}`);
     }
   });
 
@@ -293,6 +359,15 @@ try {
     const resultJson = JSON.parse(readFileSync(join(task.path, "result.json"), "utf-8"));
     if (!resultMd.includes("node --check missing.js") || !resultJson.summary.includes("node --check missing.js")) {
       throw new Error("Failed verification command missing from result artifacts");
+    }
+    const summary = getTaskSummary(task.task_id);
+    if (
+      resultJson.failed_command !== "node --check missing.js" ||
+      resultJson.suggested_next_action !== "create_followup_task" ||
+      !resultJson.safe_followup_prompt?.includes("Do not change unrelated files") ||
+      summary.suggested_next_action !== "create_followup_task"
+    ) {
+      throw new Error(`Failure follow-up evidence missing: ${JSON.stringify(resultJson)}`);
     }
   });
 

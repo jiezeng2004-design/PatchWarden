@@ -34,16 +34,39 @@ const PLAN_RULES: PlanRule[] = [
   },
 ];
 
+// Negation patterns indicating the plan is about PREVENTING the action, not doing it.
+// When found within the match context, the rule is skipped.
+// Note: Chinese characters are not word chars (\w), so \b doesn't work for them.
+// We use separate patterns with and without \b for CJK terms.
+const NEGATION_PATTERNS = [
+  // English negation + action
+  /\b(?:do not|don't|never|must not|should not|shall not|cannot|won't|shouldn't|mustn't)\b.{0,40}(?:read|open|cat|dump|extract|steal|exfiltrat|leak|delete|remove|install|create|deploy|读取|查看|打开|导出|窃取|泄露|删除|安装|创建|植入)/is,
+  // English avoidance terms + sensitive targets
+  /\b(?:avoid|refrain|prevent|block|forbid)\b.{0,40}(?:read|open|cat|dump|extract|steal|exfiltrat|leak|delete|remove|install|create|deploy|\.env|token|key|credential|secret|password|读取|查看|打开|导出|窃取|泄露|删除|安装|创建|植入)/is,
+  // Chinese negation/avoidance terms (no \b — CJK chars aren't word chars)
+  /(?:禁止|不要|不得|严禁|避免|防止|阻止|勿|别|不可|不应).{0,40}(?:read|open|cat|dump|extract|steal|exfiltrat|leak|delete|remove|install|create|deploy|读取|查看|打开|导出|窃取|泄露|删除|安装|创建|植入|\.env|token|key|credential|secret|password|密钥|令牌|凭据|私钥)/is,
+  // Chinese security hardening context
+  /(?:安全.{0,10}(?:加固|修复|改进|增强|保护)|防护|脱敏|保护|防止泄露)/is,
+  // Plans that describe a security FEATURE (e.g., "block credential access", "prevent token leak")
+  /\b(?:security.{0,20}(?:feature|improvement|hardening|fix)|guard|protect|sanitize|redact)\b/is,
+  // Plans that describe what NOT to do as a constraint
+  /\b(?:constraints?|rules?|guidelines?|要求|约束|规则).{0,80}(?:do not|don't|never|must not|禁止|不要|不得|严禁)/is,
+];
+
 export function guardPlanContent(title: string, content: string): void {
   const text = `${title}\n${content}`;
   for (const rule of PLAN_RULES) {
     const match = text.match(rule.pattern);
     if (!match) continue;
     const index = match.index || 0;
-    const context = text.slice(Math.max(0, index - 40), index + match[0].length);
-    if (rule.category === "credential_access" && /(?:do not|don't|never|must not|禁止|不要|不得|严禁).{0,30}(?:read|open|cat|dump|extract|读取|查看|打开|导出)/is.test(context)) {
+    // Wider context window: 120 chars before the match
+    const context = text.slice(Math.max(0, index - 120), index + match[0].length);
+
+    // Check if any negation pattern applies in the surrounding context
+    if (NEGATION_PATTERNS.some((pattern) => pattern.test(context))) {
       continue;
     }
+
     throw new SafeBifrostError(
       rule.id,
       `save_plan blocked content in category "${rule.category}".`,

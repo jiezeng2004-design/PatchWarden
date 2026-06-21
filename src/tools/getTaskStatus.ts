@@ -6,10 +6,19 @@ import { guardSensitivePath } from "../security/sensitiveGuard.js";
 import type { TaskStatus } from "./createTask.js";
 import type { TaskPhase } from "./createTask.js";
 import { readTaskRuntime } from "../taskRuntime.js";
+import {
+  derivePendingReason,
+  readWatcherStatus,
+  type PendingReason,
+  type WatcherStatusSnapshot,
+} from "../watcherStatus.js";
 
 export interface GetTaskStatusOutput {
   task_id: string;
   plan_id: string;
+  plan_source?: "saved" | "inline" | "template";
+  template?: string | null;
+  change_policy?: "repo_scoped_changes" | "no_changes";
   agent: string;
   workspace_root: string;
   repo_path: string;
@@ -33,6 +42,12 @@ export interface GetTaskStatusOutput {
   workspace_dirty_after?: boolean;
   workspace_dirty?: boolean;
   error: string | null;
+  watcher_status: WatcherStatusSnapshot["status"];
+  watcher_last_heartbeat_at: string | null;
+  watcher_heartbeat_age_seconds: number | null;
+  watcher: WatcherStatusSnapshot;
+  pending_reason: PendingReason;
+  execution_blocked: boolean;
 }
 
 export function getTaskStatus(taskId: string): GetTaskStatusOutput {
@@ -52,10 +67,19 @@ export function getTaskStatus(taskId: string): GetTaskStatusOutput {
   const raw = readFileSync(statusFile, "utf-8");
   const status = JSON.parse(raw) as GetTaskStatusOutput;
   const runtime = readTaskRuntime(taskDir);
+  const phase = runtime.phase || status.phase || "queued";
+  const watcher = readWatcherStatus(config);
+  const pendingReason = derivePendingReason({ status: status.status, phase }, watcher);
   return {
     ...status,
-    phase: runtime.phase || status.phase || "queued",
+    phase,
     last_heartbeat_at: runtime.last_heartbeat_at || status.last_heartbeat_at || status.updated_at,
     current_command: runtime.current_command ?? status.current_command ?? null,
+    watcher_status: watcher.status,
+    watcher_last_heartbeat_at: watcher.last_heartbeat_at,
+    watcher_heartbeat_age_seconds: watcher.heartbeat_age_seconds,
+    watcher,
+    pending_reason: pendingReason,
+    execution_blocked: status.status === "pending" && !watcher.available,
   };
 }

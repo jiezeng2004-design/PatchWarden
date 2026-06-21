@@ -2,6 +2,7 @@
   "workspaceRoot": "D:/path/to/test-project",
   "plansDir": ".safe-bifrost/plans",
   "tasksDir": ".safe-bifrost/tasks",
+  "toolProfile": "full",
   "agents": {
     "codex": {
       "command": "codex",
@@ -34,5 +35,6 @@
   ],
   "maxReadFileBytes": 200000,
   "defaultTaskTimeoutSeconds": 900,
-  "maxTaskTimeoutSeconds": 3600
+  "maxTaskTimeoutSeconds": 3600,
+  "watcherStaleSeconds": 30
 }

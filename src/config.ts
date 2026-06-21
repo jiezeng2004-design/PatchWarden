@@ -17,6 +17,9 @@ export interface SafeBifrostConfig {
   maxReadFileBytes: number;
   defaultTaskTimeoutSeconds: number;
   maxTaskTimeoutSeconds: number;
+  watcherStaleSeconds: number;
+  toolProfile?: "full" | "chatgpt_core";
+  repoAliases?: Record<string, string>;
 }
 
 // ── Defaults ──────────────────────────────────────────────────────
@@ -56,6 +59,8 @@ const DEFAULT_CONFIG: SafeBifrostConfig = {
   maxReadFileBytes: 200_000,
   defaultTaskTimeoutSeconds: 900,
   maxTaskTimeoutSeconds: 3600,
+  watcherStaleSeconds: 30,
+  toolProfile: "full",
 };
 
 // ── Load config ───────────────────────────────────────────────────
@@ -145,6 +150,12 @@ function normalizeConfig(config: SafeBifrostConfig): SafeBifrostConfig {
   }
   if (config.defaultTaskTimeoutSeconds > config.maxTaskTimeoutSeconds) {
     throw new Error("defaultTaskTimeoutSeconds cannot exceed maxTaskTimeoutSeconds");
+  }
+  if (!Number.isInteger(config.watcherStaleSeconds) || config.watcherStaleSeconds < 5 || config.watcherStaleSeconds > 3600) {
+    throw new Error("watcherStaleSeconds must be an integer from 5 to 3600");
+  }
+  if (config.toolProfile !== undefined && config.toolProfile !== "full" && config.toolProfile !== "chatgpt_core") {
+    throw new Error('toolProfile must be "full" or "chatgpt_core"');
   }
 
   return {

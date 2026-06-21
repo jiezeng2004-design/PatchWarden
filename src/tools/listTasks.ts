@@ -4,6 +4,13 @@ import { getTasksDir, getPlansDir, getConfig } from "../config.js";
 import { guardPath } from "../security/pathGuard.js";
 import { readTaskRuntime } from "../taskRuntime.js";
 import type { TaskPhase, TaskStatus } from "./createTask.js";
+import {
+  derivePendingReason,
+  readWatcherStatus,
+  type PendingReason,
+  type WatcherState,
+  type WatcherStatusSnapshot,
+} from "../watcherStatus.js";
 
 export interface TaskEntry {
   task_id: string;
@@ -23,16 +30,22 @@ export interface TaskEntry {
   last_heartbeat_at: string;
   current_command: string | null;
   timeout_seconds: number;
+  pending_reason: PendingReason;
+  watcher_status: WatcherState;
 }
 
 export interface ListTasksInput {
   status?: string;
+  repo_path?: string;
+  active_only?: boolean;
   limit?: number;
 }
 
 export interface ListTasksOutput {
   tasks: TaskEntry[];
   total: number;
+  returned: number;
+  watcher: WatcherStatusSnapshot;
 }
 
 export function listTasks(input?: ListTasksInput): ListTasksOutput {
@@ -41,9 +54,11 @@ export function listTasks(input?: ListTasksInput): ListTasksOutput {
   const plansDir = getPlansDir(config);
   const limit = input?.limit && input.limit > 0 ? Math.min(input.limit, 100) : 20;
   const filterStatus = input?.status || null;
+  const filterRepo = input?.repo_path?.trim().replace(/\\/g, "/") || null;
+  const watcher = readWatcherStatus(config);
 
   if (!existsSync(tasksDir)) {
-    return { tasks: [], total: 0 };
+    return { tasks: [], total: 0, returned: 0, watcher };
   }
 
   const entries = readdirSync(tasksDir, { withFileTypes: true })
@@ -60,9 +75,9 @@ export function listTasks(input?: ListTasksInput): ListTasksOutput {
     });
 
   const tasks: TaskEntry[] = [];
+  let totalMatched = 0;
 
   for (const entry of entries) {
-    if (tasks.length >= limit) break;
     const taskId = entry.name;
     const taskDir = join(tasksDir, taskId);
     const statusFile = join(taskDir, "status.json");
@@ -73,6 +88,12 @@ export function listTasks(input?: ListTasksInput): ListTasksOutput {
       const data = JSON.parse(readFileSync(statusFile, "utf-8"));
       const runtime = readTaskRuntime(taskDir);
       if (filterStatus && data.status !== filterStatus) continue;
+      if (input?.active_only && data.status !== "pending" && data.status !== "running") continue;
+      const normalizedRepo = String(data.repo_path || ".").replace(/\\/g, "/");
+      const normalizedResolvedRepo = String(data.resolved_repo_path || "").replace(/\\/g, "/");
+      if (filterRepo && normalizedRepo !== filterRepo && normalizedResolvedRepo !== filterRepo) continue;
+      totalMatched++;
+      if (tasks.length >= limit) continue;
 
       // Read plan title from plans directory (not task dir)
       let title = `Plan: ${data.plan_id || "unknown"}`;
@@ -87,13 +108,14 @@ export function listTasks(input?: ListTasksInput): ListTasksOutput {
         }
       }
 
+      const phase = runtime.phase || data.phase || "queued";
       tasks.push({
         task_id: taskId,
         plan_id: data.plan_id || "",
         title,
         agent: data.agent || "",
         status: data.status || "pending",
-        phase: runtime.phase || data.phase || "queued",
+        phase,
         created_at: data.created_at || "",
         updated_at: data.updated_at || "",
         workspace_root: data.workspace_root || config.workspaceRoot,
@@ -105,11 +127,13 @@ export function listTasks(input?: ListTasksInput): ListTasksOutput {
         last_heartbeat_at: runtime.last_heartbeat_at || data.last_heartbeat_at || data.updated_at || "",
         current_command: runtime.current_command ?? data.current_command ?? null,
         timeout_seconds: data.timeout_seconds || config.defaultTaskTimeoutSeconds,
+        pending_reason: derivePendingReason({ status: data.status, phase }, watcher),
+        watcher_status: watcher.status,
       });
     } catch {
       // skip corrupted entries
     }
   }
 
-  return { tasks, total: tasks.length };
+  return { tasks, total: totalMatched, returned: tasks.length, watcher };
 }
