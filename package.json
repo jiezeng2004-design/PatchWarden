@@ -20,6 +20,7 @@
     "Check-PatchWarden-Health.cmd",
     "Reset-PatchWarden-Tunnel-Key.cmd",
     "README.md",
+    "README.en.md",
     "LICENSE",
     "tsconfig.json"
   ],
