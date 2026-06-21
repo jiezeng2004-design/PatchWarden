@@ -8,7 +8,7 @@ export interface AgentConfig {
   args: string[];
 }
 
-export interface SafeBifrostConfig {
+export interface PatchWardenConfig {
   workspaceRoot: string;
   plansDir: string;
   tasksDir: string;
@@ -17,14 +17,17 @@ export interface SafeBifrostConfig {
   maxReadFileBytes: number;
   defaultTaskTimeoutSeconds: number;
   maxTaskTimeoutSeconds: number;
+  watcherStaleSeconds: number;
+  toolProfile?: "full" | "chatgpt_core";
+  repoAliases?: Record<string, string>;
 }
 
 // ── Defaults ──────────────────────────────────────────────────────
 
-const DEFAULT_CONFIG: SafeBifrostConfig = {
+const DEFAULT_CONFIG: PatchWardenConfig = {
   workspaceRoot: process.cwd(),
-  plansDir: ".safe-bifrost/plans",
-  tasksDir: ".safe-bifrost/tasks",
+  plansDir: ".patchwarden/plans",
+  tasksDir: ".patchwarden/tasks",
   agents: {
     codex: {
       command: "codex",
@@ -56,21 +59,23 @@ const DEFAULT_CONFIG: SafeBifrostConfig = {
   maxReadFileBytes: 200_000,
   defaultTaskTimeoutSeconds: 900,
   maxTaskTimeoutSeconds: 3600,
+  watcherStaleSeconds: 30,
+  toolProfile: "full",
 };
 
 // ── Load config ───────────────────────────────────────────────────
 
-let _config: SafeBifrostConfig | null = null;
+let _config: PatchWardenConfig | null = null;
 
-export function loadConfig(configPath?: string): SafeBifrostConfig {
+export function loadConfig(configPath?: string): PatchWardenConfig {
   if (_config) return _config;
 
-  const explicitPath = configPath || process.env.SAFE_BIFROST_CONFIG;
+  const explicitPath = configPath || process.env.PATCHWARDEN_CONFIG;
   const candidatePaths = explicitPath
     ? [explicitPath]
     : [
-        resolve(process.cwd(), "safe-bifrost.config.json"),
-        resolve(process.cwd(), ".safe-bifrost.json"),
+        resolve(process.cwd(), "patchwarden.config.json"),
+        resolve(process.cwd(), ".patchwarden.json"),
       ];
 
   for (const p of candidatePaths) {
@@ -78,39 +83,39 @@ export function loadConfig(configPath?: string): SafeBifrostConfig {
       try {
         const rawText = stripBom(readFileSync(p, "utf-8"));
         const raw = JSON.parse(rawText);
-        _config = normalizeConfig({ ...DEFAULT_CONFIG, ...raw } as SafeBifrostConfig);
+        _config = normalizeConfig({ ...DEFAULT_CONFIG, ...raw } as PatchWardenConfig);
         return _config;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        throw new Error(`Failed to load Safe-Bifrost config "${p}": ${message}`);
+        throw new Error(`Failed to load PatchWarden config "${p}": ${message}`);
       }
     }
   }
 
   if (explicitPath) {
-    throw new Error(`Safe-Bifrost config not found: "${explicitPath}"`);
+    throw new Error(`PatchWarden config not found: "${explicitPath}"`);
   }
 
   _config = normalizeConfig({ ...DEFAULT_CONFIG });
   return _config;
 }
 
-export function getConfig(): SafeBifrostConfig {
+export function getConfig(): PatchWardenConfig {
   if (!_config) return loadConfig();
   return _config;
 }
 
 /** Resolve workspaceRoot: expand relative paths */
-export function resolveWorkspaceRoot(config: SafeBifrostConfig): string {
+export function resolveWorkspaceRoot(config: PatchWardenConfig): string {
   return resolve(config.workspaceRoot);
 }
 
 /** Resolve plans/tasks dirs relative to workspaceRoot */
-export function getPlansDir(config: SafeBifrostConfig): string {
+export function getPlansDir(config: PatchWardenConfig): string {
   return resolve(config.workspaceRoot, config.plansDir);
 }
 
-export function getTasksDir(config: SafeBifrostConfig): string {
+export function getTasksDir(config: PatchWardenConfig): string {
   return resolve(config.workspaceRoot, config.tasksDir);
 }
 
@@ -118,7 +123,7 @@ function stripBom(value: string): string {
   return value.charCodeAt(0) === 0xfeff ? value.slice(1) : value;
 }
 
-function normalizeConfig(config: SafeBifrostConfig): SafeBifrostConfig {
+function normalizeConfig(config: PatchWardenConfig): PatchWardenConfig {
   if (!config.workspaceRoot || typeof config.workspaceRoot !== "string") {
     throw new Error("workspaceRoot must be a non-empty string");
   }
@@ -145,6 +150,12 @@ function normalizeConfig(config: SafeBifrostConfig): SafeBifrostConfig {
   }
   if (config.defaultTaskTimeoutSeconds > config.maxTaskTimeoutSeconds) {
     throw new Error("defaultTaskTimeoutSeconds cannot exceed maxTaskTimeoutSeconds");
+  }
+  if (!Number.isInteger(config.watcherStaleSeconds) || config.watcherStaleSeconds < 5 || config.watcherStaleSeconds > 3600) {
+    throw new Error("watcherStaleSeconds must be an integer from 5 to 3600");
+  }
+  if (config.toolProfile !== undefined && config.toolProfile !== "full" && config.toolProfile !== "chatgpt_core") {
+    throw new Error('toolProfile must be "full" or "chatgpt_core"');
   }
 
   return {

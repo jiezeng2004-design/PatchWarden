@@ -6,16 +6,16 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const tempRoot = mkdtempSync(join(tmpdir(), "safe-bifrost-doctor-"));
+const tempRoot = mkdtempSync(join(tmpdir(), "patchwarden-doctor-"));
 const workspaceRoot = join(tempRoot, "workspace");
-const configPath = join(tempRoot, "safe-bifrost.config.json");
+const configPath = join(tempRoot, "patchwarden.config.json");
 
 try {
   mkdirSync(workspaceRoot, { recursive: true });
   writeFileSync(configPath, JSON.stringify({
     workspaceRoot,
-    plansDir: ".safe-bifrost/plans",
-    tasksDir: ".safe-bifrost/tasks",
+    plansDir: ".patchwarden/plans",
+    tasksDir: ".patchwarden/tasks",
     agents: {
       fixture: { command: process.execPath, args: ["-e", "console.log('fixture')"] },
     },
@@ -27,7 +27,7 @@ try {
 
   const result = spawnSync(process.execPath, ["dist/doctor.js"], {
     cwd: root,
-    env: { ...process.env, SAFE_BIFROST_CONFIG: configPath },
+    env: { ...process.env, PATCHWARDEN_CONFIG: configPath },
     encoding: "utf-8",
     timeout: 30000,
   });

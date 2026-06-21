@@ -90,6 +90,7 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
   const agentName = String(initialStatus.agent || "");
   const rawRepoPath = String(initialStatus.resolved_repo_path || initialStatus.repo_path || wsRoot);
   const testCommand = String(initialStatus.test_command || "");
+  const changePolicy = String(initialStatus.change_policy || "repo_scoped_changes");
   let verifyCommands: string[];
   let timeoutSeconds: number;
   try {
@@ -229,6 +230,8 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
       file_stats: [],
       workspace_dirty_before: beforeSnapshot.workspace_dirty,
       workspace_dirty_after: beforeSnapshot.workspace_dirty,
+      patch_mode: "hash_only",
+      unavailable_reason: `Change capture failed: ${errorMessage(error)}`,
     };
     finalError ||= `Change capture failed: ${errorMessage(error)}`;
     finalStatus = "failed";
@@ -255,7 +258,7 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
       task_id: taskId,
       status: "review_required",
       automatic_rollback_performed: false,
-      warning: "Review ownership and concurrent edits before rollback. Safe-Bifrost did not modify or restore these files.",
+      warning: "Review ownership and concurrent edits before rollback. PatchWarden did not modify or restore these files.",
       out_of_scope_changes: outOfScopeChanges,
     }, null, 2), "utf-8");
     writeFileSync(join(taskDir, "rollback_scope_violation_plan.md"), [
@@ -263,28 +266,41 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
       "",
       `Task: ${taskId}`,
       "",
-      "Safe-Bifrost did not automatically roll back any file. Review concurrent or user-owned edits before acting.",
+      "PatchWarden did not automatically roll back any file. Review concurrent or user-owned edits before acting.",
       "",
       "## Out-of-scope files only",
       ...outOfScopeChanges.map((file) => `- ${file.change}: ${file.old_path ? `${file.old_path} -> ` : ""}${file.path}`),
       "",
     ].join("\n"), "utf-8");
+  } else if (changePolicy === "no_changes" && changes.changed_files.length > 0) {
+    finalStatus = "failed_policy_violation";
+    finalError = `Task policy requires no repository changes, but detected ${changes.changed_files.length} change(s).`;
   }
 
   writeFileSync(join(taskDir, "git.diff"), changes.diff, "utf-8");
   writeFileSync(join(taskDir, "diff.patch"), changes.diff, "utf-8");
   writeFileSync(join(taskDir, "changed-files.json"), JSON.stringify(changes, null, 2), "utf-8");
+  writeFileSync(join(taskDir, "file-stats.json"), JSON.stringify({
+    task_id: taskId,
+    additions: changes.additions,
+    deletions: changes.deletions,
+    files: changes.file_stats,
+  }, null, 2), "utf-8");
   writeFileSync(join(taskDir, "test.log"), buildTestLog(testResult), "utf-8");
   const verifyJson = buildVerifyJson(verifyCommands, verifyResults, repoPath);
   if (outOfScopeChanges.length > 0) {
     verifyJson.status = "failed";
     verifyJson.failure_reason = "scope_violation";
+  } else if (finalStatus === "failed_policy_violation") {
+    verifyJson.status = "failed";
+    verifyJson.failure_reason = "change_policy_violation";
   }
   writeFileSync(join(taskDir, "verify.json"), JSON.stringify(verifyJson, null, 2), "utf-8");
   writeFileSync(join(taskDir, "verify.log"), buildVerifyLog(verifyJson.commands), "utf-8");
 
-  if (!["canceled", "done", "failed_verification", "failed_scope_violation"].includes(finalStatus)) finalStatus = "failed";
+  if (!["canceled", "done", "failed_verification", "failed_scope_violation", "failed_policy_violation"].includes(finalStatus)) finalStatus = "failed";
   const finalPhase: TaskPhase = finalStatus === "done" ? "completed" : finalStatus;
+  const followup = buildFailureFollowup(finalStatus, finalError, verifyJson.commands);
   const resultMd = buildResultMarkdown({
     taskId,
     planId,
@@ -305,6 +321,9 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
     workspace_root: wsRoot,
     repo_path: initialStatus.repo_path,
     resolved_repo_path: repoPath,
+    plan_source: initialStatus.plan_source || "saved",
+    template: initialStatus.template || null,
+    change_policy: changePolicy,
     summary: finalError || "Agent execution and configured verification completed successfully.",
     changed_files: changes.changed_files,
     out_of_scope_changes: outOfScopeChanges,
@@ -318,7 +337,7 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
     commands_observed: [],
     verify: verifyJson,
     artifacts: [
-      "result.md", "result.json", "diff.patch", "git.diff", "test.log", "verify.log", "verify.json", "changed-files.json",
+      "result.md", "result.json", "diff.patch", "git.diff", "test.log", "verify.log", "verify.json", "changed-files.json", "file-stats.json",
       ...(outOfScopeChanges.length > 0 ? ["rollback_scope_violation_plan.md", "rollback-plan.json"] : []),
     ],
     warnings: [
@@ -327,6 +346,10 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
     ],
     errors: finalError ? [finalError] : [],
     known_issues: finalError ? [finalError] : [],
+    failure_reason: followup.failure_reason,
+    failed_command: followup.failed_command,
+    suggested_next_action: followup.suggested_next_action,
+    safe_followup_prompt: followup.safe_followup_prompt,
     next_steps: finalStatus === "done"
       ? ["Review get_task_summary and audit_task before accepting the work."]
       : ["Resolve the reported failure before accepting the work."],
@@ -364,6 +387,65 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
   });
 
   return { task_id: taskId, status: finalStatus, error: finalError };
+}
+
+function buildFailureFollowup(
+  status: TaskStatus,
+  error: string | null,
+  commands: VerifyCommandRecord[]
+): {
+  failure_reason: string | null;
+  failed_command: string | null;
+  suggested_next_action: string;
+  safe_followup_prompt: string | null;
+} {
+  const failed = commands.find((command) => command.status !== "passed");
+  if (status === "done") {
+    return {
+      failure_reason: null,
+      failed_command: null,
+      suggested_next_action: "audit_task",
+      safe_followup_prompt: null,
+    };
+  }
+  if (status === "failed_verification") {
+    return {
+      failure_reason: error || "Independent verification failed.",
+      failed_command: failed?.command || null,
+      suggested_next_action: "create_followup_task",
+      safe_followup_prompt: `Fix the failing verification${failed?.command ? ` (${failed.command})` : ""} inside the same repository. Do not change unrelated files, weaken checks, commit, push, or publish.`,
+    };
+  }
+  if (status === "failed_scope_violation") {
+    return {
+      failure_reason: error || "Changes were detected outside resolved_repo_path.",
+      failed_command: null,
+      suggested_next_action: "review_scope_violation",
+      safe_followup_prompt: "Review rollback_scope_violation_plan.md and prepare a backup-first recovery proposal. Do not automatically delete, reset, or restore files.",
+    };
+  }
+  if (status === "failed_policy_violation") {
+    return {
+      failure_reason: error || "The task violated its no-changes policy.",
+      failed_command: null,
+      suggested_next_action: "review_unexpected_changes",
+      safe_followup_prompt: "Inspect the unexpected repository changes and propose a backup-first recovery. Do not automatically revert or delete files.",
+    };
+  }
+  if (status === "canceled") {
+    return {
+      failure_reason: error || "Task was canceled.",
+      failed_command: failed?.command || null,
+      suggested_next_action: "inspect_task_logs",
+      safe_followup_prompt: null,
+    };
+  }
+  return {
+    failure_reason: error || "Task execution failed.",
+    failed_command: failed?.command || null,
+    suggested_next_action: "inspect_task_logs",
+    safe_followup_prompt: "Inspect result.json, stderr.log, and verify.json, then create a narrowly scoped follow-up task inside the same repository.",
+  };
 }
 
 async function runManagedProcess(options: {
@@ -542,7 +624,7 @@ ${plan}
 6. Output a summary with what was done, files modified, and issues encountered.
 `;
   if (testCommand) {
-    prompt += `\n7. You may run ${testCommand}; Safe-Bifrost will independently run it again for verification.`;
+    prompt += `\n7. You may run ${testCommand}; PatchWarden will independently run it again for verification.`;
   }
   return prompt;
 }
@@ -579,7 +661,7 @@ function buildResultMarkdown(input: {
     ? input.outOfScopeChanges.map((file) => `- ${file.change}: ${file.old_path ? `${file.old_path} -> ` : ""}${file.path}`).join("\n")
     : "(none)";
   return [
-    "# Safe-Bifrost Task Result",
+    "# PatchWarden Task Result",
     "",
     "## Status",
     input.status,
@@ -738,6 +820,12 @@ function failBeforeExecution(taskId: string, taskDir: string, message: string): 
   writeFileSync(join(taskDir, "test.log"), `(not run)\nExit code: not run\n${message}\n`, "utf-8");
   writeFileSync(join(taskDir, "git.diff"), "(task failed before change capture)\n", "utf-8");
   writeFileSync(join(taskDir, "diff.patch"), "(task failed before change capture)\n", "utf-8");
+  writeFileSync(join(taskDir, "file-stats.json"), JSON.stringify({
+    task_id: taskId,
+    additions: 0,
+    deletions: 0,
+    files: [],
+  }, null, 2), "utf-8");
   const result = {
     task_id: taskId,
     status: "failed",
@@ -753,14 +841,18 @@ function failBeforeExecution(taskId: string, taskDir: string, message: string): 
     commands_run: [],
     commands_observed: [],
     verify,
-    artifacts: ["result.md", "result.json", "diff.patch", "git.diff", "test.log", "verify.log", "verify.json"],
+    artifacts: ["result.md", "result.json", "diff.patch", "git.diff", "test.log", "verify.log", "verify.json", "file-stats.json"],
     warnings: [],
     errors: [message],
     known_issues: [message],
+    failure_reason: message,
+    failed_command: null,
+    suggested_next_action: "inspect_task_logs",
+    safe_followup_prompt: "Inspect result.json and error.log, correct the task metadata or configuration, and retry without widening repository scope.",
     next_steps: ["Fix task metadata or configuration and retry the task."],
   };
   writeFileSync(join(taskDir, "result.json"), JSON.stringify(result, null, 2), "utf-8");
-  writeFileSync(join(taskDir, "result.md"), `# Safe-Bifrost Task Result\n\n## Status\nfailed\n\n## Summary\n${message}\n`, "utf-8");
+  writeFileSync(join(taskDir, "result.md"), `# PatchWarden Task Result\n\n## Status\nfailed\n\n## Summary\n${message}\n`, "utf-8");
   updateStatus(taskDir, {
     status: "failed",
     phase: "failed",

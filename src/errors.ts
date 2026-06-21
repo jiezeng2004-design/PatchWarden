@@ -1,4 +1,4 @@
-export class SafeBifrostError extends Error {
+export class PatchWardenError extends Error {
   constructor(
     public readonly reason: string,
     message: string,
@@ -7,12 +7,12 @@ export class SafeBifrostError extends Error {
     public readonly details: Record<string, unknown> = {}
   ) {
     super(message);
-    this.name = "SafeBifrostError";
+    this.name = "PatchWardenError";
   }
 }
 
 export function errorPayload(error: unknown) {
-  if (error instanceof SafeBifrostError) {
+  if (error instanceof PatchWardenError) {
     return {
       blocked: error.blocked,
       reason: error.reason,

@@ -1,5 +1,5 @@
 /**
- * Shared tool registry for Safe-Bifrost MCP server.
+ * Shared tool registry for PatchWarden MCP server.
  * Used by both stdio (index.ts) and HTTP (httpServer.ts) transports.
  */
 
@@ -13,7 +13,7 @@ import { savePlan } from "../tools/savePlan.js";
 import { getPlan } from "../tools/getPlan.js";
 import { createTask } from "../tools/createTask.js";
 import { getTaskStatus } from "../tools/getTaskStatus.js";
-import { getResult, getResultJson, getDiff, getTestLog } from "../tools/taskOutputs.js";
+import { getResult, getResultJson, getDiff, getTestLog, getTaskLogTail } from "../tools/taskOutputs.js";
 import { listWorkspace } from "../tools/listWorkspace.js";
 import { readWorkspaceFile } from "../tools/readWorkspaceFile.js";
 import { listTasks } from "../tools/listTasks.js";
@@ -26,9 +26,17 @@ import { listAgents } from "../tools/listAgents.js";
 import { healthCheck } from "../tools/healthCheck.js";
 import { getTaskSummary } from "../tools/getTaskSummary.js";
 import { waitForTask } from "../tools/waitForTask.js";
-import { errorPayload } from "../errors.js";
+import { errorPayload, PatchWardenError } from "../errors.js";
 import { auditTask } from "../tools/auditTask.js";
 import { runTask } from "../runner/runTask.js";
+import { TASK_TEMPLATE_NAMES } from "./taskTemplates.js";
+import {
+  buildToolCatalogSnapshot,
+  getLastToolCatalogSnapshot,
+  resolveToolProfile,
+  selectToolsForProfile,
+  type ToolCatalogSnapshot,
+} from "./toolCatalog.js";
 
 // ── Tool definitions ──────────────────────────────────────────────
 
@@ -53,7 +61,7 @@ export function getToolDefs(): ToolDef[] {
     {
       name: "save_plan",
       description:
-        "Save an execution plan — ChatGPT writes the plan, Safe-Bifrost stores it for local agent execution.",
+        "Save an execution plan — ChatGPT writes the plan, PatchWarden stores it for local agent execution.",
       inputSchema: {
         type: "object",
         properties: {
@@ -77,10 +85,17 @@ export function getToolDefs(): ToolDef[] {
     {
       name: "health_check",
       description:
-        "Check MCP server uptime, watcher heartbeat freshness, and configured agent availability.",
+        "Check MCP catalog consistency, watcher freshness/supervisor state, workspace readiness, and configured agents. Use detail=self_diagnostic for expanded read-only evidence.",
       inputSchema: {
         type: "object",
-        properties: {},
+        properties: {
+          detail: {
+            type: "string",
+            enum: ["standard", "self_diagnostic"],
+            default: "standard",
+            description: "Use self_diagnostic for catalog, watcher, agent, allowlist, workspace, and recent failure evidence.",
+          },
+        },
       },
     },
     {
@@ -95,11 +110,20 @@ export function getToolDefs(): ToolDef[] {
     {
       name: "create_task",
       description:
-        "Create a repo-scoped task. After success, immediately call wait_for_task repeatedly in the same assistant turn until terminal=true, then review get_task_summary/audit_task.",
+        "Create a repo-scoped task from exactly one source. A stale watcher preserves the task but returns execution_blocked and directs the client to health_check; otherwise call wait_for_task until terminal.",
       inputSchema: {
         type: "object",
         properties: {
           plan_id: { type: "string", description: "Plan ID from save_plan" },
+          inline_plan: { type: "string", description: "Inline Markdown plan. It is safety-checked and persisted as an auditable saved plan before task creation." },
+          plan_title: { type: "string", description: "Optional title used when inline_plan is supplied." },
+          template: {
+            type: "string",
+            enum: [...TASK_TEMPLATE_NAMES],
+            description: "Built-in guarded task template. Use with goal; rollback_scope_violation also requires source_task_id.",
+          },
+          goal: { type: "string", description: "Required task goal when template is supplied." },
+          source_task_id: { type: "string", description: "Required source task for rollback_scope_violation review." },
           agent: {
             type: "string",
             description: agentDescription,
@@ -123,7 +147,7 @@ export function getToolDefs(): ToolDef[] {
               type: "string",
               ...(testCommands.length > 0 ? { enum: testCommands } : {}),
             },
-            description: "Recommended allow-listed commands Safe-Bifrost runs independently after the agent exits.",
+            description: "Recommended allow-listed commands PatchWarden runs independently after the agent exits.",
           },
           timeout_seconds: {
             type: "integer",
@@ -133,12 +157,12 @@ export function getToolDefs(): ToolDef[] {
             description: `Total task timeout in seconds (default ${config.defaultTaskTimeoutSeconds}, max ${config.maxTaskTimeoutSeconds})`,
           },
         },
-        required: ["plan_id", "agent", "repo_path"],
+        required: ["agent", "repo_path"],
       },
     },
     {
       name: "get_task_status",
-      description: "Check task status, execution phase, heartbeat, current command, timeout, and change evidence.",
+      description: "Check task status, execution phase, watcher health, pending reason, current command, timeout, and change evidence.",
       inputSchema: {
         type: "object",
         properties: {
@@ -149,7 +173,7 @@ export function getToolDefs(): ToolDef[] {
     },
     {
       name: "get_result",
-      description: "Read the execution result (result.md) for a completed task.",
+      description: "Read result.md, or return structured availability and watcher evidence while the task is not terminal.",
       inputSchema: {
         type: "object",
         properties: {
@@ -171,7 +195,7 @@ export function getToolDefs(): ToolDef[] {
     },
     {
       name: "get_diff",
-      description: "Read the git diff generated by a task execution.",
+      description: "Read task diff evidence, or return structured availability and watcher evidence while it is not ready.",
       inputSchema: {
         type: "object",
         properties: {
@@ -182,7 +206,7 @@ export function getToolDefs(): ToolDef[] {
     },
     {
       name: "get_test_log",
-      description: "Read the test log from a task execution.",
+      description: "Read test.log, or return structured availability and watcher evidence while it is not ready.",
       inputSchema: {
         type: "object",
         properties: {
@@ -223,17 +247,25 @@ export function getToolDefs(): ToolDef[] {
     {
       name: "list_tasks",
       description:
-        "List recent tasks with optional status filter. Returns task_id, plan_id, title, agent, status, timestamps, repo_path, test_command, and error summary.",
+        "List recent tasks with status/repo/active filters plus watcher state and computed pending reasons.",
       inputSchema: {
         type: "object",
         properties: {
           status: {
             type: "string",
-            description: "Filter by status: pending, running, done, failed, failed_verification, failed_scope_violation, canceled",
+            description: "Filter by status: pending, running, done, failed, failed_verification, failed_scope_violation, failed_policy_violation, canceled",
           },
           limit: {
             type: "number",
             description: "Max tasks to return (default 20, max 100)",
+          },
+          repo_path: {
+            type: "string",
+            description: "Optional exact repo_path or resolved_repo_path filter.",
+          },
+          active_only: {
+            type: "boolean",
+            description: "When true, return only pending and running tasks.",
           },
         },
       },
@@ -288,6 +320,25 @@ export function getToolDefs(): ToolDef[] {
       },
     },
     {
+      name: "get_task_log_tail",
+      description:
+        "Read the last N lines of a task log file (stdout/stderr/test/verify) with automatic secret redaction. Default 80 lines, max 200. Always returns tail only — never the full file. Use this instead of read_workspace_file to avoid triggering platform content filters on log output.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          task_id: { type: "string", description: "Task ID" },
+          file: {
+            type: "string",
+            enum: ["stdout", "stderr", "test", "verify"],
+            description: "Log file to read: stdout (stdout.log), stderr (stderr.log), test (test.log), verify (verify.log)",
+          },
+          lines: { type: "number", description: "Tail line count (default 80, max 200)" },
+          redact: { type: "boolean", description: "Apply secret redaction (default true)" },
+        },
+        required: ["task_id", "file"],
+      },
+    },
+    {
       name: "get_task_progress",
       description:
         "Read progress.md for task phases and the most recent heartbeat/current command.",
@@ -308,6 +359,12 @@ export function getToolDefs(): ToolDef[] {
         properties: {
           task_id: { type: "string", description: "Task ID from create_task" },
           wait_seconds: { type: "integer", minimum: 1, maximum: 30, default: 25 },
+          timeout_seconds: {
+            type: "integer",
+            minimum: 1,
+            maximum: 30,
+            description: "Preferred alias for wait_seconds. Maximum 30 seconds to stay within connector request limits.",
+          },
         },
         required: ["task_id"],
       },
@@ -354,7 +411,16 @@ export function getToolDefs(): ToolDef[] {
     });
   }
 
-  return tools;
+  const profile = resolveToolProfile(config.toolProfile);
+  const selected = selectToolsForProfile(tools, profile);
+  buildToolCatalogSnapshot(selected, profile);
+  return selected;
+}
+
+export function getToolCatalogSnapshot(): ToolCatalogSnapshot {
+  const tools = getToolDefs();
+  const config = getConfig();
+  return buildToolCatalogSnapshot(tools, resolveToolProfile(config.toolProfile));
 }
 
 // ── Request handler ───────────────────────────────────────────────
@@ -379,7 +445,12 @@ export async function handleToolCall(name: string, args: Record<string, unknown>
     case "create_task": {
       return toResult(
         createTask({
-          plan_id: String(args?.plan_id ?? ""),
+          plan_id: args?.plan_id ? String(args.plan_id) : undefined,
+          inline_plan: args?.inline_plan ? String(args.inline_plan) : undefined,
+          plan_title: args?.plan_title ? String(args.plan_title) : undefined,
+          template: args?.template ? String(args.template) as any : undefined,
+          goal: args?.goal ? String(args.goal) : undefined,
+          source_task_id: args?.source_task_id ? String(args.source_task_id) : undefined,
           agent: String(args?.agent ?? ""),
           repo_path: args?.repo_path ? String(args.repo_path) : undefined,
           test_command: args?.test_command ? String(args.test_command) : undefined,
@@ -426,6 +497,8 @@ export async function handleToolCall(name: string, args: Record<string, unknown>
     case "list_tasks": {
       return toResult(listTasks({
         status: args?.status ? String(args.status) : undefined,
+        repo_path: args?.repo_path ? String(args.repo_path) : undefined,
+        active_only: args?.active_only !== undefined ? Boolean(args.active_only) : undefined,
         limit: args?.limit ? Number(args.limit) : undefined,
       }));
     }
@@ -435,7 +508,9 @@ export async function handleToolCall(name: string, args: Record<string, unknown>
     }
 
     case "health_check": {
-      return toResult(healthCheck());
+      return toResult(healthCheck(getToolCatalogSnapshot(), {
+        detail: args?.detail === "self_diagnostic" ? "self_diagnostic" : "standard",
+      }));
     }
 
     case "cancel_task": {
@@ -457,14 +532,26 @@ export async function handleToolCall(name: string, args: Record<string, unknown>
       ));
     }
 
+    case "get_task_log_tail": {
+      return toResult(getTaskLogTail(
+        String(args?.task_id ?? ""),
+        (args?.file as "stdout" | "stderr" | "test" | "verify") || "stdout",
+        {
+          lines: args?.lines ? Number(args.lines) : undefined,
+          redact: args?.redact !== undefined ? Boolean(args.redact) : undefined,
+        }
+      ));
+    }
+
     case "get_task_progress": {
       return toResult(getTaskProgress(String(args?.task_id ?? "")));
     }
 
     case "wait_for_task": {
+      const waitSeconds = normalizeWaitSeconds(args);
       return toResult(await waitForTask(
         String(args?.task_id ?? ""),
-        args?.wait_seconds !== undefined ? Number(args.wait_seconds) : undefined
+        waitSeconds
       ));
     }
 
@@ -493,6 +580,16 @@ export async function handleToolCall(name: string, args: Record<string, unknown>
   }
 }
 
+function normalizeWaitSeconds(args: Record<string, unknown> | undefined): number | undefined {
+  const legacy = args?.wait_seconds;
+  const preferred = args?.timeout_seconds;
+  if (legacy !== undefined && preferred !== undefined && Number(legacy) !== Number(preferred)) {
+    throw new Error("wait_seconds and timeout_seconds must match when both are supplied.");
+  }
+  const value = preferred ?? legacy;
+  return value === undefined ? undefined : Number(value);
+}
+
 function toResult(data: unknown) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
@@ -502,13 +599,62 @@ function toResult(data: unknown) {
 // ── Register on MCP Server ────────────────────────────────────────
 
 export function registerTools(server: Server) {
+  // Compute the active tool list ONCE to guarantee list/call consistency.
+  // Re-calling getToolDefs() on every request risks divergence between
+  // tools/list and tools/call when the profile is reconfigured at runtime.
+  const activeTools = getToolDefs();
+  const activeNames = new Set(activeTools.map((tool) => tool.name));
+
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    return { tools: getToolDefs() };
+    const catalog = getLastToolCatalogSnapshot();
+    return {
+      tools: activeTools,
+      ...(catalog
+        ? {
+            _meta: {
+              server_version: catalog.server_version,
+              schema_epoch: catalog.schema_epoch,
+              tool_profile: catalog.tool_profile,
+              tool_count: catalog.tool_count,
+              tool_manifest_sha256: catalog.tool_manifest_sha256,
+            },
+          }
+        : {}),
+    };
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     try {
+      if (!activeNames.has(name)) {
+        const catalog = getToolCatalogSnapshot();
+        throw new PatchWardenError(
+          "tool_catalog_mismatch",
+          `Tool "${name}" is not available in the active ${catalog.tool_profile} profile. The client may be using a stale tool catalog.`,
+          "Refresh or reconnect the ChatGPT Connector and open a new conversation before retrying.",
+          true,
+          {
+            requested_tool: name,
+            refresh_required: true,
+            server_version: catalog.server_version,
+            schema_epoch: catalog.schema_epoch,
+            tool_profile: catalog.tool_profile,
+            tool_count: catalog.tool_count,
+            tool_names: catalog.tool_names,
+            tool_manifest_sha256: catalog.tool_manifest_sha256,
+            next_tool_call: {
+              name: "health_check",
+              arguments: { detail: "self_diagnostic" },
+            },
+            connector_refresh_steps: [
+              "1. Run Check-PatchWarden-Health.cmd locally to confirm the active profile and manifest hash.",
+              "2. In ChatGPT Platform, refresh or reconnect the Connector (do not reuse an old session).",
+              "3. Open a NEW ChatGPT conversation; old conversations retain their cached tool catalog.",
+              "4. Call health_check in the new conversation and verify tool_manifest_sha256 matches the local report.",
+            ],
+          }
+        );
+      }
       return await handleToolCall(name, args);
     } catch (err) {
       return {

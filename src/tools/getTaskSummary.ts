@@ -3,12 +3,14 @@ import { join, resolve } from "node:path";
 import { getConfig, getTasksDir } from "../config.js";
 import { guardReadPath } from "../security/pathGuard.js";
 import { getTaskStatus } from "./getTaskStatus.js";
+import { redactSensitiveValue } from "../security/contentRedaction.js";
 
 const TERMINAL_STATUSES = new Set([
   "done",
   "failed",
   "failed_verification",
   "failed_scope_violation",
+  "failed_policy_violation",
   "canceled",
 ]);
 
@@ -17,6 +19,8 @@ export interface TaskSummaryOutput {
   status: string;
   terminal: boolean;
   acceptance_status: "pending" | "ready_for_review" | "needs_review" | "failed";
+  acceptance_reviewed_at: string | null;
+  acceptance_reviewer: string | null;
   phase: string;
   agent: string;
   workspace_root: string;
@@ -42,6 +46,38 @@ export interface TaskSummaryOutput {
   warnings: string[];
   errors: string[];
   artifacts: Record<string, boolean>;
+  plan_source: string;
+  template: string | null;
+  change_policy: string;
+  failure_reason: string | null;
+  failed_command: string | null;
+  suggested_next_action: string;
+  safe_followup_prompt: string | null;
+  verification_summary: {
+    status: string;
+    command_count: number;
+    passed_commands: number;
+    failed_commands: number;
+    skipped_commands: number;
+    headline: string;
+  };
+  failed_command_detail: {
+    command: string;
+    exit_code: number | null;
+    stderr_tail: string;
+    duration_ms: number;
+  } | null;
+  log_tails: {
+    stdout: string;
+    stderr: string;
+    test: string;
+    verify: string;
+  };
+  redacted: boolean;
+  redaction_categories: string[];
+  watcher: unknown;
+  pending_reason: string | null;
+  execution_blocked: boolean;
 }
 
 export function getTaskSummary(taskId: string): TaskSummaryOutput {
@@ -69,17 +105,41 @@ export function getTaskSummary(taskId: string): TaskSummaryOutput {
     "verify.log",
     "verify.json",
     "changed-files.json",
+    "file-stats.json",
     "rollback_scope_violation_plan.md",
   ].map((name) => [name, existsSync(join(taskDir, name))]));
 
-  for (const required of ["result.md", "result.json", "diff.patch", "test.log", "verify.json"]) {
+  for (const required of ["result.md", "result.json", "diff.patch", "file-stats.json", "test.log", "verify.json"]) {
     if (!artifacts[required]) warnings.push(`${required} is missing.`);
   }
   if (resultRead.error) warnings.push(`result.json could not be parsed; using status.json/result.md fallback: ${resultRead.error}`);
   if (verifyRead.error) warnings.push(`verify.json could not be parsed; using status.json fallback: ${verifyRead.error}`);
 
   let acceptanceStatus: TaskSummaryOutput["acceptance_status"] = "pending";
-  if (terminal) {
+  let acceptanceReviewedAt: string | null = null;
+  let acceptanceReviewer: string | null = null;
+
+  // Check for explicit human acceptance (takes precedence over computed status)
+  const acceptanceFile = join(taskDir, "acceptance.json");
+  if (existsSync(acceptanceFile)) {
+    try {
+      const acceptance = JSON.parse(readFileSync(acceptanceFile, "utf-8"));
+      if (acceptance.status === "accepted") {
+        acceptanceStatus = "ready_for_review";
+        acceptanceReviewedAt = acceptance.reviewed_at || null;
+        acceptanceReviewer = acceptance.reviewer || null;
+      } else if (acceptance.status === "rejected") {
+        acceptanceStatus = "failed";
+        acceptanceReviewedAt = acceptance.reviewed_at || null;
+        acceptanceReviewer = acceptance.reviewer || null;
+        if (acceptance.notes) {
+          warnings.push(`Task was rejected by ${acceptance.reviewer || "human"} at ${acceptance.reviewed_at || "unknown time"}: ${acceptance.notes}`);
+        }
+      }
+    } catch {
+      warnings.push("acceptance.json exists but could not be parsed.");
+    }
+  } else if (terminal) {
     if (status.status !== "done" || outOfScope.length > 0 || verifyStatus === "failed") {
       acceptanceStatus = "failed";
     } else if (verifyStatus === "passed") {
@@ -96,12 +156,36 @@ export function getTaskSummary(taskId: string): TaskSummaryOutput {
     ? Math.max(0, (Number.isFinite(finishedAt) ? finishedAt : Date.now()) - startedAt)
     : 0;
   const changedFiles = asArray(result.changed_files ?? status.changed_files);
+  const verifyCommands = asArray(verify.commands ?? result.verify_commands ?? result.verify?.commands);
+  const testLogSummary = summarizeTestLog(join(taskDir, "test.log"));
+  const verificationSummary = buildVerificationSummary(verifyStatus, verifyCommands, testLogSummary);
 
-  return {
+  // Extract failed command detail from verify records
+  const failedVerify = (verifyCommands as any[]).find((cmd: any) =>
+    ["failed", "timed_out", "canceled"].includes(cmd?.status)
+  );
+  const failedCommandDetail = failedVerify ? {
+    command: String(failedVerify.command || ""),
+    exit_code: failedVerify.exit_code ?? null,
+    stderr_tail: String(failedVerify.stderr_tail || "").slice(0, 500),
+    duration_ms: Number(failedVerify.duration_ms || 0),
+  } : null;
+
+  // Collect log tails (last 5 lines of each log)
+  const logTails = {
+    stdout: readLogTail(join(taskDir, "stdout.log"), 5),
+    stderr: readLogTail(join(taskDir, "stderr.log"), 5),
+    test: readLogTail(join(taskDir, "test.log"), 5),
+    verify: readLogTail(join(taskDir, "verify.log"), 5),
+  };
+
+  const output = {
     task_id: taskId,
     status: String(status.status || "unknown"),
     terminal,
     acceptance_status: acceptanceStatus,
+    acceptance_reviewed_at: acceptanceReviewedAt,
+    acceptance_reviewer: acceptanceReviewer,
     phase: String(status.phase || "unknown"),
     agent: String(status.agent || result.agent || ""),
     workspace_root: String(status.workspace_root || result.workspace_root || config.workspaceRoot),
@@ -112,12 +196,12 @@ export function getTaskSummary(taskId: string): TaskSummaryOutput {
     workspace_dirty_before: Boolean(status.workspace_dirty_before ?? result.workspace_dirty_before),
     workspace_dirty_after: Boolean(status.workspace_dirty_after ?? status.workspace_dirty ?? result.workspace_dirty_after),
     verify_status: verifyStatus,
-    verify_commands: asArray(verify.commands ?? result.verify_commands ?? result.verify?.commands),
+    verify_commands: verifyCommands,
     last_heartbeat_at: String(status.last_heartbeat_at || status.updated_at || ""),
     current_command: status.current_command ?? null,
     elapsed_ms: elapsedMs,
     summary: String(result.summary || readResultFallback(join(taskDir, "result.md")) || status.error || `Task is ${status.status || "unknown"}.`),
-    test_summary: summarizeTestLog(join(taskDir, "test.log")),
+    test_summary: verificationSummary.headline,
     diff_available: Boolean(
       (status.diff_available ?? (changedFiles.length > 0)) &&
       (artifacts["diff.patch"] || artifacts["git.diff"])
@@ -130,7 +214,26 @@ export function getTaskSummary(taskId: string): TaskSummaryOutput {
     warnings: [...new Set(warnings)],
     errors: [...new Set(errors)],
     artifacts,
+    plan_source: String(status.plan_source || result.plan_source || "saved"),
+    template: status.template || result.template || null,
+    change_policy: String(status.change_policy || result.change_policy || "repo_scoped_changes"),
+    failure_reason: result.failure_reason || status.error || null,
+    failed_command: result.failed_command || null,
+    suggested_next_action: String(result.suggested_next_action || (terminal ? "audit_task" : status.execution_blocked ? "health_check" : "wait_for_task")),
+    safe_followup_prompt: result.safe_followup_prompt || null,
+    verification_summary: verificationSummary,
+    failed_command_detail: failedCommandDetail,
+    log_tails: logTails,
+    watcher: status.watcher,
+    pending_reason: status.pending_reason || null,
+    execution_blocked: Boolean(status.execution_blocked),
   };
+  const safe = redactSensitiveValue(output);
+  return {
+    ...safe.value,
+    redacted: safe.redacted,
+    redaction_categories: safe.redaction_categories,
+  } as TaskSummaryOutput;
 }
 
 function tryReadJson(path: string): { data: Record<string, any>; error?: string } {
@@ -157,4 +260,48 @@ function readResultFallback(path: string): string {
   if (!existsSync(path)) return "";
   const text = readFileSync(path, "utf-8");
   return text.match(/## Summary\s+([\s\S]*?)(?:\n## |\n---|$)/i)?.[1]?.trim().slice(0, 1000) || "";
+}
+
+function buildVerificationSummary(status: string, commands: any[], testLogSummary: string) {
+  const passed = commands.filter((command) => command?.status === "passed").length;
+  const failed = commands.filter((command) => ["failed", "timed_out", "canceled"].includes(command?.status)).length;
+  const skipped = commands.filter((command) => command?.status === "skipped").length;
+  const evidenceText = [
+    ...commands.flatMap((command) => [command?.stdout_tail, command?.stderr_tail]),
+    testLogSummary,
+  ].filter((value): value is string => typeof value === "string").join("\n");
+  const headline = extractTestHeadline(evidenceText)
+    || (commands.length > 0 ? `${passed}/${commands.length} verification commands passed` : testLogSummary);
+  return {
+    status,
+    command_count: commands.length,
+    passed_commands: passed,
+    failed_commands: failed,
+    skipped_commands: skipped,
+    headline,
+  };
+}
+
+function extractTestHeadline(text: string): string {
+  const patterns = [
+    /\b\d+\s+passed(?:,\s*\d+\s+failed)?\b/i,
+    /\b\d+\s+tests?\s+passed\b/i,
+    /\btests?:\s*\d+\s+passed(?:,\s*\d+\s+failed)?\b/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) return match[0];
+  }
+  return "";
+}
+
+function readLogTail(path: string, lines: number): string {
+  if (!existsSync(path)) return "(file not found)";
+  try {
+    const raw = readFileSync(path, "utf-8");
+    if (raw.length === 0) return "(empty)";
+    return raw.split("\n").slice(-lines).join("\n");
+  } catch {
+    return "(unreadable)";
+  }
 }

@@ -15,9 +15,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const tempRoot = mkdtempSync(join(tmpdir(), "safe-bifrost-mcp-"));
+const tempRoot = mkdtempSync(join(tmpdir(), "patchwarden-mcp-"));
 const workspaceRoot = join(tempRoot, "workspace");
-const configPath = join(tempRoot, "safe-bifrost.config.json");
+const configPath = join(tempRoot, "patchwarden.config.json");
 
 let failures = 0;
 
@@ -41,12 +41,21 @@ async function expectToolError(client, name, args, label) {
 try {
   writeFileSync(join(tempRoot, ".keep"), "");
   mkdirSync(workspaceRoot, { recursive: true });
+  mkdirSync(join(workspaceRoot, ".patchwarden"), { recursive: true });
+  writeFileSync(join(workspaceRoot, ".patchwarden", "watcher-heartbeat.json"), JSON.stringify({
+    status: "running",
+    pid: process.pid,
+    instance_id: "mcp-smoke-watcher",
+    launcher_pid: process.pid,
+    started_at: new Date().toISOString(),
+    last_heartbeat_at: new Date().toISOString(),
+  }), "utf-8");
   writeFileSync(join(workspaceRoot, "hello.txt"), "hello from mcp smoke\n", "utf-8");
   writeFileSync(join(workspaceRoot, ".env"), "SECRET=blocked\n", "utf-8");
   writeFileSync(
     join(workspaceRoot, "package.json"),
     JSON.stringify({
-      name: "safe-bifrost-mcp-smoke-fixture",
+      name: "patchwarden-mcp-smoke-fixture",
       private: true,
       scripts: { test: "node -e \"console.log('test ok')\"" },
     }, null, 2),
@@ -58,8 +67,8 @@ try {
     JSON.stringify(
       {
         workspaceRoot,
-        plansDir: ".safe-bifrost/plans",
-        tasksDir: ".safe-bifrost/tasks",
+        plansDir: ".patchwarden/plans",
+        tasksDir: ".patchwarden/tasks",
         agents: {
           codex: {
             command: "node",
@@ -79,11 +88,11 @@ try {
     command: "node",
     args: ["dist/index.js"],
     cwd: root,
-    env: { SAFE_BIFROST_CONFIG: configPath },
+    env: { PATCHWARDEN_CONFIG: configPath },
     stderr: "pipe",
   });
   const client = new Client(
-    { name: "safe-bifrost-smoke", version: "0.1.0" },
+    { name: "patchwarden-smoke", version: "0.1.0" },
     { capabilities: {} }
   );
 
@@ -99,6 +108,7 @@ try {
     "get_plan",
     "get_result",
     "get_result_json",
+    "get_task_log_tail",
     "get_task_progress",
     "get_task_status",
     "get_task_stdout_tail",
@@ -119,6 +129,18 @@ try {
   }
   ok("MCP handshake lists all tools");
 
+  // Layer 2: tools/list response must carry _meta with manifest hash for catalog sync
+  if (!tools._meta || typeof tools._meta.tool_manifest_sha256 !== "string" || tools._meta.tool_manifest_sha256.length !== 64) {
+    throw new Error(`tools/list _meta missing manifest hash: ${JSON.stringify(tools._meta || null)}`);
+  }
+  if (tools._meta.tool_profile !== "full" || tools._meta.tool_count !== 22) {
+    throw new Error(`tools/list _meta profile/count mismatch: ${JSON.stringify(tools._meta)}`);
+  }
+  if (typeof tools._meta.schema_epoch !== "string" || typeof tools._meta.server_version !== "string") {
+    throw new Error(`tools/list _meta missing schema_epoch/server_version: ${JSON.stringify(tools._meta)}`);
+  }
+  ok("tools/list _meta carries manifest hash, schema epoch, and profile");
+
   const parseToolJson = async (name, args) => {
     const result = await client.callTool({ name, arguments: args });
     if (result.isError) {
@@ -134,6 +156,14 @@ try {
   const health = await parseToolJson("health_check", {});
   if (!health.mcp_server?.available) {
     throw new Error(`health_check did not report MCP server availability: ${JSON.stringify(health)}`);
+  }
+  const diagnostic = await parseToolJson("health_check", { detail: "self_diagnostic" });
+  if (
+    diagnostic.connector_visibility?.status !== "not_observable_server_side" ||
+    diagnostic.self_diagnostic?.mode !== "self_diagnostic" ||
+    !Array.isArray(diagnostic.self_diagnostic?.configured_agents)
+  ) {
+    throw new Error(`self diagnostic health evidence is incomplete: ${JSON.stringify(diagnostic)}`);
   }
   ok("list_agents and health_check report runtime readiness");
 
@@ -173,6 +203,14 @@ try {
     repo_path: ".",
     test_command: "npm test",
   });
+  if (
+    task.server_version !== "0.4.0" ||
+    !/^[a-f0-9]{64}$/.test(task.tool_manifest_sha256 || "") ||
+    task.next_tool_call?.name !== "wait_for_task" ||
+    task.next_tool_call?.arguments?.timeout_seconds !== 25
+  ) {
+    throw new Error(`create_task handoff metadata mismatch: ${JSON.stringify(task)}`);
+  }
   const status = await parseToolJson("get_task_status", { task_id: task.task_id });
   if (status.status !== "pending") {
     throw new Error(`expected pending task, got ${status.status}`);
@@ -185,6 +223,26 @@ try {
     throw new Error("get_task_progress did not return queued progress");
   }
   ok("create_task and get_task_status work");
+
+  const inlineTask = await parseToolJson("create_task", {
+    inline_plan: "Inspect the repository and report findings without changing files.",
+    plan_title: "Inline MCP smoke",
+    agent: "codex",
+    repo_path: ".",
+  });
+  if (inlineTask.plan_source !== "inline" || !inlineTask.plan_id) {
+    throw new Error(`inline_plan was not persisted: ${JSON.stringify(inlineTask)}`);
+  }
+  const templateTask = await parseToolJson("create_task", {
+    template: "inspect_only",
+    goal: "Inspect package metadata",
+    agent: "codex",
+    repo_path: ".",
+  });
+  if (templateTask.plan_source !== "template" || templateTask.change_policy !== "no_changes") {
+    throw new Error(`guarded template metadata mismatch: ${JSON.stringify(templateTask)}`);
+  }
+  ok("create_task accepts inline plans and guarded templates");
 
   const blockedAgent = await client.callTool({
     name: "create_task",
@@ -218,7 +276,7 @@ try {
 
   const runner = spawnSync("node", ["dist/runner/cli.js", task.task_id], {
     cwd: root,
-    env: { ...process.env, SAFE_BIFROST_CONFIG: configPath },
+    env: { ...process.env, PATCHWARDEN_CONFIG: configPath },
     encoding: "utf-8",
     timeout: 30000,
   });
@@ -231,7 +289,7 @@ try {
   if (statusAfter.status !== "done") {
     throw new Error(`runner status should be done, got ${statusAfter.status}`);
   }
-  for (const fileName of ["result.md", "result.json", "diff.patch", "git.diff", "test.log", "verify.json", "verify.log"]) {
+  for (const fileName of ["result.md", "result.json", "diff.patch", "git.diff", "file-stats.json", "test.log", "verify.json", "verify.log"]) {
     if (!existsSync(join(task.path, fileName))) {
       throw new Error(`runner did not create ${fileName}`);
     }
@@ -240,16 +298,25 @@ try {
   if (!summary.terminal || summary.acceptance_status !== "ready_for_review") {
     throw new Error(`unexpected terminal summary: ${JSON.stringify(summary)}`);
   }
-  const waited = await parseToolJson("wait_for_task", { task_id: task.task_id, wait_seconds: 1 });
-  if (!waited.terminal || waited.continuation_required) {
+  const waited = await parseToolJson("wait_for_task", { task_id: task.task_id, timeout_seconds: 1 });
+  if (!waited.terminal || waited.continuation_required || waited.next_tool_call?.name !== "audit_task") {
     throw new Error(`wait_for_task did not return terminal acceptance: ${JSON.stringify(waited)}`);
+  }
+  const legacyWaited = await parseToolJson("wait_for_task", { task_id: task.task_id, wait_seconds: 1 });
+  if (!legacyWaited.terminal) throw new Error("legacy wait_seconds alias stopped working");
+  const conflictingWait = await client.callTool({
+    name: "wait_for_task",
+    arguments: { task_id: task.task_id, timeout_seconds: 1, wait_seconds: 2 },
+  });
+  if (!conflictingWait.isError || !conflictingWait.content?.[0]?.text?.includes("must match")) {
+    throw new Error(`conflicting wait aliases were not rejected: ${JSON.stringify(conflictingWait)}`);
   }
   writeFileSync(join(task.path, "result.md"), "npm test passed\naccess_token=real-secret-value-123456\n", "utf-8");
   const redactedResult = await parseToolJson("get_result", { task_id: task.task_id });
   if (!redactedResult.redacted || redactedResult.content.includes("real-secret-value-123456")) {
     throw new Error(`get_result did not redact secret-like content: ${JSON.stringify(redactedResult)}`);
   }
-  const relativeResultPath = `.safe-bifrost/tasks/${task.task_id}/result.md`;
+  const relativeResultPath = `.patchwarden/tasks/${task.task_id}/result.md`;
   const redactedWorkspaceRead = await parseToolJson("read_workspace_file", { path: relativeResultPath });
   if (!redactedWorkspaceRead.redacted || redactedWorkspaceRead.content.includes("real-secret-value-123456")) {
     throw new Error(`read_workspace_file did not redact task artifact: ${JSON.stringify(redactedWorkspaceRead)}`);

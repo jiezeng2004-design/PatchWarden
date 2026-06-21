@@ -18,7 +18,7 @@ export function writeTaskProgress(
 ): void {
   const currentIndex = PHASES.findIndex((item) => item.phase === phase);
   const isTerminalException = phase === "failed" || phase === "canceled";
-  const lines = ["# Safe-Bifrost Task Progress", ""];
+  const lines = ["# PatchWarden Task Progress", ""];
 
   for (let index = 0; index < PHASES.length; index++) {
     const item = PHASES[index];

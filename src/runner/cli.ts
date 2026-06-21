@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Safe-Bifrost Runner CLI
+ * PatchWarden Runner CLI
  *
  * Usage:
  *   node dist/runner/cli.js <task_id>
@@ -13,7 +13,7 @@ import { loadConfig } from "../config.js";
 // Load config early
 loadConfig();
 
-const taskId = process.argv[2] || process.env.SAFE_BIFROST_TASK_ID;
+const taskId = process.argv[2] || process.env.PATCHWARDEN_TASK_ID;
 
 if (!taskId) {
   console.error("Usage: node dist/runner/cli.js <task_id>");

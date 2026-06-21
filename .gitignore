@@ -1,10 +1,15 @@
 node_modules/
 dist/
+.patchwarden/
 .safe-bifrost/
 .env
 *.log
+patchwarden.config.json
 safe-bifrost.config.json
 release/
+patchwarden-release.zip
+patchwarden-release.tar.gz
+patchwarden-*.tgz
 safe-bifrost-release.zip
 safe-bifrost-release.tar.gz
 safe-bifrost-*.tgz

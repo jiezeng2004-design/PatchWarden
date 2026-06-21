@@ -8,7 +8,7 @@ import {
   sep,
 } from "node:path";
 import { realpathSync } from "node:fs";
-import { SafeBifrostError } from "../errors.js";
+import { PatchWardenError } from "../errors.js";
 
 export function guardPath(
   requestedPath: string,
@@ -68,7 +68,7 @@ export function guardWorkspacePath(
   const wsDriveMatch = ws.match(/^([A-Za-z]):[/\\]/);
   if (winDriveMatch && wsDriveMatch) {
     if (winDriveMatch[1].toLowerCase() !== wsDriveMatch[1].toLowerCase()) {
-      throw new SafeBifrostError(
+      throw new PatchWardenError(
         "workspace_path_escape",
         `repo_path "${input}" is on drive ${winDriveMatch[1].toUpperCase()}: ` +
           `but workspace is on drive ${wsDriveMatch[1].toUpperCase()}:. All paths must be under the configured workspace.`,
@@ -78,7 +78,7 @@ export function guardWorkspacePath(
       );
     }
   } else if (winDriveMatch && !wsDriveMatch) {
-    throw new SafeBifrostError(
+    throw new PatchWardenError(
       "workspace_path_escape",
       `repo_path "${input}" appears to be a Windows path but workspace ` +
         `"${workspaceRoot}" is a Unix path. All paths must be under the configured workspace.`,
@@ -156,7 +156,7 @@ function assertInside(
     !checkCandidate.startsWith(checkRoot + sep)
   ) {
     if (message.startsWith("Path escapes workspace")) {
-      throw new SafeBifrostError(
+      throw new PatchWardenError(
         "workspace_path_escape",
         `Path escapes workspace: "${requestedPath}" resolves to "${normalizedCandidate}" which is outside "${normalizedRoot}"`,
         "Use a path inside the configured workspace and allowed prefix.",
@@ -164,7 +164,7 @@ function assertInside(
         { path: requestedPath, operation: "path_access", safe_alternative: "Read a path inside the configured workspace and allowed prefix." }
       );
     }
-    throw new SafeBifrostError(
+    throw new PatchWardenError(
       "workspace_path_escape",
       message,
       "Use a path inside the configured workspace and allowed prefix.",

@@ -37,6 +37,9 @@ export function retryTask(taskId: string) {
   const newData = JSON.parse(readFileSync(newStatusFile, "utf-8"));
   newData.retry_of = taskId;
   newData.retry_count = (data.retry_count || 0) + 1;
+  newData.plan_source = data.plan_source || "saved";
+  newData.template = data.template || null;
+  newData.change_policy = data.change_policy || "repo_scoped_changes";
   writeFileSync(newStatusFile, JSON.stringify(newData, null, 2), "utf-8");
 
   return {

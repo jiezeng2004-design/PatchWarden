@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Safe-Bifrost Watcher
+ * PatchWarden Watcher
  *
- * Polls .safe-bifrost/tasks/ for pending tasks and executes them automatically.
+ * Polls .patchwarden/tasks/ for pending tasks and executes them automatically.
  * This is the recommended way to run tasks — ChatGPT creates tasks,
  * the watcher picks them up and runs them locally.
  *
@@ -17,7 +17,7 @@
  *   or: npm run watch
  */
 
-import { readdirSync, readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { readdirSync, readFileSync, existsSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { loadConfig, getConfig, getTasksDir, resolveWorkspaceRoot } from "../config.js";
 import { guardWorkspacePath } from "../security/pathGuard.js";
@@ -34,6 +34,10 @@ const wsRoot = resolveWorkspaceRoot(config);
 const POLL_INTERVAL_MS = 4000;
 const WATCHER_HEARTBEAT_FILE = join(dirname(tasksDir), "watcher-heartbeat.json");
 const WATCHER_STARTED_AT = new Date().toISOString();
+const WATCHER_INSTANCE_ID = process.env.PATCHWARDEN_WATCHER_INSTANCE_ID || `standalone-${process.pid}-${Date.now()}`;
+const WATCHER_LAUNCHER_PID = Number.isInteger(Number(process.env.PATCHWARDEN_WATCHER_LAUNCHER_PID))
+  ? Number(process.env.PATCHWARDEN_WATCHER_LAUNCHER_PID)
+  : null;
 mkdirSync(dirname(WATCHER_HEARTBEAT_FILE), { recursive: true });
 
 console.error(`[watcher] Workspace: ${wsRoot}`);
@@ -48,12 +52,16 @@ const executedTasks = new Set<string>();
 
 async function tick() {
   try {
-    writeFileSync(WATCHER_HEARTBEAT_FILE, JSON.stringify({
+    const heartbeatTemporary = `${WATCHER_HEARTBEAT_FILE}.${WATCHER_INSTANCE_ID}.tmp`;
+    writeFileSync(heartbeatTemporary, JSON.stringify({
       status: "running",
       pid: process.pid,
       started_at: WATCHER_STARTED_AT,
       last_heartbeat_at: new Date().toISOString(),
+      instance_id: WATCHER_INSTANCE_ID,
+      launcher_pid: WATCHER_LAUNCHER_PID,
     }, null, 2), "utf-8");
+    renameSync(heartbeatTemporary, WATCHER_HEARTBEAT_FILE);
     // Ensure tasks directory exists
     if (!existsSync(tasksDir)) return;
 

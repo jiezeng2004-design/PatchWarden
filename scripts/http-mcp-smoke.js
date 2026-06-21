@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
+import { CHATGPT_CORE_TOOL_NAMES } from "../dist/tools/toolCatalog.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "..");
@@ -20,9 +21,9 @@ const host = "127.0.0.1";
 const port = 17331;
 const mcpUrl = `http://${host}:${port}/mcp`;
 
-const tempRoot = mkdtempSync(join(tmpdir(), "safe-bifrost-http-"));
+const tempRoot = mkdtempSync(join(tmpdir(), "patchwarden-http-"));
 const workspaceRoot = join(tempRoot, "workspace");
-const configPath = join(tempRoot, "safe-bifrost.config.json");
+const configPath = join(tempRoot, "patchwarden.config.json");
 
 let passed = 0;
 let failed = 0;
@@ -95,7 +96,7 @@ function toolJson(result) {
   return JSON.parse(toolText(result));
 }
 
-console.log("\n=== Safe-Bifrost HTTP MCP Smoke Tests ===\n");
+console.log("\n=== PatchWarden HTTP MCP Smoke Tests ===\n");
 
 try {
   mkdirSync(workspaceRoot, { recursive: true });
@@ -106,8 +107,8 @@ try {
     JSON.stringify(
       {
         workspaceRoot,
-        plansDir: ".safe-bifrost/plans",
-        tasksDir: ".safe-bifrost/tasks",
+        plansDir: ".patchwarden/plans",
+        tasksDir: ".patchwarden/tasks",
         agents: {
           codex: {
             command: "node",
@@ -129,8 +130,8 @@ try {
     cwd: root,
     env: {
       ...process.env,
-      SAFE_BIFROST_CONFIG: configPath,
-      SAFE_BIFROST_HTTP_PORT: String(port),
+      PATCHWARDEN_CONFIG: configPath,
+      PATCHWARDEN_HTTP_PORT: String(port),
     },
     stdio: ["ignore", "ignore", "pipe"],
   });
@@ -149,8 +150,24 @@ try {
       capabilities: {},
       clientInfo: { name: "http-mcp-smoke", version: "1.0.0" },
     });
-    if (result.serverInfo?.name !== "safe-bifrost") {
+    if (result.serverInfo?.name !== "patchwarden") {
       throw new Error(`Unexpected server info: ${JSON.stringify(result.serverInfo)}`);
+    }
+  });
+
+  await test("healthz returns structured local readiness", async () => {
+    const response = await fetch(`http://${host}:${port}/healthz`);
+    const data = await response.json();
+    if (!response.ok || data.mcp_server?.available !== true || data.workspace_root?.available !== true) {
+      throw new Error(`Unexpected health response: ${JSON.stringify(data)}`);
+    }
+  });
+
+  await test("wrong endpoint returns structured 404 guidance", async () => {
+    const response = await fetch(`http://${host}:${port}/wrong-path`);
+    const data = await response.json();
+    if (response.status !== 404 || data.error_code !== "mcp_endpoint_not_found" || data.expected_path !== "/mcp") {
+      throw new Error(`Unexpected 404 response: ${JSON.stringify(data)}`);
     }
   });
 
@@ -249,9 +266,10 @@ try {
     cwd: root,
     env: {
       ...process.env,
-      SAFE_BIFROST_CONFIG: configPath,
-      SAFE_BIFROST_HTTP_PORT: String(port),
-      SAFE_BIFROST_OWNER_TOKEN: OWNER_TOKEN,
+      PATCHWARDEN_CONFIG: configPath,
+      PATCHWARDEN_HTTP_PORT: String(port),
+      PATCHWARDEN_OWNER_TOKEN: OWNER_TOKEN,
+      PATCHWARDEN_TOOL_PROFILE: "chatgpt_core",
     },
     stdio: ["ignore", "ignore", "pipe"],
   });
@@ -284,13 +302,19 @@ try {
 
   await test("token: correct Bearer token succeeds", async () => {
     const result = await rpc("tools/list", {}, { Authorization: `Bearer ${OWNER_TOKEN}` });
-    if (!result.tools || result.tools.length === 0) {
-      throw new Error("Expected tools list with valid token");
+    const names = result.tools?.map((tool) => tool.name) || [];
+    if (
+      JSON.stringify(names) !== JSON.stringify(CHATGPT_CORE_TOOL_NAMES) ||
+      !names.includes("wait_for_task") ||
+      !names.includes("get_task_summary") ||
+      names.includes("kill_task")
+    ) {
+      throw new Error(`Expected exact chatgpt_core tools with valid token: ${JSON.stringify(names)}`);
     }
   });
 
-  await test("token: correct x-safe-bifrost-token header succeeds", async () => {
-    const result = await rpc("tools/list", {}, { "x-safe-bifrost-token": OWNER_TOKEN });
+  await test("token: correct x-patchwarden-token header succeeds", async () => {
+    const result = await rpc("tools/list", {}, { "x-patchwarden-token": OWNER_TOKEN });
     if (!result.tools || result.tools.length === 0) {
       throw new Error("Expected tools list with valid custom header token");
     }
