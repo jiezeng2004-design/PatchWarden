@@ -6,6 +6,7 @@ const allowedLegacyFiles = new Set([
   ".gitignore",
   ".npmignore",
   "README.md",
+  "README.en.md",
   "docs/migration-from-safe-bifrost.md",
   "docs/release-v0.3.0.md",
   "docs/release-v0.4.0.md",

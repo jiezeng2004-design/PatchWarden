@@ -1,5 +1,9 @@
 # PatchWarden
 
+<p align="right">
+  <strong>简体中文</strong> · <a href="./README.en.md">English</a>
+</p>
+
 [![npm version](https://img.shields.io/npm/v/patchwarden.svg)](https://www.npmjs.com/package/patchwarden)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
