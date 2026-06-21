@@ -1,10 +1,10 @@
-# Safe-Bifrost ChatGPT Test Prompt
+# PatchWarden ChatGPT Test Prompt
 
-Paste this into a ChatGPT conversation where the Safe-Bifrost Connector is
+Paste this into a ChatGPT conversation where the PatchWarden Connector is
 selected.
 
 ```text
-Use the safe-bifrost connector tools to verify the workflow.
+Use the patchwarden connector tools to verify the workflow.
 
 Step 1:
 Call health_check and list_agents. Continue only if the watcher and selected
@@ -23,7 +23,7 @@ title: Add Usage Section
 
 content:
 Add a "## Usage" section to the end of README.md. The section should include
-one sentence: "This repository was updated through Safe-Bifrost."
+one sentence: "This repository was updated through PatchWarden."
 Do not modify other files. After the change, run the configured test command.
 
 Step 4:

@@ -12,7 +12,7 @@ const expectedTools = [...CHATGPT_CORE_TOOL_NAMES];
 const transport = process.platform === "win32"
   ? new StdioClientTransport({
       command: "cmd.exe",
-      args: ["/d", "/c", resolve(root, "scripts", "safe-bifrost-mcp-stdio.cmd")],
+      args: ["/d", "/c", resolve(root, "scripts", "patchwarden-mcp-stdio.cmd")],
       cwd: root,
       stderr: "pipe",
     })
@@ -22,14 +22,14 @@ const transport = process.platform === "win32"
       cwd: root,
       env: {
         ...process.env,
-        SAFE_BIFROST_CONFIG: resolve(root, "safe-bifrost.config.json"),
-        SAFE_BIFROST_TOOL_PROFILE: "chatgpt_core",
+        PATCHWARDEN_CONFIG: resolve(root, "patchwarden.config.json"),
+        PATCHWARDEN_TOOL_PROFILE: "chatgpt_core",
       },
       stderr: "pipe",
     });
 
 const client = new Client(
-  { name: "safe-bifrost-manifest-check", version: "0.4.0" },
+  { name: "patchwarden-manifest-check", version: "0.4.0" },
   { capabilities: {} }
 );
 

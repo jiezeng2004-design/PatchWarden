@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Safe-Bifrost MCP Server — HTTP (Streamable HTTP) transport
+ * PatchWarden MCP Server — HTTP (Streamable HTTP) transport
  *
  * Binds to 127.0.0.1 only. Never exposes to LAN or public internet.
  * Use with OpenAI tunnel-client or ChatGPT Connector.
@@ -8,7 +8,7 @@
  * Each HTTP request gets its own MCP Server + transport instance
  * to avoid "Already connected" errors from reusing a single Server.
  *
- * Config options (in safe-bifrost.config.json):
+ * Config options (in patchwarden.config.json):
  *   httpPort: number (default 7331)
  *
  * Run: node dist/httpServer.js
@@ -24,37 +24,37 @@ import { loadConfig, getTasksDir } from "./config.js";
 import { registerTools } from "./tools/registry.js";
 import { healthCheck } from "./tools/healthCheck.js";
 import { getToolCatalogSnapshot } from "./tools/registry.js";
-import { SAFE_BIFROST_VERSION } from "./version.js";
+import { PATCHWARDEN_VERSION } from "./version.js";
 
 // ── Bootstrap ─────────────────────────────────────────────────────
 
 const config = loadConfig();
-const port = parseInt(process.env.SAFE_BIFROST_HTTP_PORT || "") ||
+const port = parseInt(process.env.PATCHWARDEN_HTTP_PORT || "") ||
   (config as any).httpPort ||
   7331;
 const host = "127.0.0.1";
 
-console.error(`[safe-bifrost-http] Workspace: ${config.workspaceRoot}`);
-console.error(`[safe-bifrost-http] Listening:  http://${host}:${port}/mcp`);
-console.error(`[safe-bifrost-http] ⚠️  Bound to 127.0.0.1 only — not exposed to network`);
+console.error(`[patchwarden-http] Workspace: ${config.workspaceRoot}`);
+console.error(`[patchwarden-http] Listening:  http://${host}:${port}/mcp`);
+console.error(`[patchwarden-http] ⚠️  Bound to 127.0.0.1 only — not exposed to network`);
 
 // ── Owner token (optional) ────────────────────────────────────────
 
 const httpCfg = (config as any).http || {};
-const ownerTokenEnv = httpCfg.ownerTokenEnv || "SAFE_BIFROST_OWNER_TOKEN";
+const ownerTokenEnv = httpCfg.ownerTokenEnv || "PATCHWARDEN_OWNER_TOKEN";
 const ownerToken = process.env[ownerTokenEnv] || "";
 
 if (ownerToken) {
-  console.error(`[safe-bifrost-http] 🔒 Owner token required (env: ${ownerTokenEnv})`);
+  console.error(`[patchwarden-http] 🔒 Owner token required (env: ${ownerTokenEnv})`);
 } else {
-  console.error(`[safe-bifrost-http] ⚠️  No owner token set — all local requests accepted`);
+  console.error(`[patchwarden-http] ⚠️  No owner token set — all local requests accepted`);
 }
 
 function checkOwnerToken(req: IncomingMessage): boolean {
   if (!ownerToken) return true; // no token configured — allow all
 
   const authHeader = req.headers["authorization"] || "";
-  const customHeader = req.headers["x-safe-bifrost-token"] || "";
+  const customHeader = req.headers["x-patchwarden-token"] || "";
 
   if (authHeader.startsWith("Bearer ")) {
     return authHeader.slice(7) === ownerToken;
@@ -123,7 +123,7 @@ function readAcceptance(taskId: string): object {
 /** Create a fresh MCP Server with tools registered */
 function createMcpServer(): Server {
   const server = new Server(
-    { name: "safe-bifrost", version: SAFE_BIFROST_VERSION },
+    { name: "patchwarden", version: PATCHWARDEN_VERSION },
     { capabilities: { tools: {} } }
   );
   registerTools(server);
@@ -142,7 +142,7 @@ async function handleMcpRequest(req: IncomingMessage, res: ServerResponse): Prom
     await mcpServer.connect(transport);
     await transport.handleRequest(req, res);
   } catch (err) {
-    console.error("[safe-bifrost-http] Request error:", err);
+    console.error("[patchwarden-http] Request error:", err);
     if (!res.headersSent) {
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Internal server error" }));
@@ -226,7 +226,7 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
     res.writeHead(404, { "Content-Type": "application/json" });
     res.end(JSON.stringify({
       error_code: "mcp_endpoint_not_found",
-      error: "Safe-Bifrost MCP endpoint not found.",
+      error: "PatchWarden MCP endpoint not found.",
       expected_path: "/mcp",
       health_path: "/healthz",
       admin_paths: {
@@ -253,22 +253,22 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
 
 httpServer.on("error", (err: NodeJS.ErrnoException) => {
   if (err.code === "EADDRINUSE") {
-    console.error(`[safe-bifrost-http] Fatal: port ${port} is already in use on ${host}.`);
-    console.error("[safe-bifrost-http] Stop the other Safe-Bifrost HTTP instance or change httpPort in safe-bifrost.config.json.");
+    console.error(`[patchwarden-http] Fatal: port ${port} is already in use on ${host}.`);
+    console.error("[patchwarden-http] Stop the other PatchWarden HTTP instance or change httpPort in patchwarden.config.json.");
   } else {
-    console.error(`[safe-bifrost-http] Fatal: ${err.message}`);
+    console.error(`[patchwarden-http] Fatal: ${err.message}`);
   }
   process.exit(1);
 });
 
 httpServer.listen(port, host, () => {
-  console.error(`[safe-bifrost-http] ✅ Ready`);
-  console.error(`[safe-bifrost-http] Admin:    http://${host}:${port}/admin/tasks/:id/accept`);
+  console.error(`[patchwarden-http] ✅ Ready`);
+  console.error(`[patchwarden-http] Admin:    http://${host}:${port}/admin/tasks/:id/accept`);
 });
 
 // Graceful shutdown
 process.on("SIGINT", () => {
-  console.error("[safe-bifrost-http] Shutting down...");
+  console.error("[patchwarden-http] Shutting down...");
   httpServer.close(() => process.exit(0));
 });
 

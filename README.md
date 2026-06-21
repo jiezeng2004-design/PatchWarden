@@ -1,25 +1,30 @@
-# Safe-Bifrost
+# PatchWarden
 
 Development version: **v0.4.0** (not yet published). See the
 [v0.4.0 release notes](docs/release-v0.4.0.md).
 
-Safe-Bifrost is a local Model Context Protocol (MCP) bridge for safe
+> **Renamed in v0.4.0:** PatchWarden replaces the former Safe-Bifrost package.
+> This is an intentional pre-1.0 breaking rename with new CLI, environment,
+> configuration, and runtime paths. See the
+> [migration guide](docs/migration-from-safe-bifrost.md).
+
+PatchWarden is a local Model Context Protocol (MCP) bridge for safe
 plan-and-execute coding workflows.
 
 It lets ChatGPT, Codex, Claude, or another MCP client save a plan, create a
 workspace-scoped task, let a local agent execute it, and then read back the
 result, git diff, test log, and task status.
 
-![Safe-Bifrost ChatGPT connector demo](docs/assets/safe-bifrost-chatgpt-demo.svg)
+![PatchWarden ChatGPT connector demo](docs/assets/patchwarden-chatgpt-demo.svg)
 
 ## Why
 
 Many local coding bridges give the upstream model broad shell access.
-Safe-Bifrost takes a narrower route:
+PatchWarden takes a narrower route:
 
 ```text
 ChatGPT Web or another MCP client
--> Safe-Bifrost MCP tools
+-> PatchWarden MCP tools
 -> save_plan / create_task
 -> watcher finds pending tasks
 -> local agent executes
@@ -62,14 +67,14 @@ tool.
   task phase, watcher health, pending reason, and the next safe tool call.
 - Structured `result.json`, `verify.json`, and `get_task_summary` values are
   recursively redacted and report `redacted` plus `redaction_categories`.
-- Agent command allowlist through `safe-bifrost.config.json`.
+- Agent command allowlist through `patchwarden.config.json`.
 - Test command exact-match allowlist.
 - Windows-friendly helper scripts.
 - Read-only `doctor` command for local setup diagnostics.
 
 ## MCP Tools and Profiles
 
-Safe-Bifrost has two deterministic tool profiles. `full` is the default for
+PatchWarden has two deterministic tool profiles. `full` is the default for
 ordinary local development and exposes all tools listed below. The Windows
 tunnel stdio wrapper explicitly uses `chatgpt_core`, a stable 16-tool profile
 ordered for the create/wait/review loop:
@@ -116,7 +121,7 @@ Requirements:
 Windows PowerShell:
 
 ```powershell
-cd path\to\safe-bifrost
+cd path\to\patchwarden
 npm.cmd ci
 npm.cmd run build
 npm.cmd test
@@ -125,7 +130,7 @@ npm.cmd test
 Linux, macOS, or WSL:
 
 ```bash
-cd safe-bifrost
+cd patchwarden
 npm ci
 npm run build
 npm test
@@ -133,14 +138,14 @@ npm test
 
 ## Configure
 
-Create `safe-bifrost.config.json` in the project root. Do not commit this
+Create `patchwarden.config.json` in the project root. Do not commit this
 file.
 
 ```json
 {
   "workspaceRoot": "D:/path/to/test-or-project-workspace",
-  "plansDir": ".safe-bifrost/plans",
-  "tasksDir": ".safe-bifrost/tasks",
+  "plansDir": ".patchwarden/plans",
+  "tasksDir": ".patchwarden/tasks",
   "toolProfile": "full",
   "agents": {
     "opencode": {
@@ -181,21 +186,21 @@ npm.cmd run build
 Run the stdio MCP server:
 
 ```powershell
-$env:SAFE_BIFROST_CONFIG = "path\to\safe-bifrost.config.json"
+$env:PATCHWARDEN_CONFIG = "path\to\patchwarden.config.json"
 node dist\index.js
 ```
 
 Run the watcher in another terminal:
 
 ```powershell
-$env:SAFE_BIFROST_CONFIG = "path\to\safe-bifrost.config.json"
+$env:PATCHWARDEN_CONFIG = "path\to\patchwarden.config.json"
 npm.cmd run watch
 ```
 
 Run the HTTP MCP server for local tunnel mode:
 
 ```powershell
-$env:SAFE_BIFROST_CONFIG = "path\to\safe-bifrost.config.json"
+$env:PATCHWARDEN_CONFIG = "path\to\patchwarden.config.json"
 npm.cmd run start:http
 ```
 
@@ -209,7 +214,7 @@ The intended ChatGPT flow is:
 ChatGPT Web
 -> ChatGPT Connector
 -> OpenAI Secure MCP Tunnel
--> Safe-Bifrost MCP server
+-> PatchWarden MCP server
 -> watcher
 -> local agent
 ```
@@ -217,10 +222,10 @@ ChatGPT Web
 For stdio tunnel mode on Windows, use the launcher:
 
 ```text
-scripts/safe-bifrost-mcp-stdio.cmd
+scripts/patchwarden-mcp-stdio.cmd
 ```
 
-This wrapper sets `SAFE_BIFROST_CONFIG`, changes into the Safe-Bifrost project
+This wrapper sets `PATCHWARDEN_CONFIG`, changes into the PatchWarden project
 root, and starts `node dist/index.js`. It prevents tunnel-client from using
 the tunnel-client directory as the MCP workspace.
 
@@ -229,14 +234,14 @@ the tunnel-client directory as the MCP workspace.
 For local development, run:
 
 ```text
-Start-SafeBifrost-Tunnel.cmd
+Start-PatchWarden-Tunnel.cmd
 ```
 
 The launcher:
 
 - asks for your tunnel runtime API key on first use, then stores it encrypted
-  with Windows DPAPI under `%APPDATA%\safe-bifrost`
-- asks for a tunnel ID if `SAFE_BIFROST_TUNNEL_ID` is not already set
+  with Windows DPAPI under `%APPDATA%\patchwarden`
+- asks for a tunnel ID if `PATCHWARDEN_TUNNEL_ID` is not already set
 - starts a hidden watcher owned by the launcher when no healthy external watcher exists
 - supervises only its owned watcher and retries stale/exited instances with a
   capped 2/5/10/20/30-second backoff
@@ -251,16 +256,16 @@ The launcher:
 Optional environment variables:
 
 ```powershell
-$env:SAFE_BIFROST_TUNNEL_ID = "tunnel_xxx"
+$env:PATCHWARDEN_TUNNEL_ID = "tunnel_xxx"
 $env:TUNNEL_CLIENT_EXE = "C:\path\to\tunnel-client.exe"
 $env:OPENCODE_BIN_DIR = "C:\path\to\opencode-ai\bin"
 $env:HTTPS_PROXY = "http://127.0.0.1:7892"
-$env:SAFE_BIFROST_CREDENTIAL_PATH = "C:\private\safe-bifrost-key.dpapi"
+$env:PATCHWARDEN_CREDENTIAL_PATH = "C:\private\patchwarden-key.dpapi"
 ```
 
 The saved key is bound to the current Windows user and computer. It is never
 written to the repository or printed to logs. To remove it, run
-`Reset-SafeBifrost-Tunnel-Key.cmd`.
+`Reset-PatchWarden-Tunnel-Key.cmd`.
 
 Never commit API keys, runtime keys, tunnel IDs, local account names, or
 private workspace IDs.
@@ -268,14 +273,14 @@ private workspace IDs.
 If ChatGPT reports a tunnel 404 or cannot call any MCP tool, run:
 
 ```text
-Check-SafeBifrost-Health.cmd
+Check-PatchWarden-Health.cmd
 ```
 
 This local-only diagnostic reports source/dist version, the actual MCP process
 source, tool profile/count/names/schema hash, workspace/tasks access, watcher
 freshness, configured agents, tunnel readiness, and other detected
-Safe-Bifrost processes. It only warns about mixed versions and never ends a
-process. Runtime status is stored under `%LOCALAPPDATA%\safe-bifrost\runtime`
+PatchWarden processes. It only warns about mixed versions and never ends a
+process. Runtime status is stored under `%LOCALAPPDATA%\patchwarden\runtime`
 and does not contain the API key or Tunnel ID.
 
 For an expanded read-only diagnosis, call
@@ -287,12 +292,12 @@ If you need to fully restart everything (after a config change, version
 upgrade, or hung process), double-click:
 
 ```text
-Restart-SafeBifrost.cmd
+Restart-PatchWarden.cmd
 ```
 
 This stops only the process tree recorded as owned by the current launcher,
 rebuilds the project, clears stale runtime state, and opens a fresh tunnel
-launcher window. It does not stop unrelated or legacy Safe-Bifrost instances.
+launcher window. It does not stop unrelated or legacy PatchWarden instances.
 
 ## Demo
 
@@ -304,9 +309,9 @@ expected outputs.
 ### ChatGPT lists the tunnel-client directory
 
 If `list_workspace` returns only `tunnel-client.exe`, the MCP child process did
-not receive `SAFE_BIFROST_CONFIG` or started from the wrong working directory.
+not receive `PATCHWARDEN_CONFIG` or started from the wrong working directory.
 
-Fix: use `scripts/safe-bifrost-mcp-stdio.cmd` as the tunnel MCP command, then
+Fix: use `scripts/patchwarden-mcp-stdio.cmd` as the tunnel MCP command, then
 restart tunnel-client.
 
 ### ChatGPT tool call times out
@@ -340,7 +345,7 @@ connector and tunnel request timeouts.
 ### ChatGPT still shows an older tool list
 
 Tool catalogs can remain attached to a connector session that was opened
-before the tunnel was refreshed. First run `Check-SafeBifrost-Health.cmd` and
+before the tunnel was refreshed. First run `Check-PatchWarden-Health.cmd` and
 confirm `configured_tunnel_manifest.tool_profile` is `chatgpt_core`, its
 `tool_count` is 16, and the next tunnel status reports `core_tools_ready` as
 true. Then refresh or reconnect the Connector and open a
@@ -350,7 +355,7 @@ and `tool_manifest_sha256` so the same tool names with stale schemas can still
 be distinguished.
 
 If an old conversation calls a tool that is no longer in the active profile,
-Safe-Bifrost returns `tool_catalog_mismatch` with the current tool manifest and
+PatchWarden returns `tool_catalog_mismatch` with the current tool manifest and
 refresh instructions instead of a generic unavailable-tool error.
 
 ### Task remains queued and watcher is stale
@@ -431,7 +436,7 @@ entry includes its computed `pending_reason` and watcher state.
 > **Important:**
 > - `task done` means the agent finished executing — it does NOT mean the work is correct or complete.
 > - `failed_scope_violation` takes precedence over acceptance. Review
->   `rollback_scope_violation_plan.md`; Safe-Bifrost never auto-rolls back concurrent/user edits.
+>   `rollback_scope_violation_plan.md`; PatchWarden never auto-rolls back concurrent/user edits.
 > - `failed_verification` means at least one independent allow-listed command failed;
 >   inspect `verify.log` before retrying.
 > - `failed_policy_violation` means a no-changes template unexpectedly changed
@@ -439,7 +444,7 @@ entry includes its computed `pending_reason` and watcher state.
 > - `audit_task` provides an independent review, but still requires human judgment.
 > - Local `result.md` claims about `npm publish`, `git push`, or `GitHub release` are **unverified**.
 > - Publishing, tagging, pushing, and npm publish must be confirmed manually.
-> - Before running `doctor`, create `safe-bifrost.config.json` from the example template.
+> - Before running `doctor`, create `patchwarden.config.json` from the example template.
 
 ### Task artifacts
 
@@ -459,7 +464,7 @@ entry includes its computed `pending_reason` and watcher state.
 
 ## Security Model
 
-Safe-Bifrost intentionally avoids general shell execution through MCP tools.
+PatchWarden intentionally avoids general shell execution through MCP tools.
 
 - MCP clients cannot pass arbitrary shell commands.
 - Agent commands must be configured ahead of time.
@@ -498,10 +503,10 @@ npm.cmd run pack:clean
 The clean archive excludes:
 
 - `node_modules/`
-- `.safe-bifrost/`
+- `.patchwarden/`
 - `*.log`
 - `.env`
-- `safe-bifrost.config.json`
+- `patchwarden.config.json`
 - local release artifacts
 
 ## Roadmap

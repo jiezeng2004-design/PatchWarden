@@ -20,7 +20,7 @@ if (process.platform !== "win32") {
 }
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const temp = mkdtempSync(join(tmpdir(), "safe-bifrost-watcher-supervisor-"));
+const temp = mkdtempSync(join(tmpdir(), "patchwarden-watcher-supervisor-"));
 const children = [];
 
 try {
@@ -64,9 +64,9 @@ async function runExternalScenario() {
     cwd: fixture.project,
     env: {
       ...env,
-      SAFE_BIFROST_CONFIG: fixture.configPath,
-      SAFE_BIFROST_WATCHER_INSTANCE_ID: "external-fixture",
-      SAFE_BIFROST_WATCHER_LAUNCHER_PID: "999999",
+      PATCHWARDEN_CONFIG: fixture.configPath,
+      PATCHWARDEN_WATCHER_INSTANCE_ID: "external-fixture",
+      PATCHWARDEN_WATCHER_LAUNCHER_PID: "999999",
     },
     stdio: "ignore",
   });
@@ -84,15 +84,15 @@ async function runExternalScenario() {
 }
 
 function createFixture(name) {
-  const project = join(temp, name, "safe-bifrost-fixture");
+  const project = join(temp, name, "patchwarden-fixture");
   const scripts = join(project, "scripts");
   const runner = join(project, "dist", "runner");
   const workspace = join(project, "workspace");
   mkdirSync(scripts, { recursive: true });
   mkdirSync(runner, { recursive: true });
   mkdirSync(workspace, { recursive: true });
-  cpSync(join(root, "scripts", "start-safe-bifrost-tunnel.ps1"), join(scripts, "start-safe-bifrost-tunnel.ps1"));
-  writeFileSync(join(scripts, "safe-bifrost-mcp-stdio.cmd"), "@echo off\r\nexit /b 0\r\n", "utf-8");
+  cpSync(join(root, "scripts", "start-patchwarden-tunnel.ps1"), join(scripts, "start-patchwarden-tunnel.ps1"));
+  writeFileSync(join(scripts, "patchwarden-mcp-stdio.cmd"), "@echo off\r\nexit /b 0\r\n", "utf-8");
   const manifestFixture = JSON.stringify({
     ok: true,
     server_version: "0.4.0",
@@ -107,11 +107,11 @@ function createFixture(name) {
   const watcherAttemptPath = join(project, "watcher-attempt.txt");
   const watcherPath = join(runner, "watch.js");
   writeFileSync(watcherPath, watcherFixtureSource(watcherAttemptPath), "utf-8");
-  const configPath = join(project, "safe-bifrost.config.json");
+  const configPath = join(project, "patchwarden.config.json");
   writeFileSync(configPath, JSON.stringify({
     workspaceRoot: workspace,
-    plansDir: ".safe-bifrost/plans",
-    tasksDir: ".safe-bifrost/tasks",
+    plansDir: ".patchwarden/plans",
+    tasksDir: ".patchwarden/tasks",
     watcherStaleSeconds: 5,
     agents: {},
     allowedTestCommands: [],
@@ -129,8 +129,8 @@ function createFixture(name) {
     configPath,
     watcherPath,
     watcherAttemptPath,
-    heartbeatPath: join(workspace, ".safe-bifrost", "watcher-heartbeat.json"),
-    watcherStatusPath: join(localAppData, "safe-bifrost", "runtime", "watcher-status.json"),
+    heartbeatPath: join(workspace, ".patchwarden", "watcher-heartbeat.json"),
+    watcherStatusPath: join(localAppData, "patchwarden", "runtime", "watcher-status.json"),
     mockCmd,
     localAppData,
     appData: join(project, "appdata"),
@@ -139,7 +139,7 @@ function createFixture(name) {
 
 function runLauncher(fixture, mode, maxRestarts, lifetimeMs) {
   return spawnSync("powershell.exe", [
-    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(fixture.project, "scripts", "start-safe-bifrost-tunnel.ps1"),
+    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(fixture.project, "scripts", "start-patchwarden-tunnel.ps1"),
     "-TunnelId", "tunnel_watcher_fixture",
     "-TunnelClientExe", fixture.mockCmd,
     "-ProxyUrl", "http://127.0.0.1:1",
@@ -170,9 +170,9 @@ function watcherFixtureSource(attemptPath) {
 const fs=require('fs');const path=require('path');
 let attempt=0;try{attempt=Number(fs.readFileSync(${JSON.stringify(attemptPath)},'utf8'))||0}catch{}
 attempt++;fs.writeFileSync(${JSON.stringify(attemptPath)},String(attempt));
-const cfg=JSON.parse(fs.readFileSync(process.env.SAFE_BIFROST_CONFIG,'utf8'));
-const heartbeat=path.join(cfg.workspaceRoot,'.safe-bifrost','watcher-heartbeat.json');fs.mkdirSync(path.dirname(heartbeat),{recursive:true});
-const write=()=>{const temp=heartbeat+'.'+process.pid+'.tmp';fs.writeFileSync(temp,JSON.stringify({status:'running',pid:process.pid,instance_id:process.env.SAFE_BIFROST_WATCHER_INSTANCE_ID,launcher_pid:Number(process.env.SAFE_BIFROST_WATCHER_LAUNCHER_PID),started_at:new Date().toISOString(),last_heartbeat_at:new Date().toISOString()}));fs.renameSync(temp,heartbeat)};
+const cfg=JSON.parse(fs.readFileSync(process.env.PATCHWARDEN_CONFIG,'utf8'));
+const heartbeat=path.join(cfg.workspaceRoot,'.patchwarden','watcher-heartbeat.json');fs.mkdirSync(path.dirname(heartbeat),{recursive:true});
+const write=()=>{const temp=heartbeat+'.'+process.pid+'.tmp';fs.writeFileSync(temp,JSON.stringify({status:'running',pid:process.pid,instance_id:process.env.PATCHWARDEN_WATCHER_INSTANCE_ID,launcher_pid:Number(process.env.PATCHWARDEN_WATCHER_LAUNCHER_PID),started_at:new Date().toISOString(),last_heartbeat_at:new Date().toISOString()}));fs.renameSync(temp,heartbeat)};
 write();const mode=process.env.WATCHER_FIXTURE_MODE;
 if(mode==='exit_once'&&attempt===1)setTimeout(()=>process.exit(7),100);
 else if(mode==='freeze')setInterval(()=>{},1000);

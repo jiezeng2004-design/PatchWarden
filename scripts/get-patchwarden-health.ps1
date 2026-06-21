@@ -1,14 +1,14 @@
 $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$ConfigPath = Join-Path $ProjectRoot "safe-bifrost.config.json"
-$RuntimeDirectory = Join-Path $env:LOCALAPPDATA "safe-bifrost\runtime"
+$ConfigPath = Join-Path $ProjectRoot "patchwarden.config.json"
+$RuntimeDirectory = Join-Path $env:LOCALAPPDATA "patchwarden\runtime"
 $HealthUrlFile = Join-Path $RuntimeDirectory "tunnel-health-url.txt"
 
-$env:SAFE_BIFROST_CONFIG = $ConfigPath
+$env:PATCHWARDEN_CONFIG = $ConfigPath
 $healthJson = node --input-type=module -e "Promise.all([import('./dist/tools/healthCheck.js'),import('./dist/tools/registry.js')]).then(([h,r])=>console.log(JSON.stringify(h.healthCheck(r.getToolCatalogSnapshot()))))" 2>$null
 if ($LASTEXITCODE -ne 0 -or -not $healthJson) {
-  throw "Could not load Safe-Bifrost health information. Run npm.cmd run build first."
+  throw "Could not load PatchWarden health information. Run npm.cmd run build first."
 }
 $health = $healthJson | ConvertFrom-Json
 $packageVersion = [string](Get-Content -LiteralPath (Join-Path $ProjectRoot "package.json") -Raw | ConvertFrom-Json).version
@@ -26,11 +26,11 @@ try {
   $allProcesses = Get-CimInstance Win32_Process
   foreach ($process in $allProcesses) {
     $commandLine = [string]$process.CommandLine
-    if (-not $commandLine -or $commandLine -notmatch '(?i)safe-bifrost') { continue }
-    if ($process.ProcessId -eq $PID -or $commandLine -match 'get-safe-bifrost-health\.ps1') { continue }
+    if (-not $commandLine -or $commandLine -notmatch '(?i)patchwarden') { continue }
+    if ($process.ProcessId -eq $PID -or $commandLine -match 'get-patchwarden-health\.ps1') { continue }
     $detectedVersion = "unknown"
     $origin = "unknown"
-    if ($commandLine -match '(?i)safe-bifrost@([0-9]+(?:\.[0-9]+){1,2})') {
+    if ($commandLine -match '(?i)patchwarden@([0-9]+(?:\.[0-9]+){1,2})') {
       $detectedVersion = $matches[1]
       $origin = "npm_package"
     } elseif ($commandLine -like "*$ProjectRoot*") {
@@ -70,7 +70,7 @@ if (Test-Path -LiteralPath $HealthUrlFile) {
 
 $tunnelProcesses = @($safeProcesses | Where-Object { $_.name -eq "tunnel-client.exe" })
 $mcpChildProcesses = @($safeProcesses | Where-Object {
-  $_.command_line -match '(?i)safe-bifrost-mcp-stdio\.cmd|safe-bifrost\\dist\\index\.js|safe-bifrost/scripts/\.\./dist/index\.js'
+  $_.command_line -match '(?i)patchwarden-mcp-stdio\.cmd|patchwarden\\dist\\index\.js|patchwarden/scripts/\.\./dist/index\.js'
 })
 $deploymentConsistent = [bool](
   $configuredTunnelManifest -and
@@ -108,7 +108,7 @@ $deploymentConsistent = [bool](
   tunnel_live_probe = $liveTunnel
   tunnel_processes = $tunnelProcesses
   mcp_child_processes = $mcpChildProcesses
-  safe_bifrost_processes = $safeProcesses
+  patchwarden_processes = $safeProcesses
   version_conflicts = @($safeProcesses | Where-Object { $_.version_conflict })
   last_error = $health.last_error
 } | ConvertTo-Json -Depth 8

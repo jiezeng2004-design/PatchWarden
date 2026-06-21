@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { getConfig, getTasksDir, type SafeBifrostConfig } from "./config.js";
+import { getConfig, getTasksDir, type PatchWardenConfig } from "./config.js";
 
 export type WatcherState = "healthy" | "stale" | "missing" | "unreadable";
 export type PendingReason =
@@ -26,12 +26,12 @@ export interface WatcherStatusSnapshot {
   reason: string | null;
 }
 
-export function getWatcherHeartbeatPath(config: SafeBifrostConfig = getConfig()): string {
+export function getWatcherHeartbeatPath(config: PatchWardenConfig = getConfig()): string {
   return join(dirname(getTasksDir(config)), "watcher-heartbeat.json");
 }
 
 export function readWatcherStatus(
-  config: SafeBifrostConfig = getConfig(),
+  config: PatchWardenConfig = getConfig(),
   nowMs = Date.now()
 ): WatcherStatusSnapshot {
   const staleAfterSeconds = config.watcherStaleSeconds;
@@ -46,7 +46,7 @@ export function readWatcherStatus(
       heartbeat_pid: null,
       instance_id: null,
       launcher_pid: null,
-      reason: "Watcher heartbeat has not been observed. Start or restart the Safe-Bifrost watcher.",
+      reason: "Watcher heartbeat has not been observed. Start or restart the PatchWarden watcher.",
     };
   }
 
@@ -67,7 +67,7 @@ export function readWatcherStatus(
       heartbeat_pid: Number.isInteger(Number(data.pid)) ? Number(data.pid) : null,
       instance_id: typeof data.instance_id === "string" ? data.instance_id : null,
       launcher_pid: Number.isInteger(Number(data.launcher_pid)) ? Number(data.launcher_pid) : null,
-      reason: healthy ? null : "Watcher heartbeat is stale. Restart the Safe-Bifrost watcher.",
+      reason: healthy ? null : "Watcher heartbeat is stale. Restart the PatchWarden watcher.",
     };
   } catch {
     return {

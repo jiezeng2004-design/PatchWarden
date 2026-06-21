@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { SAFE_BIFROST_VERSION, TOOL_SCHEMA_EPOCH } from "../version.js";
+import { PATCHWARDEN_VERSION, TOOL_SCHEMA_EPOCH } from "../version.js";
 
 export type ToolProfile = "full" | "chatgpt_core";
 
@@ -40,7 +40,7 @@ export const CHATGPT_CORE_TOOL_NAMES = [
 let lastSnapshot: ToolCatalogSnapshot | null = null;
 
 export function resolveToolProfile(configProfile?: string): ToolProfile {
-  const raw = (process.env.SAFE_BIFROST_TOOL_PROFILE || configProfile || "full").trim();
+  const raw = (process.env.PATCHWARDEN_TOOL_PROFILE || configProfile || "full").trim();
   if (raw !== "full" && raw !== "chatgpt_core") {
     throw new Error(`Invalid tool profile "${raw}". Expected "full" or "chatgpt_core".`);
   }
@@ -67,7 +67,7 @@ export function buildToolCatalogSnapshot(tools: CatalogTool[], profile: ToolProf
     .update(stableJson(manifestInput))
     .digest("hex");
   lastSnapshot = {
-    server_version: SAFE_BIFROST_VERSION,
+    server_version: PATCHWARDEN_VERSION,
     schema_epoch: TOOL_SCHEMA_EPOCH,
     tool_profile: profile,
     tool_count: tools.length,

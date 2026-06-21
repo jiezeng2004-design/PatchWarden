@@ -1,5 +1,5 @@
 /**
- * Shared tool registry for Safe-Bifrost MCP server.
+ * Shared tool registry for PatchWarden MCP server.
  * Used by both stdio (index.ts) and HTTP (httpServer.ts) transports.
  */
 
@@ -26,7 +26,7 @@ import { listAgents } from "../tools/listAgents.js";
 import { healthCheck } from "../tools/healthCheck.js";
 import { getTaskSummary } from "../tools/getTaskSummary.js";
 import { waitForTask } from "../tools/waitForTask.js";
-import { errorPayload, SafeBifrostError } from "../errors.js";
+import { errorPayload, PatchWardenError } from "../errors.js";
 import { auditTask } from "../tools/auditTask.js";
 import { runTask } from "../runner/runTask.js";
 import { TASK_TEMPLATE_NAMES } from "./taskTemplates.js";
@@ -61,7 +61,7 @@ export function getToolDefs(): ToolDef[] {
     {
       name: "save_plan",
       description:
-        "Save an execution plan — ChatGPT writes the plan, Safe-Bifrost stores it for local agent execution.",
+        "Save an execution plan — ChatGPT writes the plan, PatchWarden stores it for local agent execution.",
       inputSchema: {
         type: "object",
         properties: {
@@ -147,7 +147,7 @@ export function getToolDefs(): ToolDef[] {
               type: "string",
               ...(testCommands.length > 0 ? { enum: testCommands } : {}),
             },
-            description: "Recommended allow-listed commands Safe-Bifrost runs independently after the agent exits.",
+            description: "Recommended allow-listed commands PatchWarden runs independently after the agent exits.",
           },
           timeout_seconds: {
             type: "integer",
@@ -628,7 +628,7 @@ export function registerTools(server: Server) {
     try {
       if (!activeNames.has(name)) {
         const catalog = getToolCatalogSnapshot();
-        throw new SafeBifrostError(
+        throw new PatchWardenError(
           "tool_catalog_mismatch",
           `Tool "${name}" is not available in the active ${catalog.tool_profile} profile. The client may be using a stale tool catalog.`,
           "Refresh or reconnect the ChatGPT Connector and open a new conversation before retrying.",
@@ -647,7 +647,7 @@ export function registerTools(server: Server) {
               arguments: { detail: "self_diagnostic" },
             },
             connector_refresh_steps: [
-              "1. Run Check-SafeBifrost-Health.cmd locally to confirm the active profile and manifest hash.",
+              "1. Run Check-PatchWarden-Health.cmd locally to confirm the active profile and manifest hash.",
               "2. In ChatGPT Platform, refresh or reconnect the Connector (do not reuse an old session).",
               "3. Open a NEW ChatGPT conversation; old conversations retain their cached tool catalog.",
               "4. Call health_check in the new conversation and verify tool_manifest_sha256 matches the local report.",

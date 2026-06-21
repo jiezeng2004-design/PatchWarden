@@ -12,11 +12,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
-const tempRoot = mkdtempSync(join(tmpdir(), "safe-bifrost-lifecycle-"));
+const tempRoot = mkdtempSync(join(tmpdir(), "patchwarden-lifecycle-"));
 const workspaceRoot = join(tempRoot, "workspace");
 const repoPath = join(workspaceRoot, "repo");
 const plainRepoPath = join(workspaceRoot, "plain-repo");
-const configPath = join(tempRoot, "safe-bifrost.config.json");
+const configPath = join(tempRoot, "patchwarden.config.json");
 let passed = 0;
 let failed = 0;
 
@@ -53,12 +53,12 @@ async function waitForRunning(getTaskStatus, taskId) {
   throw new Error(`Task ${taskId} did not enter running state`);
 }
 
-console.log("\n=== Safe-Bifrost Lifecycle Smoke Tests ===\n");
+console.log("\n=== PatchWarden Lifecycle Smoke Tests ===\n");
 
 try {
   mkdirSync(repoPath, { recursive: true });
-  mkdirSync(join(workspaceRoot, ".safe-bifrost"), { recursive: true });
-  writeFileSync(join(workspaceRoot, ".safe-bifrost", "watcher-heartbeat.json"), JSON.stringify({
+  mkdirSync(join(workspaceRoot, ".patchwarden"), { recursive: true });
+  writeFileSync(join(workspaceRoot, ".patchwarden", "watcher-heartbeat.json"), JSON.stringify({
     status: "running",
     pid: process.pid,
     instance_id: "lifecycle-smoke-watcher",
@@ -74,14 +74,14 @@ try {
   writeFileSync(join(plainRepoPath, "README.md"), "# Non-Git fixture\n", "utf-8");
   git(["init"]);
   git(["add", "README.md", "main.js", "second.js", "delete-me.txt"]);
-  git(["-c", "user.name=Safe-Bifrost Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture"]);
+  git(["-c", "user.name=PatchWarden Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture"]);
 
   writeFileSync(
     configPath,
     JSON.stringify({
       workspaceRoot,
-      plansDir: ".safe-bifrost/plans",
-      tasksDir: ".safe-bifrost/tasks",
+      plansDir: ".patchwarden/plans",
+      tasksDir: ".patchwarden/tasks",
       agents: {
         writer: {
           command: process.execPath,
@@ -123,7 +123,7 @@ try {
     }, null, 2),
     "utf-8"
   );
-  process.env.SAFE_BIFROST_CONFIG = configPath;
+  process.env.PATCHWARDEN_CONFIG = configPath;
 
   const { savePlan } = await import("../dist/tools/savePlan.js");
   const { createTask } = await import("../dist/tools/createTask.js");

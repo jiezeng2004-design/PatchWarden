@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { getConfig, getTasksDir } from "../config.js";
-import { SafeBifrostError } from "../errors.js";
+import { PatchWardenError } from "../errors.js";
 import { guardReadPath } from "../security/pathGuard.js";
 
 export const TASK_TEMPLATE_NAMES = [
@@ -31,7 +31,7 @@ export interface ExpandedTaskTemplate {
 export function expandTaskTemplate(input: TaskTemplateInput): ExpandedTaskTemplate {
   const goal = input.goal.trim();
   if (!goal) {
-    throw new SafeBifrostError(
+    throw new PatchWardenError(
       "template_goal_required",
       "Template tasks require a non-empty goal.",
       "Pass a concise goal describing the desired inspection or repository-local change."
@@ -75,7 +75,7 @@ export function expandTaskTemplate(input: TaskTemplateInput): ExpandedTaskTempla
 
     case "fix_tests":
       if (input.verify_commands.length === 0) {
-        throw new SafeBifrostError(
+        throw new PatchWardenError(
           "template_verification_required",
           "The fix_tests template requires at least one allow-listed verify_commands entry.",
           "Pass the failing test or check command in verify_commands."
@@ -89,7 +89,7 @@ export function expandTaskTemplate(input: TaskTemplateInput): ExpandedTaskTempla
           "## Execution contract",
           "- Reproduce the relevant failure before editing when possible.",
           "- Fix the root cause without deleting tests, weakening checks, or changing unrelated behavior.",
-          `- Safe-Bifrost will independently run: ${input.verify_commands.join(", ")}.`,
+          `- PatchWarden will independently run: ${input.verify_commands.join(", ")}.`,
         ].join("\n\n"),
       };
 
@@ -127,7 +127,7 @@ export function expandTaskTemplate(input: TaskTemplateInput): ExpandedTaskTempla
 
 function readRollbackEvidence(sourceTaskId?: string): string {
   if (!sourceTaskId?.trim()) {
-    throw new SafeBifrostError(
+    throw new PatchWardenError(
       "source_task_required",
       "rollback_scope_violation requires source_task_id.",
       "Pass the task ID that ended with failed_scope_violation."
@@ -140,7 +140,7 @@ function readRollbackEvidence(sourceTaskId?: string): string {
   guardReadPath(statusFile, config.workspaceRoot, config.tasksDir);
   guardReadPath(rollbackFile, config.workspaceRoot, config.tasksDir);
   if (!existsSync(statusFile) || !existsSync(rollbackFile)) {
-    throw new SafeBifrostError(
+    throw new PatchWardenError(
       "scope_violation_evidence_missing",
       `Source task "${sourceTaskId}" does not contain scope-violation recovery evidence.`,
       "Use a task that ended with failed_scope_violation and has rollback_scope_violation_plan.md."
@@ -148,7 +148,7 @@ function readRollbackEvidence(sourceTaskId?: string): string {
   }
   const status = JSON.parse(readFileSync(statusFile, "utf-8"));
   if (status.status !== "failed_scope_violation") {
-    throw new SafeBifrostError(
+    throw new PatchWardenError(
       "source_task_not_scope_violation",
       `Source task "${sourceTaskId}" has status "${status.status}", not failed_scope_violation.`,
       "Use the scope-violating task as source_task_id."

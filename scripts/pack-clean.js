@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 const scriptDir = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const root = resolve(scriptDir, "..");
 const releaseDir = resolve(root, "release");
-const archivePath = resolve(root, "safe-bifrost-release.tar.gz");
+const archivePath = resolve(root, "patchwarden-release.tar.gz");
 
 const include = [
   "dist",
@@ -22,10 +22,10 @@ const include = [
   "examples",
   "scripts",
   "src",
-  "Start-SafeBifrost-Tunnel.cmd",
-  "Restart-SafeBifrost.cmd",
-  "Check-SafeBifrost-Health.cmd",
-  "Reset-SafeBifrost-Tunnel-Key.cmd",
+  "Start-PatchWarden-Tunnel.cmd",
+  "Restart-PatchWarden.cmd",
+  "Check-PatchWarden-Health.cmd",
+  "Reset-PatchWarden-Tunnel-Key.cmd",
   ".gitignore",
   "LICENSE",
   "README.md",
@@ -36,7 +36,9 @@ const include = [
 
 const forbidden = [
   /(^|[\\/])node_modules([\\/]|$)/,
+  /(^|[\\/])\.patchwarden([\\/]|$)/,
   /(^|[\\/])\.safe-bifrost([\\/]|$)/,
+  /(^|[\\/])patchwarden\.config\.json$/,
   /(^|[\\/])safe-bifrost\.config\.json$/,
   /\.local\.(cmd|ps1)$/i,
   /\.dpapi$/i,

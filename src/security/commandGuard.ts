@@ -1,5 +1,5 @@
-import { SafeBifrostConfig } from "../config.js";
-import { SafeBifrostError } from "../errors.js";
+import { PatchWardenConfig } from "../config.js";
+import { PatchWardenError } from "../errors.js";
 
 /**
  * Command guard: ensure only allow-listed commands can execute.
@@ -18,11 +18,11 @@ export interface AllowedCommand {
 
 export function guardAgentCommand(
   agent: string,
-  config: SafeBifrostConfig
+  config: PatchWardenConfig
 ): AllowedCommand {
   const agentCfg = config.agents[agent];
   if (!agentCfg) {
-    throw new SafeBifrostError(
+    throw new PatchWardenError(
       "agent_not_configured",
       `Agent "${agent}" is not configured. Allowed agents: ${Object.keys(config.agents).join(", ")}`,
       "Call list_agents and use one of the configured agent names."
@@ -41,7 +41,7 @@ export function guardAgentCommand(
   // Absolute paths are allowed only because they come from the local config,
   // never from the MCP caller. We still reject traversal and shell syntax.
   if (!isSafeConfiguredCommand(agentCfg.command)) {
-    throw new SafeBifrostError(
+    throw new PatchWardenError(
       "agent_command_invalid",
       `Invalid agent command name: "${agentCfg.command}"`,
       "Fix the locally configured executable path; MCP callers cannot override agent commands."
@@ -65,7 +65,7 @@ function isSafeConfiguredCommand(command: string): boolean {
 
 export function guardTestCommand(
   testCommand: string,
-  config: SafeBifrostConfig
+  config: PatchWardenConfig
 ): string {
   if (!testCommand || typeof testCommand !== "string") {
     // If no test command specified, that's ok — skip tests
@@ -76,7 +76,7 @@ export function guardTestCommand(
   if (trimmed === "") return "";
 
   if (!config.allowedTestCommands.includes(trimmed)) {
-    throw new SafeBifrostError(
+    throw new PatchWardenError(
       "test_command_not_allowlisted",
       `Test command "${trimmed}" is not in the allowed list. Allowed: ${config.allowedTestCommands.join(", ")}`,
       "Use an exact allowed command shown by create_task, or omit test_command."

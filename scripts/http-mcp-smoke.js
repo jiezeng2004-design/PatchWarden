@@ -21,9 +21,9 @@ const host = "127.0.0.1";
 const port = 17331;
 const mcpUrl = `http://${host}:${port}/mcp`;
 
-const tempRoot = mkdtempSync(join(tmpdir(), "safe-bifrost-http-"));
+const tempRoot = mkdtempSync(join(tmpdir(), "patchwarden-http-"));
 const workspaceRoot = join(tempRoot, "workspace");
-const configPath = join(tempRoot, "safe-bifrost.config.json");
+const configPath = join(tempRoot, "patchwarden.config.json");
 
 let passed = 0;
 let failed = 0;
@@ -96,7 +96,7 @@ function toolJson(result) {
   return JSON.parse(toolText(result));
 }
 
-console.log("\n=== Safe-Bifrost HTTP MCP Smoke Tests ===\n");
+console.log("\n=== PatchWarden HTTP MCP Smoke Tests ===\n");
 
 try {
   mkdirSync(workspaceRoot, { recursive: true });
@@ -107,8 +107,8 @@ try {
     JSON.stringify(
       {
         workspaceRoot,
-        plansDir: ".safe-bifrost/plans",
-        tasksDir: ".safe-bifrost/tasks",
+        plansDir: ".patchwarden/plans",
+        tasksDir: ".patchwarden/tasks",
         agents: {
           codex: {
             command: "node",
@@ -130,8 +130,8 @@ try {
     cwd: root,
     env: {
       ...process.env,
-      SAFE_BIFROST_CONFIG: configPath,
-      SAFE_BIFROST_HTTP_PORT: String(port),
+      PATCHWARDEN_CONFIG: configPath,
+      PATCHWARDEN_HTTP_PORT: String(port),
     },
     stdio: ["ignore", "ignore", "pipe"],
   });
@@ -150,7 +150,7 @@ try {
       capabilities: {},
       clientInfo: { name: "http-mcp-smoke", version: "1.0.0" },
     });
-    if (result.serverInfo?.name !== "safe-bifrost") {
+    if (result.serverInfo?.name !== "patchwarden") {
       throw new Error(`Unexpected server info: ${JSON.stringify(result.serverInfo)}`);
     }
   });
@@ -266,10 +266,10 @@ try {
     cwd: root,
     env: {
       ...process.env,
-      SAFE_BIFROST_CONFIG: configPath,
-      SAFE_BIFROST_HTTP_PORT: String(port),
-      SAFE_BIFROST_OWNER_TOKEN: OWNER_TOKEN,
-      SAFE_BIFROST_TOOL_PROFILE: "chatgpt_core",
+      PATCHWARDEN_CONFIG: configPath,
+      PATCHWARDEN_HTTP_PORT: String(port),
+      PATCHWARDEN_OWNER_TOKEN: OWNER_TOKEN,
+      PATCHWARDEN_TOOL_PROFILE: "chatgpt_core",
     },
     stdio: ["ignore", "ignore", "pipe"],
   });
@@ -313,8 +313,8 @@ try {
     }
   });
 
-  await test("token: correct x-safe-bifrost-token header succeeds", async () => {
-    const result = await rpc("tools/list", {}, { "x-safe-bifrost-token": OWNER_TOKEN });
+  await test("token: correct x-patchwarden-token header succeeds", async () => {
+    const result = await rpc("tools/list", {}, { "x-patchwarden-token": OWNER_TOKEN });
     if (!result.tools || result.tools.length === 0) {
       throw new Error("Expected tools list with valid custom header token");
     }

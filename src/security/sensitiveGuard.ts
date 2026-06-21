@@ -1,4 +1,4 @@
-import { SafeBifrostError } from "../errors.js";
+import { PatchWardenError } from "../errors.js";
 
 /**
  * Sensitive file guard: block reads of files likely to contain secrets.
@@ -36,11 +36,11 @@ const SENSITIVE_PATTERNS = [
   /(?:^|[\\/])config\.json$/i, // generic config files often contain local tokens or service credentials
 ];
 
-// Files specifically inside .safe-bifrost are always allowed
-const SAFE_PREFIX = ".safe-bifrost";
+// Files specifically inside .patchwarden are always allowed
+const SAFE_PREFIX = ".patchwarden";
 
 export function isSensitivePath(filePath: string): boolean {
-  // Files inside .safe-bifrost are always safe
+  // Files inside .patchwarden are always safe
   const normalized = filePath.replace(/\\/g, "/");
   if (normalized.includes(`${SAFE_PREFIX}/`) || normalized.endsWith(SAFE_PREFIX)) {
     return false;
@@ -57,7 +57,7 @@ export function isSensitivePath(filePath: string): boolean {
 
 export function guardSensitivePath(filePath: string): void {
   if (isSensitivePath(filePath)) {
-    throw new SafeBifrostError(
+    throw new PatchWardenError(
       "sensitive_path_blocked",
       `Access denied: "${filePath}" matches a sensitive file pattern. Reading this file is not permitted.`,
       "Read only non-sensitive task artifacts or workspace files.",

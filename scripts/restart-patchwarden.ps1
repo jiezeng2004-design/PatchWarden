@@ -9,18 +9,18 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$ConfigPath = Join-Path $ProjectRoot "safe-bifrost.config.json"
-$RuntimeDirectory = Join-Path $env:LOCALAPPDATA "safe-bifrost\runtime"
+$ConfigPath = Join-Path $ProjectRoot "patchwarden.config.json"
+$RuntimeDirectory = Join-Path $env:LOCALAPPDATA "patchwarden\runtime"
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host " Safe-Bifrost One-Click Restart" -ForegroundColor Cyan
+Write-Host " PatchWarden One-Click Restart" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-# -- 1. Find Safe-Bifrost processes ----------------------------------
+# -- 1. Find PatchWarden processes ----------------------------------
 
-Write-Host "[1/4] Scanning for Safe-Bifrost processes..." -ForegroundColor Yellow
+Write-Host "[1/4] Scanning for PatchWarden processes..." -ForegroundColor Yellow
 
 $processesToKill = @()
 try {
@@ -33,7 +33,7 @@ try {
   if (Test-Path -LiteralPath $tunnelStatusPath) {
     $state = Get-Content -LiteralPath $tunnelStatusPath -Raw | ConvertFrom-Json
     $candidate = $byPid[[int]$state.pid]
-    if ($candidate -and [string]$candidate.CommandLine -match '(?i)tunnel-client\.exe.*run.*safe-bifrost') {
+    if ($candidate -and [string]$candidate.CommandLine -match '(?i)tunnel-client\.exe.*run.*patchwarden') {
       [void]$seedIds.Add([int]$candidate.ProcessId)
     }
   }
@@ -44,7 +44,7 @@ try {
       [void]$seedIds.Add([int]$watcherCandidate.ProcessId)
     }
     $launcherCandidate = $byPid[[int]$state.launcher_pid]
-    if ($launcherCandidate -and [string]$launcherCandidate.CommandLine -like "*$ProjectRoot*start-safe-bifrost-tunnel.ps1*") {
+    if ($launcherCandidate -and [string]$launcherCandidate.CommandLine -like "*$ProjectRoot*start-patchwarden-tunnel.ps1*") {
       [void]$seedIds.Add([int]$launcherCandidate.ProcessId)
     }
   }
@@ -53,7 +53,7 @@ try {
     while ($current -and [int]$current.ParentProcessId -gt 0) {
       $parent = $byPid[[int]$current.ParentProcessId]
       if (-not $parent) { break }
-      if ([string]$parent.CommandLine -like "*$ProjectRoot*start-safe-bifrost-tunnel.ps1*") {
+      if ([string]$parent.CommandLine -like "*$ProjectRoot*start-patchwarden-tunnel.ps1*") {
         [void]$seedIds.Add([int]$parent.ProcessId)
       }
       $current = $parent
@@ -87,9 +87,9 @@ try {
 }
 
 if ($processesToKill.Count -eq 0) {
-  Write-Host "  No Safe-Bifrost processes found." -ForegroundColor Green
+  Write-Host "  No PatchWarden processes found." -ForegroundColor Green
 } else {
-  Write-Host "  Found $($processesToKill.Count) Safe-Bifrost process(es):" -ForegroundColor White
+  Write-Host "  Found $($processesToKill.Count) PatchWarden process(es):" -ForegroundColor White
   foreach ($proc in $processesToKill) {
     Write-Host "    PID $($proc.pid) - $($proc.label) ($($proc.name))" -ForegroundColor Gray
   }
@@ -99,7 +99,7 @@ if ($processesToKill.Count -eq 0) {
 
 if ($processesToKill.Count -gt 0) {
   Write-Host ""
-  Write-Host "[2/4] Stopping Safe-Bifrost processes..." -ForegroundColor Yellow
+  Write-Host "[2/4] Stopping PatchWarden processes..." -ForegroundColor Yellow
 
   if ($WhatIf) {
     Write-Host "  WHAT-IF: Would stop $($processesToKill.Count) process(es)." -ForegroundColor Magenta
@@ -129,7 +129,7 @@ Write-Host ""
 if ($SkipBuild) {
   Write-Host "[3/4] Skipping build (--SkipBuild)." -ForegroundColor DarkYellow
 } else {
-  Write-Host "[3/4] Rebuilding Safe-Bifrost..." -ForegroundColor Yellow
+  Write-Host "[3/4] Rebuilding PatchWarden..." -ForegroundColor Yellow
   
   if ($WhatIf) {
     Write-Host "  WHAT-IF: Would run npm.cmd run build." -ForegroundColor Magenta
@@ -193,10 +193,10 @@ if (-not $WhatIf) {
 # -- 4. Relaunch tunnel ----------------------------------------------
 
 Write-Host ""
-Write-Host "[4/4] Launching Safe-Bifrost tunnel..." -ForegroundColor Yellow
+Write-Host "[4/4] Launching PatchWarden tunnel..." -ForegroundColor Yellow
 
 if ($WhatIf) {
-  Write-Host "  WHAT-IF: Would launch Start-SafeBifrost-Tunnel.cmd." -ForegroundColor Magenta
+  Write-Host "  WHAT-IF: Would launch Start-PatchWarden-Tunnel.cmd." -ForegroundColor Magenta
   Write-Host ""
   Write-Host "========================================" -ForegroundColor Cyan
   Write-Host " Restart plan complete (--WhatIf)." -ForegroundColor Cyan
@@ -206,9 +206,9 @@ if ($WhatIf) {
 }
 
 # Relaunch the tunnel in a new PowerShell window.
-# Prefer Start-SafeBifrost-Tunnel.local.cmd (your saved config) over the generic launcher.
-$localLauncher = Join-Path $ProjectRoot "Start-SafeBifrost-Tunnel.local.cmd"
-$genericLauncher = Join-Path $ProjectRoot "Start-SafeBifrost-Tunnel.cmd"
+# Prefer Start-PatchWarden-Tunnel.local.cmd (your saved config) over the generic launcher.
+$localLauncher = Join-Path $ProjectRoot "Start-PatchWarden-Tunnel.local.cmd"
+$genericLauncher = Join-Path $ProjectRoot "Start-PatchWarden-Tunnel.cmd"
 $launcherPath = if (Test-Path -LiteralPath $localLauncher) { $localLauncher } else { $genericLauncher }
 
 if (-not (Test-Path -LiteralPath $launcherPath)) {
@@ -230,13 +230,13 @@ $args = @(
   "Set-Location '$ProjectRoot'; & '$launcherPath'"
 )
 if ($SkipWatcher) {
-  $args[3] = "Set-Location '$ProjectRoot'; `$env:SAFE_BIFROST_SKIP_WATCHER='1'; & '$launcherPath'"
+  $args[3] = "Set-Location '$ProjectRoot'; `$env:PATCHWARDEN_SKIP_WATCHER='1'; & '$launcherPath'"
 }
 
 Start-Process powershell.exe -ArgumentList $args
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host " Restart complete. Tunnel launcher window opened." -ForegroundColor Cyan
-Write-Host " Use Check-SafeBifrost-Health.cmd to verify." -ForegroundColor Cyan
+Write-Host " Use Check-PatchWarden-Health.cmd to verify." -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""

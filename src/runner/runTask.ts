@@ -258,7 +258,7 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
       task_id: taskId,
       status: "review_required",
       automatic_rollback_performed: false,
-      warning: "Review ownership and concurrent edits before rollback. Safe-Bifrost did not modify or restore these files.",
+      warning: "Review ownership and concurrent edits before rollback. PatchWarden did not modify or restore these files.",
       out_of_scope_changes: outOfScopeChanges,
     }, null, 2), "utf-8");
     writeFileSync(join(taskDir, "rollback_scope_violation_plan.md"), [
@@ -266,7 +266,7 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
       "",
       `Task: ${taskId}`,
       "",
-      "Safe-Bifrost did not automatically roll back any file. Review concurrent or user-owned edits before acting.",
+      "PatchWarden did not automatically roll back any file. Review concurrent or user-owned edits before acting.",
       "",
       "## Out-of-scope files only",
       ...outOfScopeChanges.map((file) => `- ${file.change}: ${file.old_path ? `${file.old_path} -> ` : ""}${file.path}`),
@@ -624,7 +624,7 @@ ${plan}
 6. Output a summary with what was done, files modified, and issues encountered.
 `;
   if (testCommand) {
-    prompt += `\n7. You may run ${testCommand}; Safe-Bifrost will independently run it again for verification.`;
+    prompt += `\n7. You may run ${testCommand}; PatchWarden will independently run it again for verification.`;
   }
   return prompt;
 }
@@ -661,7 +661,7 @@ function buildResultMarkdown(input: {
     ? input.outOfScopeChanges.map((file) => `- ${file.change}: ${file.old_path ? `${file.old_path} -> ` : ""}${file.path}`).join("\n")
     : "(none)";
   return [
-    "# Safe-Bifrost Task Result",
+    "# PatchWarden Task Result",
     "",
     "## Status",
     input.status,
@@ -852,7 +852,7 @@ function failBeforeExecution(taskId: string, taskDir: string, message: string): 
     next_steps: ["Fix task metadata or configuration and retry the task."],
   };
   writeFileSync(join(taskDir, "result.json"), JSON.stringify(result, null, 2), "utf-8");
-  writeFileSync(join(taskDir, "result.md"), `# Safe-Bifrost Task Result\n\n## Status\nfailed\n\n## Summary\n${message}\n`, "utf-8");
+  writeFileSync(join(taskDir, "result.md"), `# PatchWarden Task Result\n\n## Status\nfailed\n\n## Summary\n${message}\n`, "utf-8");
   updateStatus(taskDir, {
     status: "failed",
     phase: "failed",

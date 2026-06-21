@@ -1,10 +1,10 @@
 param(
-  [string]$TunnelId = $env:SAFE_BIFROST_TUNNEL_ID,
-  [string]$Profile = "safe-bifrost",
+  [string]$TunnelId = $env:PATCHWARDEN_TUNNEL_ID,
+  [string]$Profile = "patchwarden",
   [string]$ProxyUrl = $(if ($env:HTTPS_PROXY) { $env:HTTPS_PROXY } else { "http://127.0.0.1:7892" }),
   [string]$TunnelClientExe = $env:TUNNEL_CLIENT_EXE,
   [string]$OpencodeBin = $env:OPENCODE_BIN_DIR,
-  [string]$CredentialPath = $(if ($env:SAFE_BIFROST_CREDENTIAL_PATH) { $env:SAFE_BIFROST_CREDENTIAL_PATH } else { Join-Path $env:APPDATA "safe-bifrost\control-plane-api-key.dpapi" }),
+  [string]$CredentialPath = $(if ($env:PATCHWARDEN_CREDENTIAL_PATH) { $env:PATCHWARDEN_CREDENTIAL_PATH } else { Join-Path $env:APPDATA "patchwarden\control-plane-api-key.dpapi" }),
   [int]$ReconnectBaseSeconds = 5,
   [int]$ReconnectMaxSeconds = 30,
   [int]$UnreadyRestartSeconds = 90,
@@ -18,12 +18,12 @@ param(
 $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$ConfigPath = Join-Path $ProjectRoot "safe-bifrost.config.json"
-$McpStdioLauncher = Join-Path $ProjectRoot "scripts\safe-bifrost-mcp-stdio.cmd"
+$ConfigPath = Join-Path $ProjectRoot "patchwarden.config.json"
+$McpStdioLauncher = Join-Path $ProjectRoot "scripts\patchwarden-mcp-stdio.cmd"
 $McpStdioLauncherForTunnel = $McpStdioLauncher -replace "\\", "/"
-$OpencodeConfigHome = Join-Path $env:LOCALAPPDATA "safe-bifrost\opencode-config"
+$OpencodeConfigHome = Join-Path $env:LOCALAPPDATA "patchwarden\opencode-config"
 $ProfilePath = Join-Path $env:APPDATA "tunnel-client\$Profile.yaml"
-$RuntimeDirectory = Join-Path $env:LOCALAPPDATA "safe-bifrost\runtime"
+$RuntimeDirectory = Join-Path $env:LOCALAPPDATA "patchwarden\runtime"
 $StatusFile = Join-Path $RuntimeDirectory "tunnel-status.json"
 $HealthUrlFile = Join-Path $RuntimeDirectory "tunnel-health-url.txt"
 $PidFile = Join-Path $RuntimeDirectory "tunnel-client.pid"
@@ -214,9 +214,9 @@ function Stop-OwnedWatcherProcess {
 
 function Start-OwnedWatcherProcess {
   $script:WatcherInstanceId = [Guid]::NewGuid().ToString("n")
-  $env:SAFE_BIFROST_CONFIG = $ConfigPath
-  $env:SAFE_BIFROST_WATCHER_INSTANCE_ID = $script:WatcherInstanceId
-  $env:SAFE_BIFROST_WATCHER_LAUNCHER_PID = [string]$PID
+  $env:PATCHWARDEN_CONFIG = $ConfigPath
+  $env:PATCHWARDEN_WATCHER_INSTANCE_ID = $script:WatcherInstanceId
+  $env:PATCHWARDEN_WATCHER_LAUNCHER_PID = [string]$PID
   $env:XDG_CONFIG_HOME = $OpencodeConfigHome
   if ($OpencodeBin) { $env:PATH = "$OpencodeBin;$env:PATH" }
   $node = (Get-Command node.exe -ErrorAction Stop).Source
@@ -232,7 +232,7 @@ function Start-OwnedWatcherProcess {
   Write-Host "[watch] Started owned watcher PID $($script:WatcherProcess.Id), instance $($script:WatcherInstanceId)."
 }
 
-function Start-SafeBifrostWatcher {
+function Start-PatchWardenWatcher {
   $existing = Get-WatcherHeartbeatState
   if ($existing.Fresh) {
     $script:WatcherManaged = $false
@@ -294,9 +294,9 @@ function Quote-ProcessArgument {
 if ($ForgetSavedApiKey) {
   if (Test-Path -LiteralPath $CredentialPath) {
     Remove-Item -LiteralPath $CredentialPath -Force
-    Write-Host "[ok] Removed saved Safe-Bifrost tunnel API key."
+    Write-Host "[ok] Removed saved PatchWarden tunnel API key."
   } else {
-    Write-Host "[ok] No saved Safe-Bifrost tunnel API key was found."
+    Write-Host "[ok] No saved PatchWarden tunnel API key was found."
   }
   exit 0
 }
@@ -325,8 +325,8 @@ if (-not $OpencodeBin) {
 }
 
 Assert-File -Path $TunnelClientExe -Name "tunnel-client.exe"
-Assert-File -Path $ConfigPath -Name "safe-bifrost.config.json"
-Assert-File -Path $McpStdioLauncher -Name "safe-bifrost-mcp-stdio.cmd"
+Assert-File -Path $ConfigPath -Name "patchwarden.config.json"
+Assert-File -Path $McpStdioLauncher -Name "patchwarden-mcp-stdio.cmd"
 
 if (-not $TunnelId) {
   $TunnelId = Read-Host "Tunnel ID"
@@ -343,7 +343,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot "dist\index.js"))) {
 }
 
 New-Item -ItemType Directory -Force -Path $RuntimeDirectory | Out-Null
-$env:SAFE_BIFROST_CONFIG = $ConfigPath
+$env:PATCHWARDEN_CONFIG = $ConfigPath
 Write-Host "[manifest] Verifying the exact tunnel stdio MCP tool catalog..."
 $manifestOutput = (& node (Join-Path $ProjectRoot "scripts\mcp-manifest-check.js") --json 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0) {
@@ -362,7 +362,7 @@ Write-Host "[manifest] $($script:ToolManifest.server_version) profile=$($script:
 
 Set-SecretEnvIfMissing
 
-$env:SAFE_BIFROST_CONFIG = $ConfigPath
+$env:PATCHWARDEN_CONFIG = $ConfigPath
 $env:HTTP_PROXY = $ProxyUrl
 $env:HTTPS_PROXY = $ProxyUrl
 $env:ALL_PROXY = $ProxyUrl
@@ -384,8 +384,8 @@ if ($profileNeedsInit) {
     --force
 }
 
-$env:SAFE_BIFROST_TUNNEL_STATUS_FILE = $StatusFile
-if (-not $SkipWatcher) { Start-SafeBifrostWatcher }
+$env:PATCHWARDEN_TUNNEL_STATUS_FILE = $StatusFile
+if (-not $SkipWatcher) { Start-PatchWardenWatcher }
 
 Write-Host "[doctor] Checking tunnel-client profile through the configured proxy..."
 $preflightAttempt = 0
@@ -416,7 +416,7 @@ Save-PendingCredential
 
 Write-Host ""
 Write-Host "[run] Starting supervised tunnel-client. Keep this window open."
-Write-Host "[health] Run Check-SafeBifrost-Health.cmd if ChatGPT cannot reach the MCP."
+Write-Host "[health] Run Check-PatchWarden-Health.cmd if ChatGPT cannot reach the MCP."
 Write-Host ""
 
 $attempt = 0

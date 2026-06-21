@@ -268,7 +268,7 @@ export function auditTask(taskId: string): AuditTaskOutput {
     });
     risks.push({
       severity: "high",
-      description: `${allReleaseClaims.length} remote publish/release/deploy claim(s) found in docs. Safe-Bifrost cannot independently verify npm/GitHub actions. Manual confirmation required.`,
+      description: `${allReleaseClaims.length} remote publish/release/deploy claim(s) found in docs. PatchWarden cannot independently verify npm/GitHub actions. Manual confirmation required.`,
     });
     actions.push("Manually verify all npm publish / GitHub release / git tag claims before accepting the task as complete.");
   }

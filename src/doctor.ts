@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Safe-Bifrost Doctor — read-only diagnostic checks
+ * PatchWarden Doctor — read-only diagnostic checks
  *
  * Usage: node dist/doctor.js  or  npm run doctor
  *
@@ -19,7 +19,7 @@ import { guardPlanContent } from "./security/planGuard.js";
 import { TASK_READ_ONLY_FILES } from "./tools/getTaskFile.js";
 import { getToolDefs } from "./tools/registry.js";
 import { CHATGPT_CORE_TOOL_NAMES, selectToolsForProfile } from "./tools/toolCatalog.js";
-import { SAFE_BIFROST_VERSION } from "./version.js";
+import { PATCHWARDEN_VERSION } from "./version.js";
 
 // ── State ──────────────────────────────────────────────────────────
 
@@ -64,7 +64,7 @@ function cmd(cmdStr: string): string {
 
 async function main() {
 
-console.log("Safe-Bifrost Doctor\n");
+console.log("PatchWarden Doctor\n");
 
 // 1. Node version
 const nodeVer = process.version;
@@ -83,8 +83,8 @@ warnCheck("Git available", gitVer !== "",
 
 // 4. Config file exists
 const configPaths = [
-  resolve(process.cwd(), "safe-bifrost.config.json"),
-  process.env.SAFE_BIFROST_CONFIG || "",
+  resolve(process.cwd(), "patchwarden.config.json"),
+  process.env.PATCHWARDEN_CONFIG || "",
 ].filter(Boolean);
 
 let configPathUsed = "";
@@ -95,14 +95,14 @@ for (const p of configPaths) {
 check("Config file exists", configPathUsed !== "",
   configPathUsed
     ? configPathUsed
-    : 'Create one: cp examples/config.example.json safe-bifrost.config.json');
+    : 'Create one: cp examples/config.example.json patchwarden.config.json');
 
-// 5. SAFE_BIFROST_CONFIG env
-if (process.env.SAFE_BIFROST_CONFIG) {
-  results.push(`[OK]   SAFE_BIFROST_CONFIG = ${process.env.SAFE_BIFROST_CONFIG}`);
+// 5. PATCHWARDEN_CONFIG env
+if (process.env.PATCHWARDEN_CONFIG) {
+  results.push(`[OK]   PATCHWARDEN_CONFIG = ${process.env.PATCHWARDEN_CONFIG}`);
   ok++;
 } else {
-  results.push(`[OK]   SAFE_BIFROST_CONFIG not set (using default: safe-bifrost.config.json)`);
+  results.push(`[OK]   PATCHWARDEN_CONFIG not set (using default: patchwarden.config.json)`);
   ok++;
 }
 
@@ -210,14 +210,14 @@ check(
 );
 
 const packageJson = JSON.parse(readFileSync(resolve(process.cwd(), "package.json"), "utf-8"));
-check("Server version matches package.json", packageJson.version === SAFE_BIFROST_VERSION,
-  `${SAFE_BIFROST_VERSION} vs ${packageJson.version}`);
+check("Server version matches package.json", packageJson.version === PATCHWARDEN_VERSION,
+  `${PATCHWARDEN_VERSION} vs ${packageJson.version}`);
 check("Manifest preflight script exists", existsSync(resolve(process.cwd(), "scripts/mcp-manifest-check.js")),
   "scripts/mcp-manifest-check.js");
 
-const previousProfile = process.env.SAFE_BIFROST_TOOL_PROFILE;
+const previousProfile = process.env.PATCHWARDEN_TOOL_PROFILE;
 try {
-  process.env.SAFE_BIFROST_TOOL_PROFILE = "full";
+  process.env.PATCHWARDEN_TOOL_PROFILE = "full";
   const fullTools = getToolDefs();
   const coreTools = selectToolsForProfile(fullTools, "chatgpt_core");
   const createSchema = coreTools.find((tool) => tool.name === "create_task")?.inputSchema as any;
@@ -238,8 +238,8 @@ try {
     )
   );
 } finally {
-  if (previousProfile === undefined) delete process.env.SAFE_BIFROST_TOOL_PROFILE;
-  else process.env.SAFE_BIFROST_TOOL_PROFILE = previousProfile;
+  if (previousProfile === undefined) delete process.env.PATCHWARDEN_TOOL_PROFILE;
+  else process.env.PATCHWARDEN_TOOL_PROFILE = previousProfile;
 }
 
 // 9. HTTP port check
@@ -420,7 +420,7 @@ console.log(`${"=".repeat(50)}`);
 
 if (fail > 0) {
   console.log("\n❌ Doctor found issues that need attention.");
-  console.log("   Fix FAIL items before using Safe-Bifrost.");
+  console.log("   Fix FAIL items before using PatchWarden.");
   process.exit(1);
 } else if (warn > 0) {
   console.log("\n⚠️  Doctor found warnings — review before production use.");

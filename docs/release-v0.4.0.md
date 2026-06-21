@@ -1,14 +1,18 @@
-# Safe-Bifrost v0.4.0
+# PatchWarden v0.4.0
 
-Safe-Bifrost v0.4.0 hardens the ChatGPT-to-local-agent task loop without
+PatchWarden v0.4.0 hardens the ChatGPT-to-local-agent task loop without
 weakening workspace, command, or sensitive-file boundaries.
+
+This release also completes the project rename from Safe-Bifrost to
+PatchWarden. The npm package is now `patchwarden`; the old package is retained
+only to point existing users to the new name.
 
 ## Highlights
 
 - Adds supervised Windows tunnel recovery with local readiness probes,
   structured failure categories, capped retry backoff, and redacted runtime
-  state under `%LOCALAPPDATA%\safe-bifrost\runtime`.
-- Adds `Check-SafeBifrost-Health.cmd` for diagnostics when the MCP tunnel itself
+  state under `%LOCALAPPDATA%\patchwarden\runtime`.
+- Adds `Check-PatchWarden-Health.cmd` for diagnostics when the MCP tunnel itself
   is unreachable.
 - Expands `health_check` with workspace, tasks directory, watcher, agent, tunnel,
   and last-error evidence; local HTTP `/healthz` and `/readyz` are also available.
@@ -39,13 +43,18 @@ weakening workspace, command, or sensitive-file boundaries.
   responses, and controlled recovery for launcher-owned watcher processes.
 - Reports stale client catalogs as `tool_catalog_mismatch` with the active
   profile, schema epoch, manifest hash, and Connector refresh guidance.
+- Fixes a plan-guard bypass where generic security wording could suppress a
+  later credential-access instruction. Every dangerous occurrence is now
+  evaluated independently and only directly negated actions are allowed.
 
 ## Compatibility
 
-Existing `save_plan` followed by `create_task(plan_id, ...)` calls continue to
-work. `repo_path`, configured agent validation, and exact verification-command
-allowlists remain mandatory. No template can publish, push, commit, expose
-credentials, or expand execution outside the resolved repository.
+The MCP tool names and `save_plan` -> `create_task` workflow remain stable, but
+the product rename is intentionally breaking: old CLI names, `SAFE_BIFROST_*`
+variables, `safe-bifrost.config.json`, `.safe-bifrost/`, and legacy AppData
+paths are not loaded. Follow the migration guide before replacing an existing
+installation. `repo_path`, configured agent validation, and exact
+verification-command allowlists remain mandatory.
 
 ## Verification
 
@@ -57,6 +66,7 @@ npm.cmd run test:mcp
 npm.cmd run test:http-mcp
 npm.cmd run doctor
 npm.cmd run check:tool-manifest
+npm.cmd run check:brand
 npm.cmd run test:tunnel-supervisor
 npm.cmd run test:watcher-supervisor
 npm.cmd run pack:clean

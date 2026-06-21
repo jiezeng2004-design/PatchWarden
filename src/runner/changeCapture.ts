@@ -14,7 +14,7 @@ import { isSensitivePath } from "../security/sensitiveGuard.js";
 const MAX_HASH_BYTES = 5 * 1024 * 1024;
 const MAX_SNAPSHOT_FILES = 5000;
 const MAX_DIFF_BYTES = 20 * 1024 * 1024;
-const SKIP_DIRECTORIES = new Set([".git", ".safe-bifrost", "node_modules"]);
+const SKIP_DIRECTORIES = new Set([".git", ".patchwarden", "node_modules"]);
 
 export interface FileFingerprint {
   size: number;
@@ -93,7 +93,7 @@ export function captureRepoSnapshot(repoPath: string): RepoSnapshot {
   const files: Record<string, FileFingerprint> = {};
   for (const inputPath of paths.sort()) {
     const normalized = inputPath.replace(/\\/g, "/");
-    if (!normalized || normalized.startsWith(".safe-bifrost/") || isSensitivePath(normalized)) continue;
+    if (!normalized || normalized.startsWith(".patchwarden/") || isSensitivePath(normalized)) continue;
     const absolutePath = resolve(repoPath, inputPath);
     try {
       const stat = lstatSync(absolutePath);
@@ -150,7 +150,7 @@ export function buildChangeArtifacts(
   }
 
   const evidence = [
-    "# Safe-Bifrost change evidence",
+    "# PatchWarden change evidence",
     `# changed_files: ${changedFiles.length}`,
     `# workspace_dirty_before: ${before.workspace_dirty}`,
     `# workspace_dirty_after: ${after.workspace_dirty}`,

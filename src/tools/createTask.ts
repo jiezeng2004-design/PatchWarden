@@ -5,7 +5,7 @@ import { getTasksDir, getPlansDir, getConfig } from "../config.js";
 import { guardPath, guardWorkspacePath, guardReadPath } from "../security/pathGuard.js";
 import { guardTestCommand } from "../security/commandGuard.js";
 import { writeTaskProgress } from "../taskProgress.js";
-import { SafeBifrostError } from "../errors.js";
+import { PatchWardenError } from "../errors.js";
 import { savePlan } from "./savePlan.js";
 import {
   expandTaskTemplate,
@@ -13,7 +13,7 @@ import {
   type ChangePolicy,
   type TaskTemplateName,
 } from "./taskTemplates.js";
-import { SAFE_BIFROST_VERSION } from "../version.js";
+import { PATCHWARDEN_VERSION } from "../version.js";
 import { getLastToolCatalogSnapshot, resolveToolProfile } from "./toolCatalog.js";
 import {
   derivePendingReason,
@@ -96,14 +96,14 @@ export function createTask(input: CreateTaskInput): CreateTaskOutput {
     input.template ? "template" : "",
   ].filter(Boolean);
   if (planSources.length !== 1) {
-    throw new SafeBifrostError(
+    throw new PatchWardenError(
       "invalid_plan_source",
       "create_task requires exactly one of plan_id, inline_plan, or template.",
       "Use an existing plan_id, pass inline_plan text, or choose one built-in template."
     );
   }
   if (input.template && !TASK_TEMPLATE_NAMES.includes(input.template)) {
-    throw new SafeBifrostError(
+    throw new PatchWardenError(
       "invalid_task_template",
       `Unknown task template "${input.template}".`,
       `Use one of: ${TASK_TEMPLATE_NAMES.join(", ")}.`
@@ -118,9 +118,9 @@ export function createTask(input: CreateTaskInput): CreateTaskOutput {
   }
 
   if (!resolvedRepoPath || resolvedRepoPath === "") {
-    throw new SafeBifrostError(
+    throw new PatchWardenError(
       "repo_path_required",
-      "create_task requires an explicit repo_path; Safe-Bifrost will not default to workspaceRoot.",
+      "create_task requires an explicit repo_path; PatchWarden will not default to workspaceRoot.",
       'Pass a repository path inside workspaceRoot, for example repo_path: "my-project".',
       true,
       { operation: "create_task", safe_alternative: "Pass an existing repository directory under workspaceRoot." }
@@ -129,7 +129,7 @@ export function createTask(input: CreateTaskInput): CreateTaskOutput {
 
   // Validate agent
   if (!config.agents[input.agent]) {
-    throw new SafeBifrostError(
+    throw new PatchWardenError(
       "agent_not_configured",
       `Unknown agent "${input.agent}". Available: ${Object.keys(config.agents).join(", ")}`,
       "Call list_agents and use an available configured agent."
@@ -142,7 +142,7 @@ export function createTask(input: CreateTaskInput): CreateTaskOutput {
     config.workspaceRoot
   );
   if (!existsSync(safeRepoPath)) {
-    throw new SafeBifrostError(
+    throw new PatchWardenError(
       "repo_path_not_found",
       `repo_path "${resolvedRepoPath}" resolves to "${safeRepoPath}", but that path does not exist.`,
       "Create the repository directory first or pass an existing path under workspaceRoot.",
@@ -151,7 +151,7 @@ export function createTask(input: CreateTaskInput): CreateTaskOutput {
     );
   }
   if (!statSync(safeRepoPath).isDirectory()) {
-    throw new SafeBifrostError(
+    throw new PatchWardenError(
       "repo_path_not_directory",
       `repo_path "${resolvedRepoPath}" resolves to a file, not a directory.`,
       "Pass the repository directory instead of a file path.",
@@ -161,7 +161,7 @@ export function createTask(input: CreateTaskInput): CreateTaskOutput {
   }
 
   // Runtime self-modification protection: refuse to modify the active
-  // Safe-Bifrost runtime directory or its critical subdirectories.
+  // PatchWarden runtime directory or its critical subdirectories.
   const runtimeRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const criticalDirs = ["dist", "src", "scripts", "release"];
   if (safeRepoPath === runtimeRoot || safeRepoPath.startsWith(runtimeRoot + resolve("/")[0])) {
@@ -170,17 +170,17 @@ export function createTask(input: CreateTaskInput): CreateTaskOutput {
       safeRepoPath.startsWith(join(runtimeRoot, dir) + resolve("/")[0])
     );
     if (safeRepoPath === runtimeRoot || isCritical) {
-      throw new SafeBifrostError(
+      throw new PatchWardenError(
         "runtime_self_modification_blocked",
-        `repo_path "${resolvedRepoPath}" points to the active Safe-Bifrost runtime or its critical subdirectories.`,
-        "Use a dev copy or git worktree for Safe-Bifrost development. The running MCP server must not be modified by a task.",
+        `repo_path "${resolvedRepoPath}" points to the active PatchWarden runtime or its critical subdirectories.`,
+        "Use a dev copy or git worktree for PatchWarden development. The running MCP server must not be modified by a task.",
         true,
         {
           operation: "create_task",
           path: resolvedRepoPath,
           resolved_repo_path: safeRepoPath,
           runtime_root: runtimeRoot,
-          safe_alternative: "Clone or copy Safe-Bifrost to a separate directory for development tasks.",
+          safe_alternative: "Clone or copy PatchWarden to a separate directory for development tasks.",
         }
       );
     }
@@ -194,14 +194,14 @@ export function createTask(input: CreateTaskInput): CreateTaskOutput {
   }
 
   if (input.verify_commands !== undefined && !Array.isArray(input.verify_commands)) {
-    throw new SafeBifrostError(
+    throw new PatchWardenError(
       "invalid_verify_commands",
       "verify_commands must be an array of allow-listed command strings.",
       "Pass an array such as [\"npm test\", \"npm run build\"]."
     );
   }
   if ((input.verify_commands?.length || 0) > 20) {
-    throw new SafeBifrostError(
+    throw new PatchWardenError(
       "invalid_verify_commands",
       "verify_commands cannot contain more than 20 commands.",
       "Keep verification focused and use no more than 20 allow-listed commands."
@@ -214,14 +214,14 @@ export function createTask(input: CreateTaskInput): CreateTaskOutput {
 
   const timeoutSeconds = input.timeout_seconds ?? config.defaultTaskTimeoutSeconds;
   if (!Number.isInteger(timeoutSeconds) || timeoutSeconds <= 0) {
-    throw new SafeBifrostError(
+    throw new PatchWardenError(
       "invalid_timeout",
       "timeout_seconds must be a positive integer",
       `Use a whole number from 1 to ${config.maxTaskTimeoutSeconds}.`
     );
   }
   if (timeoutSeconds > config.maxTaskTimeoutSeconds) {
-    throw new SafeBifrostError(
+    throw new PatchWardenError(
       "invalid_timeout",
       `timeout_seconds cannot exceed configured maximum ${config.maxTaskTimeoutSeconds}`,
       `Use a value no greater than ${config.maxTaskTimeoutSeconds}.`
@@ -235,7 +235,7 @@ export function createTask(input: CreateTaskInput): CreateTaskOutput {
     const planFile = join(resolve(plansDir, planId), "plan.md");
     guardReadPath(planFile, config.workspaceRoot, config.plansDir);
     if (!existsSync(planFile)) {
-      throw new SafeBifrostError(
+      throw new PatchWardenError(
         "plan_not_found",
         `Plan "${planId}" not found.`,
         "Call save_plan first, or pass inline_plan/template directly to create_task."
@@ -321,7 +321,7 @@ export function createTask(input: CreateTaskInput): CreateTaskOutput {
     plan_source: planSource,
     ...(input.template ? { template: input.template } : {}),
     change_policy: changePolicy,
-    server_version: SAFE_BIFROST_VERSION,
+    server_version: PATCHWARDEN_VERSION,
     tool_profile: catalog?.tool_profile || resolveToolProfile(config.toolProfile),
     tool_manifest_sha256: catalog?.tool_manifest_sha256 || null,
     execution_blocked: !watcher.available,

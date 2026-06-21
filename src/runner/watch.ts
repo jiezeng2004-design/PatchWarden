@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Safe-Bifrost Watcher
+ * PatchWarden Watcher
  *
- * Polls .safe-bifrost/tasks/ for pending tasks and executes them automatically.
+ * Polls .patchwarden/tasks/ for pending tasks and executes them automatically.
  * This is the recommended way to run tasks — ChatGPT creates tasks,
  * the watcher picks them up and runs them locally.
  *
@@ -34,9 +34,9 @@ const wsRoot = resolveWorkspaceRoot(config);
 const POLL_INTERVAL_MS = 4000;
 const WATCHER_HEARTBEAT_FILE = join(dirname(tasksDir), "watcher-heartbeat.json");
 const WATCHER_STARTED_AT = new Date().toISOString();
-const WATCHER_INSTANCE_ID = process.env.SAFE_BIFROST_WATCHER_INSTANCE_ID || `standalone-${process.pid}-${Date.now()}`;
-const WATCHER_LAUNCHER_PID = Number.isInteger(Number(process.env.SAFE_BIFROST_WATCHER_LAUNCHER_PID))
-  ? Number(process.env.SAFE_BIFROST_WATCHER_LAUNCHER_PID)
+const WATCHER_INSTANCE_ID = process.env.PATCHWARDEN_WATCHER_INSTANCE_ID || `standalone-${process.pid}-${Date.now()}`;
+const WATCHER_LAUNCHER_PID = Number.isInteger(Number(process.env.PATCHWARDEN_WATCHER_LAUNCHER_PID))
+  ? Number(process.env.PATCHWARDEN_WATCHER_LAUNCHER_PID)
   : null;
 mkdirSync(dirname(WATCHER_HEARTBEAT_FILE), { recursive: true });
 

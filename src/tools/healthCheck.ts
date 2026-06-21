@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { getConfig, getTasksDir, resolveWorkspaceRoot } from "../config.js";
 import { listAgents } from "./listAgents.js";
 import { redactSensitiveContent, redactSensitiveValue } from "../security/contentRedaction.js";
-import { SAFE_BIFROST_VERSION, TOOL_SCHEMA_EPOCH } from "../version.js";
+import { PATCHWARDEN_VERSION, TOOL_SCHEMA_EPOCH } from "../version.js";
 import type { ToolCatalogSnapshot } from "./toolCatalog.js";
 import { CHATGPT_CORE_TOOL_NAMES, resolveToolProfile } from "./toolCatalog.js";
 import { readWatcherStatus } from "../watcherStatus.js";
@@ -78,7 +78,7 @@ export function healthCheck(catalog?: ToolCatalogSnapshot, input: HealthCheckInp
     : "degraded";
   return {
     status,
-    server_version: catalog?.server_version || SAFE_BIFROST_VERSION,
+    server_version: catalog?.server_version || PATCHWARDEN_VERSION,
     schema_epoch: catalog?.schema_epoch || TOOL_SCHEMA_EPOCH,
     tool_profile: catalog?.tool_profile || "unknown",
     tool_count: catalog?.tool_count ?? null,
@@ -93,7 +93,7 @@ export function healthCheck(catalog?: ToolCatalogSnapshot, input: HealthCheckInp
       status: "not_observable_server_side",
       verification: "Refresh or reconnect the Connector and verify tools/list from a new ChatGPT conversation.",
       refresh_steps: [
-        "1. Run Check-SafeBifrost-Health.cmd to confirm tool_profile=chatgpt_core, tool_count=16, and catalog_consistent=true.",
+        "1. Run Check-PatchWarden-Health.cmd to confirm tool_profile=chatgpt_core, tool_count=16, and catalog_consistent=true.",
         "2. In ChatGPT Platform, refresh or reconnect the Connector (do not reuse an old session).",
         "3. Open a NEW ChatGPT conversation (old conversations retain their cached tool catalog).",
         "4. Call health_check in the new conversation; verify tool_manifest_sha256 matches the local report.",
@@ -146,8 +146,8 @@ function buildSelfDiagnostic(config: ReturnType<typeof getConfig>) {
 
 function readWatcherSupervisorStatus(): Record<string, unknown> {
   const runtimeRoot = process.platform === "win32" && process.env.LOCALAPPDATA
-    ? join(process.env.LOCALAPPDATA, "safe-bifrost", "runtime")
-    : join(homedir(), ".safe-bifrost", "runtime");
+    ? join(process.env.LOCALAPPDATA, "patchwarden", "runtime")
+    : join(homedir(), ".patchwarden", "runtime");
   const path = join(runtimeRoot, "watcher-status.json");
   if (!existsSync(path)) return { observed: false, managed: false };
   try {
@@ -193,8 +193,8 @@ function directoryStatus(path: string, allowCreatable: boolean, createRoot?: str
 
 function readTunnelStatus(): Record<string, unknown> & { last_error: string | null } {
   const runtimeRoot = process.platform === "win32" && process.env.LOCALAPPDATA
-    ? join(process.env.LOCALAPPDATA, "safe-bifrost", "runtime")
-    : join(homedir(), ".safe-bifrost", "runtime");
+    ? join(process.env.LOCALAPPDATA, "patchwarden", "runtime")
+    : join(homedir(), ".patchwarden", "runtime");
   const statusFile = join(runtimeRoot, "tunnel-status.json");
   if (!existsSync(statusFile)) {
     return { observed: false, status: "not_observed", last_error: null };

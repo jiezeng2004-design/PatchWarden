@@ -15,9 +15,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const tempRoot = mkdtempSync(join(tmpdir(), "safe-bifrost-mcp-"));
+const tempRoot = mkdtempSync(join(tmpdir(), "patchwarden-mcp-"));
 const workspaceRoot = join(tempRoot, "workspace");
-const configPath = join(tempRoot, "safe-bifrost.config.json");
+const configPath = join(tempRoot, "patchwarden.config.json");
 
 let failures = 0;
 
@@ -41,8 +41,8 @@ async function expectToolError(client, name, args, label) {
 try {
   writeFileSync(join(tempRoot, ".keep"), "");
   mkdirSync(workspaceRoot, { recursive: true });
-  mkdirSync(join(workspaceRoot, ".safe-bifrost"), { recursive: true });
-  writeFileSync(join(workspaceRoot, ".safe-bifrost", "watcher-heartbeat.json"), JSON.stringify({
+  mkdirSync(join(workspaceRoot, ".patchwarden"), { recursive: true });
+  writeFileSync(join(workspaceRoot, ".patchwarden", "watcher-heartbeat.json"), JSON.stringify({
     status: "running",
     pid: process.pid,
     instance_id: "mcp-smoke-watcher",
@@ -55,7 +55,7 @@ try {
   writeFileSync(
     join(workspaceRoot, "package.json"),
     JSON.stringify({
-      name: "safe-bifrost-mcp-smoke-fixture",
+      name: "patchwarden-mcp-smoke-fixture",
       private: true,
       scripts: { test: "node -e \"console.log('test ok')\"" },
     }, null, 2),
@@ -67,8 +67,8 @@ try {
     JSON.stringify(
       {
         workspaceRoot,
-        plansDir: ".safe-bifrost/plans",
-        tasksDir: ".safe-bifrost/tasks",
+        plansDir: ".patchwarden/plans",
+        tasksDir: ".patchwarden/tasks",
         agents: {
           codex: {
             command: "node",
@@ -88,11 +88,11 @@ try {
     command: "node",
     args: ["dist/index.js"],
     cwd: root,
-    env: { SAFE_BIFROST_CONFIG: configPath },
+    env: { PATCHWARDEN_CONFIG: configPath },
     stderr: "pipe",
   });
   const client = new Client(
-    { name: "safe-bifrost-smoke", version: "0.1.0" },
+    { name: "patchwarden-smoke", version: "0.1.0" },
     { capabilities: {} }
   );
 
@@ -276,7 +276,7 @@ try {
 
   const runner = spawnSync("node", ["dist/runner/cli.js", task.task_id], {
     cwd: root,
-    env: { ...process.env, SAFE_BIFROST_CONFIG: configPath },
+    env: { ...process.env, PATCHWARDEN_CONFIG: configPath },
     encoding: "utf-8",
     timeout: 30000,
   });
@@ -316,7 +316,7 @@ try {
   if (!redactedResult.redacted || redactedResult.content.includes("real-secret-value-123456")) {
     throw new Error(`get_result did not redact secret-like content: ${JSON.stringify(redactedResult)}`);
   }
-  const relativeResultPath = `.safe-bifrost/tasks/${task.task_id}/result.md`;
+  const relativeResultPath = `.patchwarden/tasks/${task.task_id}/result.md`;
   const redactedWorkspaceRead = await parseToolJson("read_workspace_file", { path: relativeResultPath });
   if (!redactedWorkspaceRead.redacted || redactedWorkspaceRead.content.includes("real-secret-value-123456")) {
     throw new Error(`read_workspace_file did not redact task artifact: ${JSON.stringify(redactedWorkspaceRead)}`);

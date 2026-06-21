@@ -1,14 +1,14 @@
-# Safe-Bifrost Demo
+# PatchWarden Demo
 
 This is a privacy-safe demo flow for GitHub. It uses placeholder workspace
 names and avoids real tunnel IDs, account names, API keys, or local user paths.
 
 ## Demo: ChatGPT Lists A Workspace
 
-Prompt in ChatGPT with the Safe-Bifrost connector selected:
+Prompt in ChatGPT with the PatchWarden connector selected:
 
 ```text
-Use the safe-bifrost tool list_workspace to list the configured workspace.
+Use the patchwarden tool list_workspace to list the configured workspace.
 ```
 
 Expected response shape:
@@ -22,14 +22,14 @@ Workspace files:
 | package.json | file | ...  |
 ```
 
-![Safe-Bifrost ChatGPT connector demo](assets/safe-bifrost-chatgpt-demo.svg)
+![PatchWarden ChatGPT connector demo](assets/patchwarden-chatgpt-demo.svg)
 
 ## Demo: Plan And Execute
 
 Prompt in ChatGPT:
 
 ```text
-Use safe-bifrost to:
+Use patchwarden to:
 1. read README.md
 2. save a plan that appends a Usage section
 3. create a task with an explicit repo_path and verify_commands
@@ -40,10 +40,10 @@ Use safe-bifrost to:
 Expected artifacts under the configured workspace:
 
 ```text
-.safe-bifrost/tasks/<task_id>/status.json
-.safe-bifrost/tasks/<task_id>/result.md
-.safe-bifrost/tasks/<task_id>/git.diff
-.safe-bifrost/tasks/<task_id>/test.log
+.patchwarden/tasks/<task_id>/status.json
+.patchwarden/tasks/<task_id>/result.md
+.patchwarden/tasks/<task_id>/git.diff
+.patchwarden/tasks/<task_id>/test.log
 ```
 
 ## Privacy Notes
@@ -54,5 +54,5 @@ Do not publish:
 - real tunnel IDs
 - ChatGPT account names or workspace IDs
 - screenshots containing sidebars with private chat/project names
-- `safe-bifrost.config.json`
-- `.safe-bifrost/` task history from private workspaces
+- `patchwarden.config.json`
+- `.patchwarden/` task history from private workspaces

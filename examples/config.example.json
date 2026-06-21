@@ -1,7 +1,7 @@
 {
   "workspaceRoot": "D:/path/to/test-project",
-  "plansDir": ".safe-bifrost/plans",
-  "tasksDir": ".safe-bifrost/tasks",
+  "plansDir": ".patchwarden/plans",
+  "tasksDir": ".patchwarden/tasks",
   "toolProfile": "full",
   "agents": {
     "codex": {

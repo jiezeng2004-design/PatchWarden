@@ -11,7 +11,7 @@ if (process.platform !== "win32") {
 }
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const temp = mkdtempSync(join(tmpdir(), "safe-bifrost-tunnel-smoke-"));
+const temp = mkdtempSync(join(tmpdir(), "patchwarden-tunnel-smoke-"));
 const mockJs = join(temp, "mock-tunnel-client.js");
 const mockCmd = join(temp, "mock-tunnel-client.cmd");
 const stateFile = join(temp, "attempt.txt");
@@ -47,7 +47,7 @@ if(command==='run'){
     MOCK_TUNNEL_STATE: stateFile,
   };
   const result = spawnSync("powershell.exe", [
-    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(root, "scripts", "start-safe-bifrost-tunnel.ps1"),
+    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(root, "scripts", "start-patchwarden-tunnel.ps1"),
     "-TunnelId", "tunnel_smoke_fixture",
     "-TunnelClientExe", mockCmd,
     "-ProxyUrl", "http://127.0.0.1:1",
@@ -62,7 +62,7 @@ if(command==='run'){
   if (!existsSync(stateFile) || readFileSync(stateFile, "utf-8").trim() !== "2") {
     throw new Error(`Expected two supervised attempts. stdout=${result.stdout} stderr=${result.stderr}`);
   }
-  const statusPath = join(env.LOCALAPPDATA, "safe-bifrost", "runtime", "tunnel-status.json");
+  const statusPath = join(env.LOCALAPPDATA, "patchwarden", "runtime", "tunnel-status.json");
   const status = JSON.parse(readFileSync(statusPath, "utf-8").replace(/^\uFEFF/, ""));
   if (status.reason_code !== "retry_limit_reached" || status.attempt !== 2) {
     throw new Error(`Unexpected final supervisor status: ${JSON.stringify(status)}`);
