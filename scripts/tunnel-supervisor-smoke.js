@@ -39,11 +39,12 @@ if(command==='health'){console.log(JSON.stringify({healthz:{ok:true},readyz:{ok:
 if(command==='run'){
   let attempt=0;try{attempt=Number(fs.readFileSync(process.env.MOCK_TUNNEL_STATE,'utf8'))||0}catch{}
   attempt++;fs.writeFileSync(process.env.MOCK_TUNNEL_STATE,String(attempt));
-  if(attempt===1)process.exit(7);
+  console.log('fixture cwd='+process.cwd());
+  if(attempt===1){console.error('fixture first attempt failed');process.exit(7)}
   const urlFile=flag('--health.url-file');const pidFile=flag('--pid.file');
   const server=http.createServer((req,res)=>{res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({ok:true}))});
   server.listen(18888,'127.0.0.1',()=>{fs.writeFileSync(urlFile,'http://127.0.0.1:18888');fs.writeFileSync(pidFile,String(process.pid))});
-  setTimeout(()=>server.close(()=>process.exit(9)),6500);
+  setTimeout(()=>server.close(()=>{for(let i=1;i<=35;i++)console.error('fixture stderr line '+i);console.error('CONTROL_PLANE_API_KEY='+process.env.CONTROL_PLANE_API_KEY);process.exit(9)}),6500);
 }
 `, "utf-8");
 
@@ -69,6 +70,7 @@ if(command==='run'){
   ], { cwd: root, env, encoding: "utf-8", timeout: 30_000 });
 
   if (result.error) throw result.error;
+  const launcherOutput = `${result.stdout}\n${result.stderr}`;
   if (!existsSync(stateFile) || readFileSync(stateFile, "utf-8").trim() !== "2") {
     throw new Error(`Expected two supervised attempts. stdout=${result.stdout} stderr=${result.stderr}`);
   }
@@ -77,11 +79,31 @@ if(command==='run'){
   if (status.reason_code !== "retry_limit_reached" || status.attempt !== 2) {
     throw new Error(`Unexpected final supervisor status: ${JSON.stringify(status)}`);
   }
+  if (status.last_exit_code !== 9 || !Array.isArray(status.stderr_tail) || status.stderr_tail.length !== 30) {
+    throw new Error(`Supervisor did not preserve the latest exit diagnostics: ${JSON.stringify(status)}\n${launcherOutput}`);
+  }
+  if (!status.stdout_log?.endsWith("tunnel-client.stdout.log") || !status.stderr_log?.endsWith("tunnel-client.stderr.log")) {
+    throw new Error(`Supervisor log paths are missing: ${JSON.stringify(status)}`);
+  }
+  if (!existsSync(status.stdout_log) || !existsSync(status.stderr_log)) {
+    throw new Error(`Supervisor log files were not created: ${JSON.stringify(status)}`);
+  }
+  const stdoutLog = readFileSync(status.stdout_log, "utf-8").replace(/^\uFEFF/, "");
+  const stderrLog = readFileSync(status.stderr_log, "utf-8").replace(/^\uFEFF/, "");
+  if (!stdoutLog.includes(`fixture cwd=${root}`)) {
+    throw new Error(`Tunnel child did not inherit the project working directory: ${stdoutLog}`);
+  }
+  if (!stderrLog.includes("fixture stderr line 35") || !stderrLog.includes("[REDACTED]")) {
+    throw new Error(`Supervisor stderr log was not captured and sanitized: ${stderrLog}`);
+  }
   const serialized = JSON.stringify(status);
-  if (serialized.includes(secretMarker) || serialized.includes("tunnel_smoke_fixture")) {
+  if (serialized.includes(secretMarker) || launcherOutput.includes(secretMarker) || stdoutLog.includes(secretMarker) || stderrLog.includes(secretMarker) || serialized.includes("tunnel_smoke_fixture")) {
     throw new Error("Supervisor status leaked credential or tunnel identifier material");
   }
-  console.log("ok - tunnel supervisor retries, probes readiness, and writes redacted status");
+  if (!launcherOutput.includes("[error] stderr tail:") || !launcherOutput.includes("fixture stderr line 35")) {
+    throw new Error(`Supervisor did not print the stderr tail: ${launcherOutput}`);
+  }
+  console.log("ok - tunnel supervisor captures logs, redacts tails, fixes cwd, retries, and writes structured status");
 } finally {
   rmSync(temp, { recursive: true, force: true });
 }

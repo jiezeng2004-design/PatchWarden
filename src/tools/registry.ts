@@ -8,7 +8,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { getConfig } from "../config.js";
+import { getAllConfiguredTestCommands, getAllConfiguredDirectCommands, getConfig } from "../config.js";
 import { savePlan } from "../tools/savePlan.js";
 import { getPlan } from "../tools/getPlan.js";
 import { createTask } from "../tools/createTask.js";
@@ -29,6 +29,12 @@ import { waitForTask } from "../tools/waitForTask.js";
 import { errorPayload, PatchWardenError } from "../errors.js";
 import { auditTask } from "../tools/auditTask.js";
 import { runTask } from "../runner/runTask.js";
+import { createDirectSession } from "../tools/createDirectSession.js";
+import { searchWorkspace } from "../tools/searchWorkspace.js";
+import { applyPatch } from "../tools/applyPatch.js";
+import { runVerification } from "../tools/runVerification.js";
+import { finalizeDirectSession } from "../tools/finalizeDirectSession.js";
+import { auditSession } from "../tools/auditSession.js";
 import { TASK_TEMPLATE_NAMES } from "./taskTemplates.js";
 import {
   buildToolCatalogSnapshot,
@@ -56,19 +62,19 @@ export function getToolDefs(): ToolDef[] {
   const agentDescription = agentNames.length > 0
     ? `Configured local agent name. Available agents: ${agentNames.map((name) => JSON.stringify(name)).join(", ")}`
     : "Configured local agent name. No agents are currently configured.";
-  const testCommands = [...config.allowedTestCommands].sort();
+  const testCommands = getAllConfiguredTestCommands(config).sort();
   const tools: ToolDef[] = [
     {
       name: "save_plan",
       description:
-        "Save an execution plan — ChatGPT writes the plan, PatchWarden stores it for local agent execution.",
+        "Save an execution plan — ChatGPT writes the plan, PatchWarden stores it for local agent execution. Supports plan_ref to load a plan file already placed inside .patchwarden/plans.",
       inputSchema: {
         type: "object",
         properties: {
-          title: { type: "string", description: "Plan title" },
-          content: { type: "string", description: "Plan content in Markdown" },
+          title: { type: "string", description: "Plan title. Defaults to 'Inline plan' or 'Plan from file' when omitted." },
+          content: { type: "string", description: "Plan content in Markdown. Required unless plan_ref is provided." },
+          plan_ref: { type: "string", description: "Relative path to a plan file already inside .patchwarden/plans. When provided, the file content is loaded and title defaults to 'Plan from file' if title is empty." },
         },
-        required: ["title", "content"],
       },
     },
     {
@@ -110,7 +116,7 @@ export function getToolDefs(): ToolDef[] {
     {
       name: "create_task",
       description:
-        "Create a repo-scoped task from exactly one source. A stale watcher preserves the task but returns execution_blocked and directs the client to health_check; otherwise call wait_for_task until terminal.",
+        "Create a repo-scoped task from exactly one source. For ChatGPT, prefer the guarded inspect_only, feature_small, or fix_tests template when it fits. A stale watcher preserves the task but returns execution_blocked and directs the client to health_check; otherwise call wait_for_task until terminal. Use execution_mode=assess_only to pre-assess risk and get an assessment_id without creating a task; then invoke the returned next_tool_call using only execution_mode=execute and the full assessment_id.",
       inputSchema: {
         type: "object",
         properties: {
@@ -120,7 +126,7 @@ export function getToolDefs(): ToolDef[] {
           template: {
             type: "string",
             enum: [...TASK_TEMPLATE_NAMES],
-            description: "Built-in guarded task template. Use with goal; rollback_scope_violation also requires source_task_id.",
+            description: "Built-in guarded task template. ChatGPT should prefer inspect_only for diagnosis, feature_small for a scoped change, and fix_tests for known failing verification. Use with goal; rollback_scope_violation also requires source_task_id.",
           },
           goal: { type: "string", description: "Required task goal when template is supplied." },
           source_task_id: { type: "string", description: "Required source task for rollback_scope_violation review." },
@@ -147,7 +153,7 @@ export function getToolDefs(): ToolDef[] {
               type: "string",
               ...(testCommands.length > 0 ? { enum: testCommands } : {}),
             },
-            description: "Recommended allow-listed commands PatchWarden runs independently after the agent exits.",
+            description: "Recommended exact-match commands PatchWarden runs independently after the agent exits. Repository-scoped commands are re-authorized after repo_path is resolved.",
           },
           timeout_seconds: {
             type: "integer",
@@ -156,8 +162,18 @@ export function getToolDefs(): ToolDef[] {
             default: config.defaultTaskTimeoutSeconds,
             description: `Total task timeout in seconds (default ${config.defaultTaskTimeoutSeconds}, max ${config.maxTaskTimeoutSeconds})`,
           },
+          execution_mode: {
+            type: "string",
+            enum: ["assess_only", "execute"],
+            default: "execute",
+            description: "assess_only: run deterministic risk checks and return an assessment_id without creating a task. execute (default): create and queue the task. When combined with assessment_id, the task parameters are loaded from the assessment record and freshness is revalidated.",
+          },
+          assessment_id: {
+            type: "string",
+            description: "Assessment ID from a prior assess_only call. When provided with execution_mode=execute, task parameters are loaded from the assessment record and locked to it. The full 128-bit ID (32 hex chars) must be provided; short IDs are display-only.",
+          },
         },
-        required: ["agent", "repo_path"],
+        required: [],
       },
     },
     {
@@ -232,13 +248,17 @@ export function getToolDefs(): ToolDef[] {
     {
       name: "read_workspace_file",
       description:
-        "Read a file within the workspace. Sensitive files (secrets, keys, tokens) are blocked.",
+        "Read a file within the workspace. Sensitive files (secrets, keys, tokens) are blocked. In Direct mode (with session_id), reads are scoped to the session's repo_path and return sha256.",
       inputSchema: {
         type: "object",
         properties: {
           path: {
             type: "string",
-            description: "Relative path to a file inside the workspace",
+            description: "Relative path to a file inside the workspace or session repo",
+          },
+          session_id: {
+            type: "string",
+            description: "Optional Direct session ID. When provided, read scope is limited to the session's repo_path and sha256 is returned.",
           },
         },
         required: ["path"],
@@ -372,11 +392,13 @@ export function getToolDefs(): ToolDef[] {
     {
       name: "get_task_summary",
       description:
-        "Return one structured acceptance summary: terminal status, scope violations, verification evidence, changed files, artifact availability, warnings, and errors.",
+        "Return structured acceptance evidence. Use view=compact first for bounded counts and risk excerpts; use standard only when full changed-file and log-tail detail is required.",
       inputSchema: {
         type: "object",
         properties: {
           task_id: { type: "string", description: "Task ID" },
+          view: { type: "string", enum: ["compact", "standard"], default: "standard", description: "Compact returns bounded acceptance evidence; standard preserves the full legacy summary." },
+          max_items: { type: "integer", minimum: 1, maximum: 50, default: 8, description: "Maximum entries per compact evidence group." },
         },
         required: ["task_id"],
       },
@@ -384,7 +406,7 @@ export function getToolDefs(): ToolDef[] {
     {
       name: "audit_task",
       description:
-        "Independently audit a task's outputs. Verifies status, result.md, test.log, git.diff, repo_path consistency, cross-references agent claims with package.json scripts, and flags unverified release/publish claims. Writes independent-review.md to the task directory.",
+        "Independently audit a task's outputs. Verifies status, result.md, test.log, git.diff, repo_path consistency, cross-references agent claims with package.json scripts, and flags unverified release/publish claims. Evidence-backed failures, possible heuristic false positives, and manual-verification items are returned separately. Writes independent-review.md to the task directory.",
       inputSchema: {
         type: "object",
         properties: {
@@ -394,6 +416,123 @@ export function getToolDefs(): ToolDef[] {
       },
     },
   ];
+
+  // Direct session tools
+  const directCommands = getAllConfiguredDirectCommands(config);
+  tools.push({
+    name: "create_direct_session",
+    description:
+      "Create a Direct editing session for ChatGPT to apply patches directly. Requires enableDirectProfile: true in config.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        repo_path: {
+          type: "string",
+          description: "Repository path inside workspaceRoot (e.g., 'my-project')",
+        },
+        title: {
+          type: "string",
+          description: "Optional title describing the session's purpose",
+        },
+      },
+      required: ["repo_path"],
+    },
+  });
+
+  tools.push({
+    name: "search_workspace",
+    description:
+      "Search file contents (grep-like) within a Direct session's repo_path. Skips .git, node_modules, dist, release, and sensitive files.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string", description: "Session ID from create_direct_session" },
+        query: { type: "string", description: "Search query string" },
+        max_results: { type: "number", description: "Max results (default 20)" },
+        case_sensitive: { type: "boolean", description: "Case sensitive search (default false)" },
+        max_preview_chars: { type: "number", description: "Max preview chars per match (default 200)" },
+        include_globs: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional file name glob patterns to include (e.g., ['*.ts', '*.js'])",
+        },
+      },
+      required: ["session_id", "query"],
+    },
+  });
+
+  tools.push({
+    name: "apply_patch",
+    description:
+      "Apply JSON patch operations to a file within a Direct session's repo_path. Validates expected_sha256 before applying. Supports replace_exact, insert_before, insert_after, replace_whole_file.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string", description: "Session ID" },
+        path: { type: "string", description: "Relative file path within the session repo" },
+        expected_sha256: { type: "string", description: "Expected SHA-256 hash of the current file content" },
+        operations: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              type: { type: "string", enum: ["replace_exact", "insert_before", "insert_after", "replace_whole_file"] },
+              old_text: { type: "string", description: "Text to find (required for replace_exact, insert_before, insert_after)" },
+              new_text: { type: "string", description: "Replacement or insertion text" },
+              occurrence: { type: "string", enum: ["first", "all", "exactly_once"], description: "Match mode for replace_exact (default first)" },
+            },
+            required: ["type", "new_text"],
+          },
+        },
+      },
+      required: ["session_id", "path", "expected_sha256", "operations"],
+    },
+  });
+
+  tools.push({
+    name: "run_verification",
+    description:
+      "Run a whitelisted verification command within a Direct session. Command must be in the Direct allowlist.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string", description: "Session ID" },
+        command: {
+          type: "string",
+          description: "Verification command to run",
+          ...(directCommands.length > 0 ? { enum: directCommands } : {}),
+        },
+        timeout_seconds: { type: "number", description: "Timeout in seconds (default 120)" },
+      },
+      required: ["session_id", "command"],
+    },
+  });
+
+  tools.push({
+    name: "finalize_direct_session",
+    description:
+      "Finalize a Direct session: capture after snapshot, generate diff/summary/change artifacts, mark session as finalized. Must be called before audit_session.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string", description: "Session ID to finalize" },
+      },
+      required: ["session_id"],
+    },
+  });
+
+  tools.push({
+    name: "audit_session",
+    description:
+      "Independently audit a Direct session's changes. Performs 16 deterministic checks and returns pass/warn/fail decision. Requires session to be finalized first.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string", description: "Session ID to audit" },
+      },
+      required: ["session_id"],
+    },
+  });
 
   // run_task: only available when explicitly enabled
   if ((config as any).enableRunTaskTool === true) {
@@ -412,7 +551,7 @@ export function getToolDefs(): ToolDef[] {
   }
 
   const profile = resolveToolProfile(config.toolProfile);
-  const selected = selectToolsForProfile(tools, profile);
+  const selected = selectToolsForProfile(tools, profile, config.enableDirectProfile);
   buildToolCatalogSnapshot(selected, profile);
   return selected;
 }
@@ -425,13 +564,27 @@ export function getToolCatalogSnapshot(): ToolCatalogSnapshot {
 
 // ── Request handler ───────────────────────────────────────────────
 
+function guardDirectProfileEnabled(): void {
+  const config = getConfig();
+  if (!config.enableDirectProfile) {
+    throw new PatchWardenError(
+      "direct_profile_disabled",
+      "Direct profile is disabled by local config.",
+      "Set enableDirectProfile: true in patchwarden.config.json to use Direct session tools.",
+      true,
+      { operation: "direct_tool_call" }
+    );
+  }
+}
+
 export async function handleToolCall(name: string, args: Record<string, unknown> | undefined) {
   switch (name) {
     case "save_plan": {
       return toResult(
         savePlan({
           title: String(args?.title ?? ""),
-          content: String(args?.content ?? ""),
+          content: args?.content !== undefined ? String(args.content) : "",
+          plan_ref: args?.plan_ref ? String(args.plan_ref) : undefined,
         })
       );
     }
@@ -460,6 +613,8 @@ export async function handleToolCall(name: string, args: Record<string, unknown>
           timeout_seconds: args?.timeout_seconds !== undefined
             ? Number(args.timeout_seconds)
             : undefined,
+          execution_mode: args?.execution_mode === "assess_only" ? "assess_only" : "execute",
+          assessment_id: args?.assessment_id ? String(args.assessment_id) : undefined,
         })
       );
     }
@@ -491,7 +646,11 @@ export async function handleToolCall(name: string, args: Record<string, unknown>
     }
 
     case "read_workspace_file": {
-      return toResult(readWorkspaceFile(String(args?.path ?? "")));
+      const sessionId = args?.session_id ? String(args.session_id) : undefined;
+      return toResult(readWorkspaceFile({
+        path: String(args?.path ?? ""),
+        session_id: sessionId,
+      }));
     }
 
     case "list_tasks": {
@@ -556,7 +715,10 @@ export async function handleToolCall(name: string, args: Record<string, unknown>
     }
 
     case "get_task_summary": {
-      return toResult(getTaskSummary(String(args?.task_id ?? "")));
+      return toResult(getTaskSummary(String(args?.task_id ?? ""), {
+        view: normalizeSummaryView(args?.view),
+        max_items: args?.max_items !== undefined ? Number(args.max_items) : undefined,
+      }));
     }
 
     case "audit_task": {
@@ -575,6 +737,59 @@ export async function handleToolCall(name: string, args: Record<string, unknown>
       return toResult(result);
     }
 
+    case "create_direct_session": {
+      guardDirectProfileEnabled();
+      return toResult(createDirectSession({
+        repo_path: String(args?.repo_path ?? ""),
+        title: args?.title ? String(args.title) : undefined,
+      }));
+    }
+
+    case "search_workspace": {
+      guardDirectProfileEnabled();
+      return toResult(searchWorkspace({
+        session_id: String(args?.session_id ?? ""),
+        query: String(args?.query ?? ""),
+        max_results: args?.max_results ? Number(args.max_results) : undefined,
+        case_sensitive: args?.case_sensitive !== undefined ? Boolean(args.case_sensitive) : undefined,
+        max_preview_chars: args?.max_preview_chars ? Number(args.max_preview_chars) : undefined,
+        include_globs: Array.isArray(args?.include_globs) ? args.include_globs.map(String) : undefined,
+      }));
+    }
+
+    case "apply_patch": {
+      guardDirectProfileEnabled();
+      return toResult(applyPatch({
+        session_id: String(args?.session_id ?? ""),
+        path: String(args?.path ?? ""),
+        expected_sha256: String(args?.expected_sha256 ?? ""),
+        operations: Array.isArray(args?.operations) ? args.operations as any : [],
+      }));
+    }
+
+    case "run_verification": {
+      guardDirectProfileEnabled();
+      return toResult(await runVerification({
+        session_id: String(args?.session_id ?? ""),
+        command: String(args?.command ?? ""),
+        timeout_seconds: args?.timeout_seconds ? Number(args.timeout_seconds) : undefined,
+      }));
+    }
+
+    case "finalize_direct_session": {
+      guardDirectProfileEnabled();
+      return toResult(finalizeDirectSession({
+        session_id: String(args?.session_id ?? ""),
+      }));
+    }
+
+    case "audit_session": {
+      guardDirectProfileEnabled();
+      return toResult(auditSession({
+        session_id: String(args?.session_id ?? ""),
+      }));
+    }
+
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
@@ -588,6 +803,14 @@ function normalizeWaitSeconds(args: Record<string, unknown> | undefined): number
   }
   const value = preferred ?? legacy;
   return value === undefined ? undefined : Number(value);
+}
+
+function normalizeSummaryView(value: unknown): "compact" | "standard" {
+  if (value === undefined) return "standard";
+  if (value !== "compact" && value !== "standard") {
+    throw new Error('view must be "compact" or "standard".');
+  }
+  return value;
 }
 
 function toResult(data: unknown) {
@@ -647,7 +870,7 @@ export function registerTools(server: Server) {
               arguments: { detail: "self_diagnostic" },
             },
             connector_refresh_steps: [
-              "1. Run Check-PatchWarden-Health.cmd locally to confirm the active profile and manifest hash.",
+              "1. Run PatchWarden.cmd health locally to confirm the active profile and manifest hash.",
               "2. In ChatGPT Platform, refresh or reconnect the Connector (do not reuse an old session).",
               "3. Open a NEW ChatGPT conversation; old conversations retain their cached tool catalog.",
               "4. Call health_check in the new conversation and verify tool_manifest_sha256 matches the local report.",

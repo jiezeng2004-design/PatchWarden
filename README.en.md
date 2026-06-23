@@ -8,10 +8,10 @@
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Current stable release: **v0.4.0**. See the
-[release notes](docs/release-v0.4.0.md),
+Current stable release: **v0.6.0**. See the
+[release notes](docs/release-v0.6.0.md),
 [migration guide](docs/migration-from-safe-bifrost.md), and
-[GitHub Release](https://github.com/jiezeng2004-design/PatchWarden/releases/tag/v0.4.0).
+[GitHub Release](https://github.com/jiezeng2004-design/PatchWarden/releases/tag/v0.6.0).
 
 PatchWarden is a security-focused MCP bridge for local coding agents.
 ChatGPT, Codex, OpenCode, or another MCP client can plan and review work;
@@ -184,7 +184,7 @@ execution still requires a separate Watcher.
 New-Item -ItemType Directory .\patchwarden-runtime
 Set-Location .\patchwarden-runtime
 npm.cmd init -y
-npm.cmd install patchwarden@0.4.0
+npm.cmd install patchwarden@0.6.0
 Copy-Item .\node_modules\patchwarden\examples\config.example.json .\patchwarden.config.json
 $env:PATCHWARDEN_CONFIG = (Resolve-Path .\patchwarden.config.json)
 node .\node_modules\patchwarden\dist\runner\watch.js
@@ -193,7 +193,7 @@ node .\node_modules\patchwarden\dist\runner\watch.js
 An MCP client can launch:
 
 ```text
-npx.cmd -y patchwarden@0.4.0
+npx.cmd -y patchwarden@0.6.0
 ```
 
 Pin the version in important environments instead of using `latest`
@@ -231,6 +231,9 @@ Recommended Windows example:
     "npm run lint",
     "pytest"
   ],
+  "repoAllowedTestCommands": {
+    "desktop-app": ["npm run release:check"]
+  },
   "maxReadFileBytes": 200000,
   "defaultTaskTimeoutSeconds": 900,
   "maxTaskTimeoutSeconds": 3600,
@@ -249,6 +252,7 @@ Configuration fields:
 | `toolProfile` | No | `full` or `chatgpt_core`; use `full` for local clients. |
 | `agents` | Yes | Execution-agent allowlist; supports `{repo}` and `{prompt}` placeholders. |
 | `allowedTestCommands` | Yes | Exact allowlist for independent verification commands. |
+| `repoAllowedTestCommands` | No | Extra exact commands keyed by workspace-relative repository path; wildcards are unsupported. |
 | `maxReadFileBytes` | Yes | Maximum bytes returned by one MCP file read. |
 | `defaultTaskTimeoutSeconds` | Yes | Default task timeout. |
 | `maxTaskTimeoutSeconds` | Yes | Maximum timeout a client may request. |
@@ -267,6 +271,8 @@ Important configuration rules:
 - `repo_path` must stay inside `workspaceRoot` and cannot escape with `..`.
 - `allowedTestCommands` uses exact matching; similar commands are not
   automatically authorized.
+- Repository-specific commands come only from trusted local configuration;
+  a target repository cannot authorize itself through `package.json`.
 - Configuration may contain private paths and should not be committed.
 
 Set the configuration path:
@@ -346,7 +352,7 @@ Pinned npm configuration:
 ```toml
 [mcp_servers.patchwarden]
 command = "npx.cmd"
-args = ["-y", "patchwarden@0.4.0"]
+args = ["-y", "patchwarden@0.6.0"]
 
 [mcp_servers.patchwarden.env]
 PATCHWARDEN_CONFIG = "D:\\path\\to\\patchwarden.config.json"
@@ -400,13 +406,13 @@ Prepare:
 Configure the proxy first, then run:
 
 ```text
-Start-PatchWarden-Tunnel.cmd
+PatchWarden.cmd start core
 ```
 
 The launcher:
 
 - Builds `dist/index.js` if it is missing.
-- Verifies v0.4.0, the fixed 16-tool `chatgpt_core` catalog, and its schema
+- Verifies v0.6.0, the fixed 16-tool `chatgpt_core` catalog, and its schema
   manifest.
 - Reads or prompts for the Tunnel ID.
 - Reads or prompts for the runtime API key.
@@ -470,7 +476,7 @@ $env:HTTPS_PROXY = "http://127.0.0.1:YOUR_HTTP_OR_MIXED_PORT"
 $env:HTTP_PROXY  = $env:HTTPS_PROXY
 $env:ALL_PROXY   = $env:HTTPS_PROXY
 $env:NO_PROXY    = "localhost,127.0.0.1,::1"
-.\Start-PatchWarden-Tunnel.cmd
+.\PatchWarden.cmd start core
 ```
 
 Example for a Mixed port of 7890:
@@ -480,7 +486,7 @@ $env:HTTPS_PROXY = "http://127.0.0.1:7890"
 $env:HTTP_PROXY  = $env:HTTPS_PROXY
 $env:ALL_PROXY   = $env:HTTPS_PROXY
 $env:NO_PROXY    = "localhost,127.0.0.1,::1"
-.\Start-PatchWarden-Tunnel.cmd
+.\PatchWarden.cmd start core
 ```
 
 Using `HTTPS_PROXY=http://...` is expected: the variable identifies HTTPS
@@ -524,7 +530,7 @@ country list.
 4. Set `HTTPS_PROXY` in the same terminal that starts the tunnel.
 5. Keep local addresses in `NO_PROXY`.
 6. Check whether the exit region is accepted.
-7. Then run `Check-PatchWarden-Health.cmd` and tunnel-client doctor.
+7. Then run `PatchWarden.cmd health` and tunnel-client doctor.
 
 ## Recommended task workflow
 
@@ -535,8 +541,8 @@ Use this sequence:
 3. `list_workspace` — identify the correct `repo_path`.
 4. `save_plan`, or provide an `inline_plan` when creating the task.
 5. `create_task` — specify the agent, repository, and verification commands.
-6. `wait_for_task(timeout_seconds: 25)` — continue waiting in the same turn.
-7. `get_task_summary` — inspect the structured summary first.
+6. Use `wait_for_task(timeout_seconds: 25)` for short tasks; poll long tasks with `list_tasks` and `get_task_status`.
+7. `get_task_summary(view: "compact")` — inspect bounded structured evidence first.
 8. `get_result_json`, `get_diff`, and `get_test_log` — inspect detail as needed.
 9. `audit_task` — independently verify the result.
 10. Let a human decide whether to accept, commit, or publish.
@@ -559,7 +565,8 @@ Example `create_task` payload:
 Rules:
 
 - `repo_path` must stay inside `workspaceRoot`.
-- Every `verify_commands` entry must exactly match `allowedTestCommands`.
+- Every `verify_commands` entry must exactly match the global or current
+  repository's trusted command allowlist.
 - Select exactly one plan source: `plan_id`, `inline_plan`, or `template`.
 - When `wait_for_task` returns `continuation_required: true`, call it again.
 - `terminal: true` means the task reached a terminal state, not that the work
@@ -573,9 +580,22 @@ Built-in templates:
 - `release_check`
 - `rollback_scope_violation`
 
+ChatGPT tasks should prefer the first three guarded templates: use
+`inspect_only` for read-only diagnosis, `feature_small` for a narrowly scoped
+change, and `fix_tests` for a known verification failure. Use `inline_plan` or
+a saved long plan only when these templates cannot express the goal. Prefer an
+`execution_mode: "assess_only"` call followed by the returned `next_tool_call`;
+do not resend the goal, plan, repository, agent, or verification arguments in
+the execute call.
+
 `inspect_only` and rollback-review tasks fail with
 `failed_policy_violation` if they modify files. Rollback review only writes a
 plan; it never automatically reverts user changes.
+
+`audit_task` places evidence-backed failures in `confirmed_failures` and lists
+heuristic warnings separately in `possible_false_positives` and
+`manual_verification_items`. A `warn` verdict therefore does not automatically
+mean the task is wrong.
 
 ### Task artifacts
 
@@ -662,10 +682,49 @@ Doctor checks Node, npm, Git, configuration, workspace containment, sensitive
 path protection, agent commands, the tool manifest, HTTP port, task
 directories, and build output.
 
-Windows tunnel health:
+### Unified Windows control entry point
+
+Double-click `PatchWarden.cmd` for one menu that starts, stops, restarts, and
+checks Core Agent and Direct independently or together. The same operations are
+available from PowerShell:
+
+```powershell
+.\PatchWarden.cmd start core
+.\PatchWarden.cmd start direct
+.\PatchWarden.cmd stop all
+.\PatchWarden.cmd restart all
+.\PatchWarden.cmd status all
+.\PatchWarden.cmd kill all
+```
+
+The old single-purpose launchers remain under `scripts/launchers/` as a
+compatibility layer. Personal launchers live under `.local/launchers/` and
+remain excluded from Git and release packages. `stop` and `restart` correlate
+runtime state with the exact Tunnel profile, project launcher, and process tree,
+so they can clean up an orphaned `tunnel-client.exe` for that profile without
+terminating unrelated processes. `kill` is an explicit force-clean command but
+keeps the same profile and project-path restrictions. If an unrelated process
+owns port 8080 or 8081, the operation stops and reports its PID.
+
+`status` cross-checks runtime JSON, the health URL file, the fixed `/readyz` and
+`/healthz` endpoints, and the real process list. A ready endpoint therefore wins
+over a stale stopped status file. Supervisor output is written to:
 
 ```text
-Check-PatchWarden-Health.cmd
+%LOCALAPPDATA%\patchwarden\runtime\tunnel-client.stdout.log
+%LOCALAPPDATA%\patchwarden\runtime\tunnel-client.stderr.log
+%LOCALAPPDATA%\patchwarden\runtime-direct\tunnel-client.stdout.log
+%LOCALAPPDATA%\patchwarden\runtime-direct\tunnel-client.stderr.log
+```
+
+On a non-zero exit, the launcher displays the last 30 stderr lines and records
+the exit code, redacted stdout/stderr tails, and log paths in
+`tunnel-status.json`. It never prints the API key value.
+
+Detailed Windows tunnel health:
+
+```text
+PatchWarden.cmd health
 ```
 
 It reports:
@@ -694,12 +753,12 @@ catalog consistency.
 After a configuration or version change, use:
 
 ```text
-Restart-PatchWarden.cmd
+PatchWarden.cmd restart all
 ```
 
-It stops only the process tree recorded as owned by the current launcher. It
-does not globally terminate unrelated PatchWarden, OpenCode, or Codex
-instances.
+It stops only this project's launchers and Watcher plus `tunnel-client.exe`
+processes that exactly match the selected profile. It does not globally
+terminate unrelated PatchWarden, OpenCode, or Codex instances.
 
 ## Lessons learned and troubleshooting
 
@@ -716,8 +775,10 @@ instances.
 | ChatGPT still shows old tools | Connector or conversation cached the old catalog | Reconnect and open a new ChatGPT conversation. |
 | ChatGPT stops after `create_task` | The same turn did not continue with `wait_for_task` | Loop while `continuation_required` is true. |
 | HTTP reports `EADDRINUSE` | Port 7331 is already in use | Check the existing instance or change `httpPort`. |
-| DPAPI credential cannot be decrypted | Windows user/machine changed or the cache is damaged | Run `Reset-PatchWarden-Tunnel-Key.cmd` and enter it again. |
+| DPAPI credential cannot be decrypted | Windows user/machine changed or the cache is damaged | Run `PatchWarden.cmd reset-key` and enter it again. |
 | Code changed but runtime behavior did not | Old `dist` or process is still active | Build, compare the manifest, and restart owned processes. |
+| The supervisor shows only exit code 1 | The real tunnel-client failure is in child-process stderr | Read the mode's `tunnel-client.stderr.log` or `tunnel-status.json.stderr_tail`. |
+| Core looks for its profile under `opencode-config\tunnel-client` | An older launcher leaked the Watcher's `XDG_CONFIG_HOME` into tunnel-client | Upgrade to v0.6.0 and run `PatchWarden.cmd restart core`; v0.6.0 isolates Watcher-only environment variables. |
 | npm MCP initializes, but tasks remain queued | npm launched only the MCP Server | Start `dist/runner/watch.js` in the local installation. |
 | Config exists but is not found | Variable was set in another terminal or path escaping is wrong | Use an absolute path and set `PATCHWARDEN_CONFIG` in the launching terminal. |
 | Legacy environment names are ignored | v0.4.0 intentionally broke old names | Use `PATCHWARDEN_*` everywhere. |
@@ -792,6 +853,10 @@ names.
 `get_result_json`, `get_test_log`, `get_task_status`, `list_tasks`,
 `cancel_task`, and `audit_task`.
 
+`get_task_summary` keeps the backward-compatible `standard` view by default.
+ChatGPT should request `view: "compact"` first; terminal `wait_for_task`
+responses also embed compact acceptance evidence only.
+
 `full` additionally provides:
 
 - `get_plan`
@@ -803,6 +868,35 @@ names.
 
 The tunnel wrapper forces `chatgpt_core`. Ordinary local development defaults
 to `full`.
+
+### ChatGPT Direct mode
+
+Direct mode exposes nine guarded tools so ChatGPT can create an editing
+session, read and search source files, apply hash-bound JSON patches, run
+exactly allowlisted verification commands, finalize the evidence, and audit
+the result without a local execution agent.
+
+Enable it in the trusted local configuration while keeping the ordinary Core
+profile unchanged:
+
+```json
+{
+  "enableDirectProfile": true
+}
+```
+
+Start the separate Direct tunnel entrypoint:
+
+```text
+PatchWarden.cmd start direct
+```
+
+On first use, provide the `tunnel-client.exe` path and a Tunnel ID dedicated
+to the Direct Connector. The launcher uses the `patchwarden-direct` profile,
+stores runtime state under `%LOCALAPPDATA%\patchwarden\runtime-direct`, skips
+the Watcher, and retains the existing DPAPI credential handling. In a fresh
+ChatGPT conversation, `health_check` should report `chatgpt_direct`, nine
+tools, and `direct_profile_enabled=true`.
 
 ## Security boundaries and local data
 
@@ -837,7 +931,7 @@ Start with a dedicated test workspace and a repository you can recover.
 Upgrade a pinned npm installation:
 
 ```powershell
-npm.cmd install patchwarden@0.4.0
+npm.cmd install patchwarden@0.6.0
 ```
 
 Upgrade a source checkout:
@@ -852,15 +946,16 @@ npm.cmd test
 After upgrading:
 
 1. Run `npm.cmd run doctor`.
-2. Run `Check-PatchWarden-Health.cmd`.
+2. Run `PatchWarden.cmd health`.
 3. Compare version, schema epoch, and manifest hash.
-4. Restart owned processes with `Restart-PatchWarden.cmd`.
+4. Restart owned processes with `PatchWarden.cmd restart all`.
 5. Reconnect the MCP client or Connector.
 6. Validate in a new session instead of relying on an old conversation.
 
 When migrating from Safe-Bifrost, manually update:
 
-- npm package and CLI to `patchwarden` and `patchwarden-runner`
+- npm package and CLIs include `patchwarden`, `patchwarden-runner`, and the
+  local-only medium-risk ticket confirmation command `patchwarden-confirm`
 - Configuration filename to `patchwarden.config.json`
 - Environment variables to `PATCHWARDEN_*`
 - Task directory to `.patchwarden/`
@@ -902,7 +997,8 @@ and release-asset checksums independently.
 
 ## Related documentation
 
-- [v0.4.0 release notes](docs/release-v0.4.0.md)
+- [v0.6.0 release notes](docs/release-v0.6.0.md)
+- [ChatGPT usage guide](docs/chatgpt-usage.md)
 - [Migration guide](docs/migration-from-safe-bifrost.md)
 - [ChatGPT Connector demo](docs/demo.md)
 - [OpenAI tunnel examples](examples/openai-tunnel/README.md)

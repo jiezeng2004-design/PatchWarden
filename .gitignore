@@ -1,4 +1,5 @@
 node_modules/
+.npm-cache/
 dist/
 .patchwarden/
 .safe-bifrost/
@@ -16,3 +17,9 @@ safe-bifrost-*.tgz
 .local/
 *.local.cmd
 *.local.ps1
+/PatchWarden.cmd.bak
+/nul
+/docs/optimization-proposal.md
+/Kill-PatchWarden.cmd
+/scripts/kill-patchwarden.ps1
+/scripts/launchers/Kill-PatchWarden.cmd

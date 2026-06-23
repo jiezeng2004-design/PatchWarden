@@ -53,6 +53,18 @@ async function waitForRunning(getTaskStatus, taskId) {
   throw new Error(`Task ${taskId} did not enter running state`);
 }
 
+async function raceWithTimeout(promise, ms, msg) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(msg)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 console.log("\n=== PatchWarden Lifecycle Smoke Tests ===\n");
 
 try {
@@ -70,10 +82,14 @@ try {
   writeFileSync(join(repoPath, "main.js"), "console.log('fixture');\n", "utf-8");
   writeFileSync(join(repoPath, "second.js"), "console.log('second');\n", "utf-8");
   writeFileSync(join(repoPath, "delete-me.txt"), "delete fixture\n", "utf-8");
+  writeFileSync(join(repoPath, ".gitignore"), "dist/\nrelease/\nsync-store.json\n*.log\n", "utf-8");
+  mkdirSync(join(repoPath, "release"), { recursive: true });
+  writeFileSync(join(repoPath, "release", "tracked.txt"), "tracked artifact fixture\n", "utf-8");
   mkdirSync(plainRepoPath, { recursive: true });
   writeFileSync(join(plainRepoPath, "README.md"), "# Non-Git fixture\n", "utf-8");
   git(["init"]);
-  git(["add", "README.md", "main.js", "second.js", "delete-me.txt"]);
+  git(["add", "README.md", "main.js", "second.js", "delete-me.txt", ".gitignore"]);
+  git(["add", "-f", "release/tracked.txt"]);
   git(["-c", "user.name=PatchWarden Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture"]);
 
   writeFileSync(
@@ -114,6 +130,13 @@ try {
           command: process.execPath,
           args: ["-e", "require('fs').writeFileSync('fixture.bin',Buffer.from([0,1,2,3,255,0,10]))"],
         },
+        artifactwriter: {
+          command: process.execPath,
+          args: [
+            "-e",
+            "const fs=require('fs');fs.mkdirSync('dist',{recursive:true});fs.writeFileSync('dist/app.exe','build');fs.writeFileSync('sync-store.json','{}');fs.appendFileSync('release/tracked.txt','changed\\n');fs.writeFileSync('generated.exe','review')",
+          ],
+        },
       },
       allowedTestCommands: ["node --check main.js", "node --check second.js", "node --check missing.js"],
       maxReadFileBytes: 200000,
@@ -133,12 +156,13 @@ try {
   const { getDiff } = await import("../dist/tools/taskOutputs.js");
   const { listAgents } = await import("../dist/tools/listAgents.js");
   const { getTaskSummary } = await import("../dist/tools/getTaskSummary.js");
+  const { auditTask } = await import("../dist/tools/auditTask.js");
   const { waitForTask } = await import("../dist/tools/waitForTask.js");
   const { runTask } = await import("../dist/runner/runTask.js");
 
   await test("list_agents reports configured executables", async () => {
     const result = listAgents();
-    if (result.total !== 7 || result.agents.some((agent) => !agent.available)) {
+    if (result.total !== 8 || result.agents.some((agent) => !agent.available)) {
       throw new Error(`Unexpected agent availability: ${JSON.stringify(result)}`);
     }
   });
@@ -295,6 +319,35 @@ try {
     }
   });
 
+  await test("artifact hygiene separates source, ignored output, runtime data, and suspicious changes", async () => {
+    const plan = savePlan({ title: "Artifact hygiene", content: "Generate representative task outputs." });
+    const task = createTask({ plan_id: plan.plan_id, agent: "artifactwriter", repo_path: "repo" });
+    const result = await runTask(task.task_id);
+    if (result.status !== "done") throw new Error(`Artifact task failed: ${JSON.stringify(result)}`);
+    const standard = getTaskSummary(task.task_id);
+    const compact = getTaskSummary(task.task_id, { view: "compact", max_items: 1 });
+    const counts = standard.artifact_hygiene?.counts || {};
+    if (
+      counts.tracked_build_artifacts < 1 ||
+      counts.ignored_untracked_artifacts < 2 ||
+      counts.runtime_generated_files < 1 ||
+      counts.suspicious_changes < 2
+    ) {
+      throw new Error(`Artifact classification mismatch: ${JSON.stringify(standard.artifact_hygiene)}`);
+    }
+    if (compact.view !== "compact" || "log_tails" in compact || compact.artifact_hygiene.max_items !== 1) {
+      throw new Error(`Compact summary leaked standard detail: ${JSON.stringify(compact)}`);
+    }
+    if (!Array.isArray(standard.changed_files) || standard.changed_files.length < 4) {
+      throw new Error("Standard summary no longer preserves full changed-file evidence");
+    }
+    const audit = auditTask(task.task_id);
+    const hygieneCheck = audit.checks.find((check) => check.name === "artifact_hygiene");
+    if (!hygieneCheck || hygieneCheck.result !== "warn") {
+      throw new Error(`Audit did not surface suspicious artifact evidence: ${JSON.stringify(audit)}`);
+    }
+  });
+
   await test("deleted tracked files are identified with file stats", async () => {
     const plan = savePlan({ title: "Delete fixture", content: "Delete the designated fixture file." });
     const task = createTask({ plan_id: plan.plan_id, agent: "deleter", repo_path: "repo" });
@@ -311,9 +364,12 @@ try {
     const task = createTask({ plan_id: plan.plan_id, agent: "writer", repo_path: "repo" });
     const running = runTask(task.task_id);
     const waited = await waitForTask(task.task_id, 5);
-    await running;
+    await raceWithTimeout(running, 15000, "wait_for_task loop did not terminate within 15s");
     if (!waited.terminal || waited.continuation_required || !waited.summary) {
       throw new Error(`Unexpected wait response: ${JSON.stringify(waited)}`);
+    }
+    if (waited.summary.view !== "compact" || "log_tails" in waited.summary) {
+      throw new Error(`Terminal wait should embed compact evidence: ${JSON.stringify(waited.summary)}`);
     }
   });
 
@@ -338,7 +394,7 @@ try {
       throw new Error(`Running summary incomplete: ${JSON.stringify(summary)}`);
     }
     cancelTask(task.task_id);
-    await running;
+    await raceWithTimeout(running, 15000, "running summary cancel did not terminate within 15s");
   });
 
   await test("verification failure produces failed_verification and structured evidence", async () => {
@@ -423,7 +479,7 @@ try {
     if (!request.cancel_requested || request.force_kill_requested) {
       throw new Error(`Unexpected cancel response: ${JSON.stringify(request)}`);
     }
-    const result = await running;
+    const result = await raceWithTimeout(running, 15000, "cancel_task did not terminate within 15s");
     if (result.status !== "canceled") throw new Error(`Expected canceled, got ${JSON.stringify(result)}`);
   });
 
@@ -434,7 +490,7 @@ try {
     await waitForRunning(getTaskStatus, task.task_id);
     const request = killTask(task.task_id);
     if (!request.force_kill_requested) throw new Error(`Unexpected kill response: ${JSON.stringify(request)}`);
-    const result = await running;
+    const result = await raceWithTimeout(running, 15000, "kill_task did not terminate within 15s");
     if (result.status !== "canceled" || !result.error?.includes("kill_task")) {
       throw new Error(`Expected killed/canceled result, got ${JSON.stringify(result)}`);
     }
@@ -451,3 +507,7 @@ console.log(`${"=".repeat(50)}\n`);
 
 if (failed > 0) process.exit(1);
 console.log("ALL LIFECYCLE TESTS PASSED\n");
+
+// Safety: force exit after cleanup in case any stray timer/handle keeps the event loop alive.
+// All child processes are killed by the runner; this only guards against OS-level pipe drains.
+process.exit(0);

@@ -22,6 +22,8 @@ import { resolve, join, dirname } from "node:path";
 import { loadConfig, getConfig, getTasksDir, resolveWorkspaceRoot } from "../config.js";
 import { guardWorkspacePath } from "../security/pathGuard.js";
 import { guardAgentCommand, guardTestCommand } from "../security/commandGuard.js";
+import { validateAssessmentFreshness } from "../assessments/assessmentStore.js";
+import { captureRepoSnapshot } from "./changeCapture.js";
 import { runTask } from "./runTask.js";
 
 // ── Bootstrap ─────────────────────────────────────────────────────
@@ -91,14 +93,28 @@ async function tick() {
       // ── Pre-flight safety checks ──
       try {
         // Check repo_path
-        guardWorkspacePath(statusData.repo_path || wsRoot, wsRoot);
+        const resolvedRepoPath = guardWorkspacePath(statusData.resolved_repo_path || statusData.repo_path || wsRoot, wsRoot);
 
         // Check agent
         guardAgentCommand(statusData.agent, config);
 
         // Check test_command
         if (statusData.test_command) {
-          guardTestCommand(statusData.test_command, config);
+          guardTestCommand(statusData.test_command, config, resolvedRepoPath);
+        }
+        if (Array.isArray(statusData.verify_commands)) {
+          for (const command of statusData.verify_commands) {
+            guardTestCommand(String(command), config, resolvedRepoPath);
+          }
+        }
+
+        // Assessment freshness revalidation
+        if (statusData.assessment_id) {
+          const preExecSnapshot = captureRepoSnapshot(resolvedRepoPath);
+          const validation = validateAssessmentFreshness(String(statusData.assessment_id), preExecSnapshot);
+          if (!validation.valid) {
+            throw new Error(`assessment validation failed: ${validation.failure_reason}`);
+          }
         }
       } catch (err) {
         const errMsg = `[watcher] Safety check failed for ${taskId}: ${err instanceof Error ? err.message : String(err)}`;

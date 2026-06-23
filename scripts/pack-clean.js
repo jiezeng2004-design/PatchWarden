@@ -22,10 +22,7 @@ const include = [
   "examples",
   "scripts",
   "src",
-  "Start-PatchWarden-Tunnel.cmd",
-  "Restart-PatchWarden.cmd",
-  "Check-PatchWarden-Health.cmd",
-  "Reset-PatchWarden-Tunnel-Key.cmd",
+  "PatchWarden.cmd",
   ".gitignore",
   "LICENSE",
   "README.md",
@@ -44,6 +41,8 @@ const forbidden = [
   /\.dpapi$/i,
   /(^|[\\/])\.env$/,
   /\.log$/,
+  /^docs[\\/]optimization-proposal\.md$/i,
+  /(^|[\\/])kill-patchwarden\.(cmd|ps1)$/i,
 ];
 
 console.log("[pack-clean] Preparing clean release directory...");

@@ -1,24 +1,25 @@
 {
   "name": "patchwarden",
-  "version": "0.4.0",
+  "version": "0.6.0",
   "description": "A secure local MCP bridge: clients save plans, local agents execute tasks, and results are returned through workspace-scoped files.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
     "patchwarden": "dist/index.js",
+    "patchwarden-confirm": "dist/assessments/confirmCli.js",
     "patchwarden-runner": "dist/runner/cli.js"
   },
   "files": [
     "dist/",
     "docs/",
+    "!docs/optimization-proposal.md",
     "src/",
     "examples/",
     "scripts/",
-    "Start-PatchWarden-Tunnel.cmd",
-    "Restart-PatchWarden.cmd",
-    "Check-PatchWarden-Health.cmd",
-    "Reset-PatchWarden-Tunnel-Key.cmd",
+    "!scripts/kill-patchwarden.ps1",
+    "!scripts/launchers/Kill-PatchWarden.cmd",
+    "PatchWarden.cmd",
     "README.md",
     "README.en.md",
     "LICENSE",
@@ -33,18 +34,19 @@
     "watch": "node dist/runner/watch.js",
     "doctor": "node dist/doctor.js",
     "doctor:ci": "node dist/doctor.js --allow-default-config",
-    "test": "node dist/smoke-test.js && node scripts/lifecycle-smoke.js && node scripts/doctor-smoke.js && node scripts/tunnel-supervisor-smoke.js && node scripts/watcher-supervisor-smoke.js && node scripts/mcp-manifest-check.js && node scripts/brand-check.js",
+    "test": "node dist/smoke-test.js && node scripts/lifecycle-smoke.js && node scripts/doctor-smoke.js && node scripts/tunnel-supervisor-smoke.js && node scripts/watcher-supervisor-smoke.js && node scripts/control-smoke.js && node scripts/mcp-manifest-check.js && node scripts/brand-check.js",
     "test:lifecycle": "npm run build && node scripts/lifecycle-smoke.js",
     "test:doctor": "npm run build && node scripts/doctor-smoke.js",
     "test:tunnel-supervisor": "npm run build && node scripts/tunnel-supervisor-smoke.js",
     "test:watcher-supervisor": "npm run build && node scripts/watcher-supervisor-smoke.js",
     "check:tool-manifest": "npm run build && node scripts/mcp-manifest-check.js",
+    "check:direct-tool-manifest": "npm run build && node scripts/mcp-manifest-check.js --profile chatgpt_direct",
     "check:brand": "node scripts/brand-check.js",
     "test:mcp": "npm run build && node scripts/mcp-smoke.js",
     "test:http-mcp": "npm run build && node scripts/http-mcp-smoke.js",
     "pretest": "npm run build",
     "pack:clean": "npm run build && node scripts/pack-clean.js",
-    "verify:package": "npm run build && npm pack --dry-run"
+    "verify:package": "npm run build && node scripts/package-manifest-check.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"

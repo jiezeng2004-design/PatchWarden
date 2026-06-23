@@ -196,7 +196,7 @@ Write-Host ""
 Write-Host "[4/4] Launching PatchWarden tunnel..." -ForegroundColor Yellow
 
 if ($WhatIf) {
-  Write-Host "  WHAT-IF: Would launch Start-PatchWarden-Tunnel.cmd." -ForegroundColor Magenta
+  Write-Host "  WHAT-IF: Would launch the Core compatibility launcher." -ForegroundColor Magenta
   Write-Host ""
   Write-Host "========================================" -ForegroundColor Cyan
   Write-Host " Restart plan complete (--WhatIf)." -ForegroundColor Cyan
@@ -207,8 +207,9 @@ if ($WhatIf) {
 
 # Relaunch the tunnel in a new PowerShell window.
 # Prefer Start-PatchWarden-Tunnel.local.cmd (your saved config) over the generic launcher.
-$localLauncher = Join-Path $ProjectRoot "Start-PatchWarden-Tunnel.local.cmd"
-$genericLauncher = Join-Path $ProjectRoot "Start-PatchWarden-Tunnel.cmd"
+$launcherDirectory = Join-Path $ProjectRoot "scripts\launchers"
+$localLauncher = Join-Path $launcherDirectory "Start-PatchWarden-Tunnel.local.cmd"
+$genericLauncher = Join-Path $launcherDirectory "Start-PatchWarden-Tunnel.cmd"
 $launcherPath = if (Test-Path -LiteralPath $localLauncher) { $localLauncher } else { $genericLauncher }
 
 if (-not (Test-Path -LiteralPath $launcherPath)) {
@@ -237,6 +238,6 @@ Start-Process powershell.exe -ArgumentList $args
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host " Restart complete. Tunnel launcher window opened." -ForegroundColor Cyan
-Write-Host " Use Check-PatchWarden-Health.cmd to verify." -ForegroundColor Cyan
+Write-Host " Use PatchWarden.cmd status all to verify." -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""

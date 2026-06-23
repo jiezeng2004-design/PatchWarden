@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { getTaskStatus } from "./getTaskStatus.js";
-import { getTaskSummary, type TaskSummaryOutput } from "./getTaskSummary.js";
+import { getTaskSummary, type TaskSummaryResult } from "./getTaskSummary.js";
 
 const TERMINAL_STATUSES = new Set([
   "done",
@@ -32,7 +32,7 @@ export interface WaitForTaskOutput {
     name: "wait_for_task" | "audit_task" | "health_check";
     arguments: Record<string, unknown>;
   };
-  summary?: TaskSummaryOutput;
+  summary?: TaskSummaryResult;
   progress_summary?: WaitForTaskProgressSummary;
 }
 
@@ -85,6 +85,6 @@ export async function waitForTask(taskId: string, waitSeconds = 25): Promise<Wai
       : executionBlocked
         ? { name: "health_check", arguments: {} }
       : { name: "wait_for_task", arguments: { task_id: taskId, timeout_seconds: waitSeconds } },
-    ...(terminal ? { summary: getTaskSummary(taskId) } : { progress_summary: progressSummary }),
+    ...(terminal ? { summary: getTaskSummary(taskId, { view: "compact" }) } : { progress_summary: progressSummary }),
   };
 }
