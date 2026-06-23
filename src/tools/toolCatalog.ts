@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { PATCHWARDEN_VERSION, TOOL_SCHEMA_EPOCH } from "../version.js";
 
-export type ToolProfile = "full" | "chatgpt_core";
+export type ToolProfile = "full" | "chatgpt_core" | "chatgpt_direct";
 
 export interface CatalogTool {
   name: string;
@@ -37,22 +37,51 @@ export const CHATGPT_CORE_TOOL_NAMES = [
   "audit_task",
 ] as const;
 
+export const CHATGPT_DIRECT_TOOL_NAMES = [
+  "health_check",
+  "list_workspace",
+  "create_direct_session",
+  "search_workspace",
+  "read_workspace_file",
+  "apply_patch",
+  "run_verification",
+  "finalize_direct_session",
+  "audit_session",
+] as const;
+
 let lastSnapshot: ToolCatalogSnapshot | null = null;
 
 export function resolveToolProfile(configProfile?: string): ToolProfile {
   const raw = (process.env.PATCHWARDEN_TOOL_PROFILE || configProfile || "full").trim();
-  if (raw !== "full" && raw !== "chatgpt_core") {
-    throw new Error(`Invalid tool profile "${raw}". Expected "full" or "chatgpt_core".`);
+  if (raw !== "full" && raw !== "chatgpt_core" && raw !== "chatgpt_direct") {
+    throw new Error(`Invalid tool profile "${raw}". Expected "full", "chatgpt_core", or "chatgpt_direct".`);
   }
   return raw;
 }
 
-export function selectToolsForProfile<T extends CatalogTool>(tools: T[], profile: ToolProfile): T[] {
+export function selectToolsForProfile<T extends CatalogTool>(tools: T[], profile: ToolProfile, enableDirectProfile?: boolean): T[] {
   if (profile === "full") return tools;
   const byName = new Map(tools.map((tool) => [tool.name, tool]));
-  return CHATGPT_CORE_TOOL_NAMES.map((name) => {
+
+  if (profile === "chatgpt_core") {
+    return CHATGPT_CORE_TOOL_NAMES.map((name) => {
+      const tool = byName.get(name);
+      if (!tool) throw new Error(`chatgpt_core tool profile requires missing tool "${name}".`);
+      return tool;
+    });
+  }
+
+  // chatgpt_direct
+  if (!enableDirectProfile) {
+    // Degraded mode: only expose health_check for diagnostics
+    const tool = byName.get("health_check");
+    if (!tool) throw new Error(`chatgpt_direct degraded mode requires missing tool "health_check".`);
+    return [tool];
+  }
+
+  return CHATGPT_DIRECT_TOOL_NAMES.map((name) => {
     const tool = byName.get(name);
-    if (!tool) throw new Error(`chatgpt_core tool profile requires missing tool "${name}".`);
+    if (!tool) throw new Error(`chatgpt_direct tool profile requires missing tool "${name}".`);
     return tool;
   });
 }

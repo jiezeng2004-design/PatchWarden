@@ -19,6 +19,8 @@ const SKIP_DIRECTORIES = new Set([".git", ".patchwarden", "node_modules"]);
 export interface FileFingerprint {
   size: number;
   sha256: string;
+  tracked: boolean;
+  ignored: boolean;
 }
 
 export interface RepoSnapshot {
@@ -37,6 +39,33 @@ export interface ChangedFile {
   old_path?: string;
   before_sha256: string | null;
   after_sha256: string | null;
+  tracked: boolean;
+  ignored: boolean;
+  kind: "source" | "build_artifact" | "runtime_generated";
+}
+
+export interface ClassifiedChange {
+  path: string;
+  change: ChangedFile["change"];
+  tracked: boolean;
+  ignored: boolean;
+  kind: ChangedFile["kind"];
+  reason: string;
+}
+
+export interface ArtifactHygiene {
+  counts: {
+    source_changes: number;
+    tracked_build_artifacts: number;
+    ignored_untracked_artifacts: number;
+    runtime_generated_files: number;
+    suspicious_changes: number;
+  };
+  source_changes: ClassifiedChange[];
+  tracked_build_artifacts: ClassifiedChange[];
+  ignored_untracked_artifacts: ClassifiedChange[];
+  runtime_generated_files: ClassifiedChange[];
+  suspicious_changes: ClassifiedChange[];
 }
 
 export interface ChangeArtifacts {
@@ -57,6 +86,7 @@ export interface ChangeArtifacts {
   workspace_dirty_after: boolean;
   patch_mode: "textual" | "no_changes" | "hash_only";
   unavailable_reason: string | null;
+  artifact_hygiene: ArtifactHygiene;
 }
 
 export function captureRepoSnapshot(repoPath: string): RepoSnapshot {
@@ -65,11 +95,23 @@ export function captureRepoSnapshot(repoPath: string): RepoSnapshot {
   let head: string | null = null;
   let status = "";
   let paths: string[] = [];
+  const trackedPaths = new Set<string>();
+  const ignoredPaths = new Set<string>();
 
   if (isGit) {
     const headResult = runGit(repoPath, ["rev-parse", "HEAD"]);
     if (headResult.status === 0) head = headResult.stdout.trim() || null;
     status = runGit(repoPath, ["status", "--porcelain=v1", "-uall"]).stdout.trimEnd();
+    const tracked = runGit(repoPath, ["ls-files", "-z"]);
+    if (tracked.status === 0) {
+      for (const path of tracked.stdout.split("\0").filter(Boolean)) trackedPaths.add(normalizePath(path));
+    }
+    const ignored = runGit(repoPath, ["ls-files", "-o", "-i", "--exclude-standard", "-z"]);
+    if (ignored.status === 0) {
+      for (const path of ignored.stdout.split("\0").filter(Boolean)) ignoredPaths.add(normalizePath(path));
+    } else {
+      warnings.push("git ignored-file discovery failed; ignored classification may be incomplete");
+    }
     const listed = runGit(repoPath, ["ls-files", "-co", "--exclude-standard", "-z"]);
     if (listed.status === 0) {
       paths = [...new Set([
@@ -92,7 +134,7 @@ export function captureRepoSnapshot(repoPath: string): RepoSnapshot {
 
   const files: Record<string, FileFingerprint> = {};
   for (const inputPath of paths.sort()) {
-    const normalized = inputPath.replace(/\\/g, "/");
+    const normalized = normalizePath(inputPath);
     if (!normalized || normalized.startsWith(".patchwarden/") || isSensitivePath(normalized)) continue;
     const absolutePath = resolve(repoPath, inputPath);
     try {
@@ -101,7 +143,12 @@ export function captureRepoSnapshot(repoPath: string): RepoSnapshot {
       const sha256 = stat.size <= MAX_HASH_BYTES
         ? createHash("sha256").update(readFileSync(absolutePath)).digest("hex")
         : `large-file:${stat.size}:${Math.trunc(stat.mtimeMs)}`;
-      files[normalized] = { size: stat.size, sha256 };
+      files[normalized] = {
+        size: stat.size,
+        sha256,
+        tracked: trackedPaths.has(normalized),
+        ignored: !trackedPaths.has(normalized) && ignoredPaths.has(normalized),
+      };
     } catch {
       warnings.push(`could not fingerprint: ${normalized}`);
     }
@@ -128,6 +175,7 @@ export function buildChangeArtifacts(
   after: RepoSnapshot
 ): ChangeArtifacts {
   const changedFiles = compareSnapshots(before, after);
+  const artifactHygiene = classifyArtifactHygiene(changedFiles);
   const sections: string[] = [];
   const scopedPaths = [...new Set(changedFiles.flatMap((file) => file.old_path ? [file.old_path, file.path] : [file.path]))];
 
@@ -179,6 +227,7 @@ export function buildChangeArtifacts(
           ? "Git could not produce a textual patch for the changed files; hash evidence remains available."
           : "Repository is not a Git worktree; only bounded hash evidence is available.")
       : null,
+    artifact_hygiene: artifactHygiene,
   };
 }
 
@@ -232,11 +281,11 @@ export function compareSnapshots(before: RepoSnapshot, after: RepoSnapshot): Cha
     const left = before.files[path];
     const right = after.files[path];
     if (!left && right) {
-      changed.push({ path, change: "added", before_sha256: null, after_sha256: right.sha256 });
+      changed.push(classifyChangedFile(path, "added", null, right));
     } else if (left && !right) {
-      changed.push({ path, change: "deleted", before_sha256: left.sha256, after_sha256: null });
+      changed.push(classifyChangedFile(path, "deleted", left, null));
     } else if (left.sha256 !== right.sha256) {
-      changed.push({ path, change: "modified", before_sha256: left.sha256, after_sha256: right.sha256 });
+      changed.push(classifyChangedFile(path, "modified", left, right));
     }
   }
   const deletedByHash = new Map<string, ChangedFile[]>();
@@ -260,11 +309,97 @@ export function compareSnapshots(before: RepoSnapshot, after: RepoSnapshot): Cha
       change: "renamed",
       before_sha256: source.before_sha256,
       after_sha256: file.after_sha256,
+      tracked: file.tracked || source.tracked,
+      ignored: file.ignored,
+      kind: classifyPathKind(file.path),
     });
   }
 
   return [...changed.filter((item) => !consumed.has(item)), ...renamed]
     .sort((left, right) => left.path.localeCompare(right.path));
+}
+
+export function emptyArtifactHygiene(): ArtifactHygiene {
+  return {
+    counts: {
+      source_changes: 0,
+      tracked_build_artifacts: 0,
+      ignored_untracked_artifacts: 0,
+      runtime_generated_files: 0,
+      suspicious_changes: 0,
+    },
+    source_changes: [],
+    tracked_build_artifacts: [],
+    ignored_untracked_artifacts: [],
+    runtime_generated_files: [],
+    suspicious_changes: [],
+  };
+}
+
+function classifyChangedFile(
+  path: string,
+  change: ChangedFile["change"],
+  before: FileFingerprint | null,
+  after: FileFingerprint | null
+): ChangedFile {
+  return {
+    path,
+    change,
+    before_sha256: before?.sha256 || null,
+    after_sha256: after?.sha256 || null,
+    tracked: Boolean(after?.tracked || before?.tracked),
+    ignored: Boolean(after?.ignored ?? before?.ignored),
+    kind: classifyPathKind(path),
+  };
+}
+
+function classifyArtifactHygiene(changes: ChangedFile[]): ArtifactHygiene {
+  const hygiene = emptyArtifactHygiene();
+  const entries = changes.map((change): ClassifiedChange => ({
+    path: change.path,
+    change: change.change,
+    tracked: change.tracked,
+    ignored: change.ignored,
+    kind: change.kind,
+    reason: classificationReason(change),
+  }));
+  hygiene.source_changes = entries.filter((entry) => entry.kind === "source" && !entry.ignored);
+  hygiene.tracked_build_artifacts = entries.filter((entry) => entry.kind === "build_artifact" && entry.tracked);
+  hygiene.ignored_untracked_artifacts = entries.filter((entry) => entry.ignored && !entry.tracked);
+  hygiene.runtime_generated_files = entries.filter((entry) => entry.kind === "runtime_generated");
+  hygiene.suspicious_changes = entries.filter((entry) =>
+    (entry.kind === "build_artifact" || entry.kind === "runtime_generated") && !entry.ignored
+  );
+  hygiene.counts = {
+    source_changes: hygiene.source_changes.length,
+    tracked_build_artifacts: hygiene.tracked_build_artifacts.length,
+    ignored_untracked_artifacts: hygiene.ignored_untracked_artifacts.length,
+    runtime_generated_files: hygiene.runtime_generated_files.length,
+    suspicious_changes: hygiene.suspicious_changes.length,
+  };
+  return hygiene;
+}
+
+function classifyPathKind(path: string): ChangedFile["kind"] {
+  const normalized = normalizePath(path).toLowerCase();
+  const parts = normalized.split("/");
+  const basename = parts[parts.length - 1] || "";
+  if (basename === "sync-store.json" || /\.(log|tmp|temp|pid)$/.test(basename)) return "runtime_generated";
+  if (parts.some((part) => ["dist", "release", "build", "out", "coverage", ".next"].includes(part))) return "build_artifact";
+  if (/\.(exe|dll|pak|bin|zip|tgz|tar\.gz)$/.test(basename)) return "build_artifact";
+  return "source";
+}
+
+function classificationReason(change: ChangedFile): string {
+  if (change.ignored) return "untracked path is ignored by repository Git rules";
+  if (change.kind === "build_artifact" && change.tracked) return "artifact-like path is tracked by Git and requires review";
+  if (change.kind === "build_artifact") return "artifact-like path is not ignored and requires review";
+  if (change.kind === "runtime_generated") return "runtime-generated path is not ignored and requires review";
+  return change.tracked ? "tracked source change" : "untracked source change";
+}
+
+function normalizePath(value: string): string {
+  return value.replace(/\\/g, "/");
 }
 
 function walkWorkspace(root: string): string[] {

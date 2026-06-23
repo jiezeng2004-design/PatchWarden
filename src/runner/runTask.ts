@@ -6,21 +6,22 @@ import {
   writeFileSync,
   type WriteStream,
 } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { getTasksDir, getPlansDir, getConfig, resolveWorkspaceRoot } from "../config.js";
 import { guardPath, guardWorkspacePath } from "../security/pathGuard.js";
 import {
-  guardAgentCommand,
   guardTestCommand,
-  sanitizePromptArg,
 } from "../security/commandGuard.js";
 import { writeTaskProgress } from "../taskProgress.js";
 import { writeTaskRuntime } from "../taskRuntime.js";
+import { validateAssessmentFreshness } from "../assessments/assessmentStore.js";
+import { buildAgentInvocation, buildExecutionPrompt } from "./agentInvocation.js";
 import type { TaskPhase, TaskStatus } from "../tools/createTask.js";
 import {
   buildChangeArtifacts,
   captureRepoSnapshot,
   compareSnapshots,
+  emptyArtifactHygiene,
   writeSnapshot,
   type ChangedFile,
   type ChangeArtifacts,
@@ -94,7 +95,6 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
   let verifyCommands: string[];
   let timeoutSeconds: number;
   try {
-    verifyCommands = normalizeVerifyCommands(initialStatus.verify_commands, testCommand, config);
     timeoutSeconds = normalizeTimeout(initialStatus.timeout_seconds, config);
   } catch (error) {
     return failBeforeExecution(taskId, taskDir, errorMessage(error));
@@ -108,6 +108,28 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
   } catch (error) {
     const message = `repo_path validation failed: ${errorMessage(error)}`;
     return failBeforeExecution(taskId, taskDir, message);
+  }
+  try {
+    verifyCommands = normalizeVerifyCommands(initialStatus.verify_commands, testCommand, config, repoPath);
+  } catch (error) {
+    const message = `verification metadata validation failed: ${errorMessage(error)}`;
+    return failBeforeExecution(taskId, taskDir, message);
+  }
+
+  // ── Assessment freshness revalidation before execution ──
+  const assessmentId = String(initialStatus.assessment_id || "");
+  if (assessmentId) {
+    try {
+      const preExecSnapshot = captureRepoSnapshot(repoPath);
+      const validation = validateAssessmentFreshness(assessmentId, preExecSnapshot);
+      if (!validation.valid) {
+        const message = `assessment validation failed: ${validation.failure_reason}. Re-run create_task with execution_mode=assess_only to get a fresh assessment_id.`;
+        return failBeforeExecution(taskId, taskDir, message);
+      }
+    } catch (error) {
+      const message = `assessment validation error: ${errorMessage(error)}`;
+      return failBeforeExecution(taskId, taskDir, message);
+    }
   }
 
   updateStatus(taskDir, {
@@ -143,19 +165,14 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
     const planFile = resolve(plansDir, planId, "plan.md");
     if (!existsSync(planFile)) throw new Error(`Plan not found: "${planId}". Save the plan first.`);
     const planContent = readFileSync(planFile, "utf-8");
-    const agentCmd = guardAgentCommand(agentName, config);
-    const prompt = sanitizePromptArg(buildExecutionPrompt(planContent, repoPath, testCommand));
-    const resolvedArgs = agentCmd.args.map((arg) => {
-      if (arg === "{repo}") return repoPath;
-      if (arg === "{prompt}") return prompt;
-      return arg;
-    });
-    const agentCommandLabel = `${basename(agentCmd.command)} (configured agent command)`;
+    const prompt = buildExecutionPrompt(planContent, repoPath, testCommand);
+    const invocation = buildAgentInvocation(agentName, repoPath, prompt, config);
+    const agentCommandLabel = invocation.commandLabel;
 
     setTaskPhase(taskDir, "executing_agent", agentCommandLabel);
     agentResult = await runManagedProcess({
-      command: agentCmd.command,
-      args: resolvedArgs,
+      command: invocation.command,
+      args: invocation.args,
       cwd: repoPath,
       taskDir,
       statusFile,
@@ -232,6 +249,7 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
       workspace_dirty_after: beforeSnapshot.workspace_dirty,
       patch_mode: "hash_only",
       unavailable_reason: `Change capture failed: ${errorMessage(error)}`,
+      artifact_hygiene: emptyArtifactHygiene(),
     };
     finalError ||= `Change capture failed: ${errorMessage(error)}`;
     finalStatus = "failed";
@@ -326,6 +344,7 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
     change_policy: changePolicy,
     summary: finalError || "Agent execution and configured verification completed successfully.",
     changed_files: changes.changed_files,
+    artifact_hygiene: changes.artifact_hygiene,
     out_of_scope_changes: outOfScopeChanges,
     verify_status: verifyJson.status,
     verify_commands: verifyJson.commands,
@@ -365,6 +384,7 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
     finished_at: finishedAt,
     error: finalError,
     changed_files: changes.changed_files.map(({ path, change }) => ({ path, change })),
+    artifact_hygiene_counts: changes.artifact_hygiene.counts,
     out_of_scope_changes: outOfScopeChanges,
     verify_status: verifyJson.status,
     verify_commands: verifyCommands,
@@ -483,6 +503,8 @@ async function runManagedProcess(options: {
   let spawnError: string | null = null;
   let terminationReason: TerminationReason = null;
   let forceTimer: ReturnType<typeof setTimeout> | null = null;
+  let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+  let childExitFinish: ((code: number | null) => void) | null = null;
   let terminationStarted = false;
 
   const heartbeat = () => {
@@ -520,6 +542,15 @@ async function runManagedProcess(options: {
       gracefulKill(child);
       forceTimer = setTimeout(() => forceKill(child), GRACEFUL_KILL_MS);
     }
+    // Fallback: if neither close nor exit fires within 10s after taskkill,
+    // force-resolve to prevent the runner from hanging indefinitely.
+    // Only starts AFTER termination is requested — normal long tasks are unaffected.
+    fallbackTimer = setTimeout(() => {
+      try { forceKill(child); } catch {}
+      try { child.kill("SIGKILL"); } catch {}
+      // Resolve the exit promise via the shared finish handle
+      if (childExitFinish) childExitFinish(null);
+    }, 10000);
   };
 
   child.stdout?.on("data", (chunk: Buffer) => {
@@ -540,9 +571,18 @@ async function runManagedProcess(options: {
     const finish = (code: number | null) => {
       if (settled) return;
       settled = true;
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+      childExitFinish = null;
       resolveExit(code);
     };
+    childExitFinish = finish;
     child.once("close", (code) => finish(code));
+    child.once("exit", (code) => {
+      // On Windows, "close" can lag behind "exit" when stdio pipes drain
+      // after taskkill. Resolve on exit to avoid hanging the runner, but
+      // still let "close" fire if it arrives first.
+      finish(code);
+    });
     child.once("error", (error) => {
       spawnError = error.message;
       finish(null);
@@ -551,8 +591,8 @@ async function runManagedProcess(options: {
 
   clearInterval(heartbeatTimer);
   if (forceTimer) clearTimeout(forceTimer);
-  stdoutStream?.end();
-  stderrStream?.end();
+  stdoutStream?.destroy();
+  stderrStream?.destroy();
   writeTaskRuntime(options.taskDir, {
     phase: options.phase,
     last_heartbeat_at: new Date().toISOString(),
@@ -572,7 +612,7 @@ async function runTrustedTestCommand(
   deadlineMs: number
 ): Promise<TestExecutionResult> {
   const config = getConfig();
-  const trusted = guardTestCommand(testCommand, config);
+  const trusted = guardTestCommand(testCommand, config, repoPath);
   const startedAtMs = Date.now();
   const startedAt = new Date(startedAtMs).toISOString();
   const parts = trusted.split(/\s+/).filter(Boolean);
@@ -604,29 +644,6 @@ async function runTrustedTestCommand(
     finished_at: new Date(finishedAtMs).toISOString(),
     duration_ms: finishedAtMs - startedAtMs,
   };
-}
-
-function buildExecutionPrompt(plan: string, repoPath: string, testCommand: string): string {
-  let prompt = `You are executing a pre-written plan in a local repository.
-
-## Repository
-${repoPath}
-
-## Plan
-${plan}
-
-## Instructions
-1. Read the plan carefully.
-2. Implement the changes in this repository only.
-3. Do NOT modify files outside this repository.
-4. Do NOT commit or push changes.
-5. After implementing, describe what you changed.
-6. Output a summary with what was done, files modified, and issues encountered.
-`;
-  if (testCommand) {
-    prompt += `\n7. You may run ${testCommand}; PatchWarden will independently run it again for verification.`;
-  }
-  return prompt;
 }
 
 function buildTestLog(result: TestExecutionResult): string {
@@ -777,14 +794,15 @@ function buildVerifyLog(commands: VerifyCommandRecord[]): string {
 function normalizeVerifyCommands(
   value: unknown,
   legacyTestCommand: string,
-  config: ReturnType<typeof getConfig>
+  config: ReturnType<typeof getConfig>,
+  repoPath: string
 ): string[] {
   if (value !== undefined && !Array.isArray(value)) {
     throw new Error("Invalid task verify_commands metadata; expected an array.");
   }
   return [...new Set([
-    ...((value as unknown[] | undefined) || []).map((command) => guardTestCommand(String(command), config)),
-    ...(legacyTestCommand ? [guardTestCommand(legacyTestCommand, config)] : []),
+    ...((value as unknown[] | undefined) || []).map((command) => guardTestCommand(String(command), config, repoPath)),
+    ...(legacyTestCommand ? [guardTestCommand(legacyTestCommand, config, repoPath)] : []),
   ])];
 }
 

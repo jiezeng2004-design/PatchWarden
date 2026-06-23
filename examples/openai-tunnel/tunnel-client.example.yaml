@@ -14,6 +14,14 @@
 #   --tunnel-id tunnel_xxx \
 #   --mcp-command "C:/path/to/patchwarden/scripts/patchwarden-mcp-stdio.cmd"
 
+# Direct mode uses a separate profile and command:
+#
+# tunnel-client init \
+#   --sample sample_mcp_stdio_local \
+#   --profile patchwarden-direct \
+#   --tunnel-id tunnel_xxx \
+#   --mcp-command "C:/path/to/patchwarden/scripts/patchwarden-mcp-direct.cmd"
+
 mcp:
   commands:
     - channel: main

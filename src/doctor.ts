@@ -18,7 +18,7 @@ import { isSensitivePath } from "./security/sensitiveGuard.js";
 import { guardPlanContent } from "./security/planGuard.js";
 import { TASK_READ_ONLY_FILES } from "./tools/getTaskFile.js";
 import { getToolDefs } from "./tools/registry.js";
-import { CHATGPT_CORE_TOOL_NAMES, selectToolsForProfile } from "./tools/toolCatalog.js";
+import { CHATGPT_CORE_TOOL_NAMES, CHATGPT_DIRECT_TOOL_NAMES, selectToolsForProfile } from "./tools/toolCatalog.js";
 import { PATCHWARDEN_VERSION } from "./version.js";
 
 // ── State ──────────────────────────────────────────────────────────
@@ -76,6 +76,24 @@ check("Node.js version", nodeMajor >= 18,
 // 2. npm
 const npmVer = cmd("npm --version");
 check("npm available", npmVer !== "", npmVer || "npm not found in PATH");
+
+// Local-only medium-risk confirmation entrypoint. It must exist as a package
+// binary but must not be exposed as an MCP tool.
+try {
+  const packageJson = JSON.parse(readFileSync(resolve(process.cwd(), "package.json"), "utf-8"));
+  check(
+    "patchwarden-confirm package binary",
+    packageJson.bin?.["patchwarden-confirm"] === "dist/assessments/confirmCli.js",
+    packageJson.bin?.["patchwarden-confirm"] || "missing"
+  );
+  check(
+    "patchwarden-confirm compiled entrypoint",
+    existsSync(resolve(process.cwd(), "dist/assessments/confirmCli.js")),
+    "run npm.cmd run build"
+  );
+} catch (error) {
+  check("patchwarden-confirm package binary", false, error instanceof Error ? error.message : String(error));
+}
 
 // 3. Git
 const gitVer = cmd("git --version");
@@ -224,10 +242,10 @@ const previousProfile = process.env.PATCHWARDEN_TOOL_PROFILE;
 try {
   process.env.PATCHWARDEN_TOOL_PROFILE = "full";
   const fullTools = getToolDefs();
-  const coreTools = selectToolsForProfile(fullTools, "chatgpt_core");
+  const coreTools = selectToolsForProfile(fullTools, "chatgpt_core", config?.enableDirectProfile);
   const createSchema = coreTools.find((tool) => tool.name === "create_task")?.inputSchema as any;
   const waitSchema = coreTools.find((tool) => tool.name === "wait_for_task")?.inputSchema as any;
-  check("Full tool profile exposes 22 tools", fullTools.length === 22, `${fullTools.length} tools`);
+  check("Full tool profile exposes 28 tools", fullTools.length === 28, `${fullTools.length} tools`);
   check(
     `chatgpt_core profile exposes the exact ${CHATGPT_CORE_TOOL_NAMES.length}-tool manifest`,
     JSON.stringify(coreTools.map((tool) => tool.name)) === JSON.stringify(CHATGPT_CORE_TOOL_NAMES),
@@ -242,6 +260,26 @@ try {
       waitSchema?.properties?.wait_seconds
     )
   );
+
+  // chatgpt_direct profile checks
+  const directDisabledTools = selectToolsForProfile(fullTools, "chatgpt_direct", false);
+  check(
+    "chatgpt_direct disabled exposes only health_check (degraded mode)",
+    directDisabledTools.length === 1 && directDisabledTools[0].name === "health_check",
+    `${directDisabledTools.map((t) => t.name).join(", ")}`
+  );
+
+  if (config?.enableDirectProfile) {
+    const directEnabledTools = selectToolsForProfile(fullTools, "chatgpt_direct", true);
+    check(
+      `chatgpt_direct enabled exposes the exact ${CHATGPT_DIRECT_TOOL_NAMES.length}-tool manifest`,
+      JSON.stringify(directEnabledTools.map((tool) => tool.name)) === JSON.stringify(CHATGPT_DIRECT_TOOL_NAMES),
+      directEnabledTools.map((tool) => tool.name).join(", ")
+    );
+  } else {
+    results.push(`[OK]   chatgpt_direct enabled check skipped (enableDirectProfile=false)`);
+    ok++;
+  }
 } finally {
   if (previousProfile === undefined) delete process.env.PATCHWARDEN_TOOL_PROFILE;
   else process.env.PATCHWARDEN_TOOL_PROFILE = previousProfile;
@@ -293,6 +331,33 @@ const newTools = [
 for (const t of newTools) {
   const compiled = resolve(process.cwd(), "dist/tools", `${t}.js`);
   check(`Tool module: ${t}`, existsSync(compiled), existsSync(compiled) ? "compiled" : "missing");
+}
+
+// Direct tool module checks
+const directToolModules = [
+  "createDirectSession",
+  "searchWorkspace",
+  "applyPatch",
+  "runVerification",
+  "finalizeDirectSession",
+  "auditSession",
+];
+for (const t of directToolModules) {
+  const compiled = resolve(process.cwd(), "dist/tools", `${t}.js`);
+  check(`Direct tool module: ${t}`, existsSync(compiled), existsSync(compiled) ? "compiled" : "missing");
+}
+
+// Direct support module checks
+const directSupportModules = [
+  "directSessionStore",
+  "directGuards",
+  "directPatch",
+  "directVerification",
+  "directAudit",
+];
+for (const t of directSupportModules) {
+  const compiled = resolve(process.cwd(), "dist/direct", `${t}.js`);
+  check(`Direct support module: ${t}`, existsSync(compiled), existsSync(compiled) ? "compiled" : "missing");
 }
 
 // Task directory writable
@@ -385,11 +450,37 @@ if (config) {
   }
 }
 
+// 14b. Direct profile config checks
+if (config) {
+  const directCmds = config.directAllowedCommands || [];
+  warnCheck("directAllowedCommands is non-empty", directCmds.length > 0,
+    directCmds.length > 0 ? `${directCmds.length} commands` : "No Direct commands configured");
+
+  // npm run doctor should NOT be in default Direct whitelist
+  const hasDoctor = directCmds.some((c: string) => c === "npm run doctor");
+  check("directAllowedCommands does not include npm run doctor", !hasDoctor,
+    hasDoctor ? "npm run doctor found in Direct whitelist — remove it for tighter security" : "not present");
+
+  check("directSessionTtlSeconds is valid",
+    config.directSessionTtlSeconds >= 60 && config.directSessionTtlSeconds <= 86400,
+    `${config.directSessionTtlSeconds}s`);
+
+  check("directMaxPatchBytes is positive",
+    config.directMaxPatchBytes > 0, `${config.directMaxPatchBytes}`);
+
+  check("directMaxFileBytes is positive",
+    config.directMaxFileBytes > 0, `${config.directMaxFileBytes}`);
+}
+
 // 15. Tunnel example files check
 const tunnelFiles = [
   "examples/openai-tunnel/README.md",
   "examples/openai-tunnel/tunnel-client.example.yaml",
   "examples/openai-tunnel/chatgpt-test-prompt.md",
+  "scripts/patchwarden-mcp-direct.cmd",
+  "PatchWarden.cmd",
+  "scripts/manage-patchwarden.ps1",
+  "scripts/launchers/Start-PatchWarden-Direct-Tunnel.cmd",
 ];
 for (const tf of tunnelFiles) {
   const full = resolve(process.cwd(), tf);

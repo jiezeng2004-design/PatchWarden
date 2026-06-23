@@ -1,6 +1,8 @@
 param(
   [string]$TunnelId = $env:PATCHWARDEN_TUNNEL_ID,
   [string]$Profile = "patchwarden",
+  [ValidateSet("chatgpt_core", "chatgpt_direct")]
+  [string]$ToolProfile = "chatgpt_core",
   [string]$ProxyUrl = $(if ($env:HTTPS_PROXY) { $env:HTTPS_PROXY } else { "http://127.0.0.1:7892" }),
   [string]$TunnelClientExe = $env:TUNNEL_CLIENT_EXE,
   [string]$OpencodeBin = $env:OPENCODE_BIN_DIR,
@@ -13,23 +15,38 @@ param(
   [int]$WatcherMaxRestartAttempts = 5,
   [int]$WatcherHealthyResetSeconds = 60,
   [switch]$SkipWatcher,
-  [switch]$ForgetSavedApiKey
+  [switch]$ForgetSavedApiKey,
+  [string]$HealthListenAddr = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($HealthListenAddr)) {
+  if ($Profile -eq "patchwarden-direct" -or $ToolProfile -eq "chatgpt_direct") {
+    $HealthListenAddr = "127.0.0.1:8081"
+  } else {
+    $HealthListenAddr = "127.0.0.1:8080"
+  }
+}
 
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 if (-not $ConfigPath) {
   $ConfigPath = Join-Path $ProjectRoot "patchwarden.config.json"
 }
-$McpStdioLauncher = Join-Path $ProjectRoot "scripts\patchwarden-mcp-stdio.cmd"
+$McpLauncherName = if ($ToolProfile -eq "chatgpt_direct") { "patchwarden-mcp-direct.cmd" } else { "patchwarden-mcp-stdio.cmd" }
+$McpStdioLauncher = Join-Path $ProjectRoot "scripts\$McpLauncherName"
 $McpStdioLauncherForTunnel = $McpStdioLauncher -replace "\\", "/"
 $OpencodeConfigHome = Join-Path $env:LOCALAPPDATA "patchwarden\opencode-config"
 $ProfilePath = Join-Path $env:APPDATA "tunnel-client\$Profile.yaml"
-$RuntimeDirectory = Join-Path $env:LOCALAPPDATA "patchwarden\runtime"
+$RuntimeName = if ($ToolProfile -eq "chatgpt_direct") { "runtime-direct" } else { "runtime" }
+$RuntimeDirectory = Join-Path $env:LOCALAPPDATA "patchwarden\$RuntimeName"
 $StatusFile = Join-Path $RuntimeDirectory "tunnel-status.json"
 $HealthUrlFile = Join-Path $RuntimeDirectory "tunnel-health-url.txt"
 $PidFile = Join-Path $RuntimeDirectory "tunnel-client.pid"
+$StdoutLogFile = Join-Path $RuntimeDirectory "tunnel-client.stdout.log"
+$StderrLogFile = Join-Path $RuntimeDirectory "tunnel-client.stderr.log"
+$LegacyPidFile = Join-Path $env:TEMP $(if ($ToolProfile -eq "chatgpt_direct") { "patchwarden-direct.pid" } else { "patchwarden-core.pid" })
+$LegacyHealthUrlFile = Join-Path $env:TEMP $(if ($ToolProfile -eq "chatgpt_direct") { "patchwarden-direct-health.url" } else { "patchwarden-core-health.url" })
 $WatcherStatusFile = Join-Path $RuntimeDirectory "watcher-status.json"
 $script:PendingCredential = $null
 $script:TunnelProcess = $null
@@ -40,6 +57,10 @@ $script:WatcherManaged = $false
 $script:WatcherRestartAttempts = 0
 $script:WatcherHealthySince = $null
 $script:WatcherRestartExhausted = $false
+
+if ($ToolProfile -eq "chatgpt_direct") {
+  $SkipWatcher = $true
+}
 
 function Assert-File {
   param([string]$Path, [string]$Name)
@@ -107,6 +128,52 @@ function Save-PendingCredential {
   Write-Host "[saved] Encrypted credential cache: $CredentialPath"
 }
 
+function Protect-DiagnosticText {
+  param([AllowNull()][string]$Text)
+  if ($null -eq $Text) { return $null }
+  $safe = [string]$Text
+  if ($env:CONTROL_PLANE_API_KEY) {
+    $safe = $safe.Replace([string]$env:CONTROL_PLANE_API_KEY, "[REDACTED]")
+  }
+  $safe = $safe -replace '(?i)(authorization\s*:\s*bearer\s+)\S+', '$1[REDACTED]'
+  $safe = $safe -replace '(?i)(CONTROL_PLANE_API_KEY\s*[=:]\s*)\S+', '$1[REDACTED]'
+  return $safe
+}
+
+function Get-LogTail {
+  param([string]$Path, [int]$LineCount = 30)
+  if (-not (Test-Path -LiteralPath $Path)) { return @() }
+  try {
+    return @(
+      Get-Content -LiteralPath $Path -Tail $LineCount -Encoding UTF8 -ErrorAction Stop |
+        ForEach-Object { Protect-DiagnosticText -Text ([string]$_) }
+    )
+  } catch {
+    return @("Could not read log tail: $($_.Exception.Message)")
+  }
+}
+
+function Protect-LogFile {
+  param([string]$Path)
+  if (-not (Test-Path -LiteralPath $Path)) { return }
+  try {
+    $content = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
+    $protected = Protect-DiagnosticText -Text $content
+    if ($protected -ne $content) {
+      Set-Content -LiteralPath $Path -Value $protected -Encoding UTF8 -NoNewline
+    }
+  } catch {
+    Write-Host "[warn] Could not sanitize diagnostic log $Path`: $($_.Exception.Message)" -ForegroundColor Yellow
+  }
+}
+
+function Get-LastDiagnosticLine {
+  param([string[]]$Lines, [string]$Fallback)
+  $meaningful = @($Lines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  if ($meaningful.Count -gt 0) { return [string]$meaningful[-1] }
+  return $Fallback
+}
+
 function Write-TunnelStatus {
   param(
     [string]$Status,
@@ -115,10 +182,14 @@ function Write-TunnelStatus {
     [int]$Attempt = 0,
     [Nullable[int]]$ProcessId = $null,
     [string]$LastError = $null,
-    [string]$NextRetryAt = $null
+    [string]$NextRetryAt = $null,
+    [Nullable[int]]$ProcessExitCode = $null,
+    [string[]]$StdoutTail = @(),
+    [string[]]$StderrTail = @()
   )
   New-Item -ItemType Directory -Force -Path $RuntimeDirectory | Out-Null
-  $safeError = if ($LastError) { ($LastError -replace '[\r\n]+', ' ').Substring(0, [Math]::Min(500, ($LastError -replace '[\r\n]+', ' ').Length)) } else { $null }
+  $protectedError = Protect-DiagnosticText -Text $LastError
+  $safeError = if ($protectedError) { ($protectedError -replace '[\r\n]+', ' ').Substring(0, [Math]::Min(500, ($protectedError -replace '[\r\n]+', ' ').Length)) } else { $null }
   $payload = [ordered]@{
     status = $Status
     reason_code = $ReasonCode
@@ -128,13 +199,19 @@ function Write-TunnelStatus {
     checked_at = (Get-Date).ToUniversalTime().ToString("o")
     next_retry_at = $NextRetryAt
     last_error = $safeError
+    last_exit_code = $ProcessExitCode
+    stdout_tail = @($StdoutTail)
+    stderr_tail = @($StderrTail)
+    stdout_log = $StdoutLogFile
+    stderr_log = $StderrLogFile
     server_version = if ($script:ToolManifest) { $script:ToolManifest.server_version } else { $null }
     schema_epoch = if ($script:ToolManifest) { $script:ToolManifest.schema_epoch } else { $null }
     tool_profile = if ($script:ToolManifest) { $script:ToolManifest.tool_profile } else { $null }
     tool_count = if ($script:ToolManifest) { $script:ToolManifest.tool_count } else { $null }
     tool_names = if ($script:ToolManifest) { $script:ToolManifest.tool_names } else { @() }
     tool_manifest_sha256 = if ($script:ToolManifest) { $script:ToolManifest.tool_manifest_sha256 } else { $null }
-    core_tools_ready = [bool]($script:ToolManifest -and $script:ToolManifest.ok)
+    tools_ready = [bool]($script:ToolManifest -and $script:ToolManifest.ok)
+    core_tools_ready = [bool]($ToolProfile -eq "chatgpt_core" -and $script:ToolManifest -and $script:ToolManifest.ok)
   }
   $temporary = "$StatusFile.tmp"
   $payload | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $temporary -Encoding UTF8
@@ -218,19 +295,30 @@ function Stop-OwnedWatcherProcess {
 function Start-OwnedWatcherProcess {
   $script:WatcherInstanceId = [Guid]::NewGuid().ToString("n")
   $env:PATCHWARDEN_CONFIG = $ConfigPath
-  $env:PATCHWARDEN_WATCHER_INSTANCE_ID = $script:WatcherInstanceId
-  $env:PATCHWARDEN_WATCHER_LAUNCHER_PID = [string]$PID
-  $env:XDG_CONFIG_HOME = $OpencodeConfigHome
-  if ($OpencodeBin) { $env:PATH = "$OpencodeBin;$env:PATH" }
   $node = (Get-Command node.exe -ErrorAction Stop).Source
   $stdout = Join-Path $RuntimeDirectory "watcher-$($script:WatcherInstanceId).stdout.log"
   $stderr = Join-Path $RuntimeDirectory "watcher-$($script:WatcherInstanceId).stderr.log"
   $script:WatcherManaged = $true
   $script:WatcherHealthySince = $null
-  $script:WatcherProcess = Start-Process -FilePath $node `
-    -ArgumentList @((Join-Path $ProjectRoot "dist\runner\watch.js")) `
-    -WorkingDirectory $ProjectRoot -PassThru -WindowStyle Hidden `
-    -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+  $previousWatcherInstanceId = $env:PATCHWARDEN_WATCHER_INSTANCE_ID
+  $previousWatcherLauncherPid = $env:PATCHWARDEN_WATCHER_LAUNCHER_PID
+  $previousXdgConfigHome = $env:XDG_CONFIG_HOME
+  $previousPath = $env:PATH
+  try {
+    $env:PATCHWARDEN_WATCHER_INSTANCE_ID = $script:WatcherInstanceId
+    $env:PATCHWARDEN_WATCHER_LAUNCHER_PID = [string]$PID
+    $env:XDG_CONFIG_HOME = $OpencodeConfigHome
+    if ($OpencodeBin) { $env:PATH = "$OpencodeBin;$env:PATH" }
+    $script:WatcherProcess = Start-Process -FilePath $node `
+      -ArgumentList @((Join-Path $ProjectRoot "dist\runner\watch.js")) `
+      -WorkingDirectory $ProjectRoot -PassThru -WindowStyle Hidden `
+      -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+  } finally {
+    if ($null -eq $previousWatcherInstanceId) { Remove-Item Env:PATCHWARDEN_WATCHER_INSTANCE_ID -ErrorAction SilentlyContinue } else { $env:PATCHWARDEN_WATCHER_INSTANCE_ID = $previousWatcherInstanceId }
+    if ($null -eq $previousWatcherLauncherPid) { Remove-Item Env:PATCHWARDEN_WATCHER_LAUNCHER_PID -ErrorAction SilentlyContinue } else { $env:PATCHWARDEN_WATCHER_LAUNCHER_PID = $previousWatcherLauncherPid }
+    if ($null -eq $previousXdgConfigHome) { Remove-Item Env:XDG_CONFIG_HOME -ErrorAction SilentlyContinue } else { $env:XDG_CONFIG_HOME = $previousXdgConfigHome }
+    $env:PATH = $previousPath
+  }
   Write-WatcherStatus -Status "starting"
   Write-Host "[watch] Started owned watcher PID $($script:WatcherProcess.Id), instance $($script:WatcherInstanceId)."
 }
@@ -283,15 +371,117 @@ function Get-TunnelHealth {
 }
 
 function Stop-OwnedTunnelProcess {
+  if (Test-Path -LiteralPath $PidFile) {
+    $rawPid = $null
+    try { $rawPid = (Get-Content -LiteralPath $PidFile -Raw -ErrorAction Stop).Trim() } catch {}
+    $childPid = 0
+    if ($rawPid -and [int]::TryParse($rawPid, [ref]$childPid) -and $childPid -gt 0) {
+      $childProcess = Get-ProcessByIdSafe -ProcessId $childPid
+      if ($childProcess -and (Test-TunnelProcessForProfile -Process $childProcess)) {
+        Stop-Process -Id $childPid -ErrorAction SilentlyContinue
+      }
+    }
+  }
   if ($script:TunnelProcess -and -not $script:TunnelProcess.HasExited) {
     Stop-Process -Id $script:TunnelProcess.Id -ErrorAction SilentlyContinue
     try { $script:TunnelProcess.WaitForExit(5000) | Out-Null } catch {}
   }
 }
 
+function Get-ProcessByIdSafe {
+  param([Nullable[int]]$ProcessId)
+  if (-not $ProcessId -or $ProcessId -le 0) { return $null }
+  try {
+    return Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
+  } catch {
+    return $null
+  }
+}
+
+function Test-TunnelProcessForProfile {
+  param($Process)
+  if (-not $Process -or [string]$Process.Name -ine "tunnel-client.exe") { return $false }
+  $commandLine = [string]$Process.CommandLine
+  if (-not $commandLine) { return $false }
+  $profilePattern = '(?i)"?--profile"?(?:=|\s+)"?' + [Regex]::Escape($Profile) + '(?:"|\s|$)'
+  $normalizedCommand = $commandLine -replace '\\', '/'
+  $normalizedProfilePath = $ProfilePath -replace '\\', '/'
+  return $commandLine -match $profilePattern -or $normalizedCommand.IndexOf($normalizedProfilePath, [StringComparison]::OrdinalIgnoreCase) -ge 0
+}
+
+function Clear-StaleRunFiles {
+  foreach ($candidatePidFile in @($PidFile, $LegacyPidFile)) {
+    if (-not (Test-Path -LiteralPath $candidatePidFile)) { continue }
+    $rawPid = $null
+    try { $rawPid = (Get-Content -LiteralPath $candidatePidFile -Raw -ErrorAction Stop).Trim() } catch {}
+    $parsedPid = 0
+    if ($rawPid -and [int]::TryParse($rawPid, [ref]$parsedPid) -and $parsedPid -gt 0) {
+      $existingProcess = Get-ProcessByIdSafe -ProcessId $parsedPid
+      if ($existingProcess) {
+        if (Test-TunnelProcessForProfile -Process $existingProcess) {
+          $modeName = if ($ToolProfile -eq "chatgpt_direct") { "direct" } else { "core" }
+          throw "[conflict] Existing tunnel-client PID $parsedPid still uses profile $Profile. Run PatchWarden.cmd restart $modeName or kill it explicitly."
+        }
+        Write-Host "[cleanup] Stale PID file $candidatePidFile references unrelated PID $parsedPid ($($existingProcess.Name)); the process will not be stopped." -ForegroundColor Yellow
+      }
+    }
+  }
+
+  foreach ($path in @($PidFile, $HealthUrlFile, $LegacyPidFile, $LegacyHealthUrlFile)) {
+    if (Test-Path -LiteralPath $path) {
+      Remove-Item -LiteralPath $path -Force -ErrorAction Stop
+      Write-Host "[cleanup] Removed stale runtime file: $path"
+    }
+  }
+}
+
+function Get-TrackedTunnelProcessId {
+  if (Test-Path -LiteralPath $PidFile) {
+    $rawPid = $null
+    try { $rawPid = (Get-Content -LiteralPath $PidFile -Raw -ErrorAction Stop).Trim() } catch {}
+    $trackedPid = 0
+    if ($rawPid -and [int]::TryParse($rawPid, [ref]$trackedPid) -and $trackedPid -gt 0) {
+      $trackedProcess = Get-ProcessByIdSafe -ProcessId $trackedPid
+      if ($trackedProcess -and (Test-TunnelProcessForProfile -Process $trackedProcess)) {
+        return $trackedPid
+      }
+    }
+  }
+  if ($script:TunnelProcess -and -not $script:TunnelProcess.HasExited) { return $script:TunnelProcess.Id }
+  return $null
+}
+
 function Quote-ProcessArgument {
   param([string]$Value)
   return '"' + ($Value -replace '"', '\"') + '"'
+}
+
+function Set-ProfileHealthListenAddr {
+  param([string]$ProfilePath, [string]$HealthListenAddr)
+  if (-not (Test-Path -LiteralPath $ProfilePath)) { return }
+  $content = Get-Content -LiteralPath $ProfilePath -Raw
+  $target = [Regex]::Escape($HealthListenAddr)
+  # Already correct — nothing to do (idempotent)
+  if ($content -match "listen_addr:\s*`"$target`"") { return }
+  # Has a health block with a different listen_addr — replace the value
+  if ($content -match 'listen_addr:\s*"[^"]*"') {
+    $updated = $content -replace '(listen_addr:\s*)"[^"]*"', "`$1`"$HealthListenAddr`""
+    Set-Content -LiteralPath $ProfilePath -Value $updated -Encoding UTF8 -NoNewline
+    Write-Host "[config] Updated health.listen_addr to $HealthListenAddr in $Profile"
+    return
+  }
+  # Has a health: section but no listen_addr — insert after health:
+  if ($content -match '(?m)^health:') {
+    $updated = $content -replace '(?m)^(health:.*)$', "`$1`n  listen_addr: `"$HealthListenAddr`""
+    Set-Content -LiteralPath $ProfilePath -Value $updated -Encoding UTF8 -NoNewline
+    Write-Host "[config] Added health.listen_addr: $HealthListenAddr to existing health block in $Profile"
+    return
+  }
+  # No health block at all — append one
+  $trimmed = $content.TrimEnd()
+  $updated = "$trimmed`n`nhealth:`n  listen_addr: `"$HealthListenAddr`"`n"
+  Set-Content -LiteralPath $ProfilePath -Value $updated -Encoding UTF8 -NoNewline
+  Write-Host "[config] Added health block with listen_addr: $HealthListenAddr to $Profile"
 }
 
 if ($ForgetSavedApiKey) {
@@ -315,21 +505,21 @@ if (-not $TunnelClientExe) {
   $TunnelClientExe = Read-Host "Path to tunnel-client.exe"
 }
 
-if (-not $OpencodeBin) {
+if (-not $SkipWatcher -and -not $OpencodeBin) {
   $candidateOpencodeBin = Join-Path $env:APPDATA "npm\node_modules\opencode-ai\bin"
   if (Test-Path -LiteralPath $candidateOpencodeBin) {
     $OpencodeBin = $candidateOpencodeBin
   }
 }
 
-if (-not $OpencodeBin) {
+if (-not $SkipWatcher -and -not $OpencodeBin) {
   Write-Host "[warn] OPENCODE_BIN_DIR is not set and opencode-ai bin was not found under APPDATA."
   Write-Host "       Watcher will still start, but opencode tasks may fail unless opencode is on PATH."
 }
 
 Assert-File -Path $TunnelClientExe -Name "tunnel-client.exe"
 Assert-File -Path $ConfigPath -Name "patchwarden.config.json"
-Assert-File -Path $McpStdioLauncher -Name "patchwarden-mcp-stdio.cmd"
+Assert-File -Path $McpStdioLauncher -Name $McpLauncherName
 
 if (-not $TunnelId) {
   $TunnelId = Read-Host "Tunnel ID"
@@ -347,8 +537,8 @@ if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot "dist\index.js"))) {
 
 New-Item -ItemType Directory -Force -Path $RuntimeDirectory | Out-Null
 $env:PATCHWARDEN_CONFIG = $ConfigPath
-Write-Host "[manifest] Verifying the exact tunnel stdio MCP tool catalog..."
-$manifestOutput = (& node (Join-Path $ProjectRoot "scripts\mcp-manifest-check.js") --json 2>&1 | Out-String).Trim()
+Write-Host "[manifest] Verifying the exact $ToolProfile stdio MCP tool catalog..."
+$manifestOutput = (& node (Join-Path $ProjectRoot "scripts\mcp-manifest-check.js") --profile $ToolProfile --json 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0) {
   Write-TunnelStatus -Status "stopped" -ReasonCode "tool_manifest_check_failed" -LastError "The tunnel MCP tool manifest preflight failed."
   throw "Tool manifest preflight failed: $manifestOutput"
@@ -362,6 +552,9 @@ try {
 $manifestFile = Join-Path $RuntimeDirectory "tool-manifest.json"
 $manifestOutput | Set-Content -LiteralPath $manifestFile -Encoding UTF8
 Write-Host "[manifest] $($script:ToolManifest.server_version) profile=$($script:ToolManifest.tool_profile) tools=$($script:ToolManifest.tool_count) hash=$($script:ToolManifest.tool_manifest_sha256)"
+Write-Host "[config] tunnel profile: $Profile"
+Write-Host "[config] tool profile: $ToolProfile"
+Write-Host "[config] health listen addr: $HealthListenAddr"
 
 Set-SecretEnvIfMissing
 
@@ -385,6 +578,9 @@ if ($profileNeedsInit) {
     --tunnel-id $TunnelId `
     --mcp-command $McpStdioLauncherForTunnel `
     --force
+  Set-ProfileHealthListenAddr -ProfilePath $ProfilePath -HealthListenAddr $HealthListenAddr
+} else {
+  Set-ProfileHealthListenAddr -ProfilePath $ProfilePath -HealthListenAddr $HealthListenAddr
 }
 
 $env:PATCHWARDEN_TUNNEL_STATUS_FILE = $StatusFile
@@ -403,7 +599,7 @@ while ($doctor.ExitCode -ne 0 -and $doctor.ReasonCode -eq "transient_connection_
 }
 if ($doctor.ExitCode -ne 0) {
   if ($doctor.ReasonCode -eq "transient_connection_failure") {
-    Write-Host "[doctor] Transient connection failure persists after $preflightAttempt retries; starting tunnel anyway (supervisor will retry during runtime)." -ForegroundColor Yellow
+    Write-Host "[doctor] Preflight transient; continuing to supervised run after $preflightAttempt retries." -ForegroundColor Yellow
     Write-TunnelStatus -Status "degraded" -ReasonCode $doctor.ReasonCode -Ready $false -LastError "Preflight doctor reported transient connection failure; proceeding with supervisor-managed recovery."
   } else {
     Write-TunnelStatus -Status "stopped" -ReasonCode $doctor.ReasonCode -LastError "tunnel-client doctor failed; review the launcher output."
@@ -419,7 +615,18 @@ Save-PendingCredential
 
 Write-Host ""
 Write-Host "[run] Starting supervised tunnel-client. Keep this window open."
-Write-Host "[health] Run Check-PatchWarden-Health.cmd if ChatGPT cannot reach the MCP."
+Write-Host "[health] Run PatchWarden.cmd status all if ChatGPT cannot reach the MCP."
+Write-Host "[run-config] tunnel-client exe: $TunnelClientExe"
+Write-Host "[run-config] profile: $Profile"
+Write-Host "[run-config] health listen addr: $HealthListenAddr"
+Write-Host "[run-config] health url file: $HealthUrlFile"
+Write-Host "[run-config] pid file: $PidFile"
+Write-Host "[run-config] stdout log: $StdoutLogFile"
+Write-Host "[run-config] stderr log: $StderrLogFile"
+Write-Host "[run-config] HTTPS_PROXY: $env:HTTPS_PROXY"
+Write-Host "[run-config] HTTP_PROXY: $env:HTTP_PROXY"
+Write-Host "[run-config] CONTROL_PLANE_API_KEY: $(if ($env:CONTROL_PLANE_API_KEY) { 'set' } else { 'missing' })"
+Write-Host "[run-config] cwd: $ProjectRoot"
 Write-Host ""
 
 $attempt = 0
@@ -427,7 +634,8 @@ $openUi = $true
 try {
   while ($true) {
     $attempt++
-    Remove-Item -LiteralPath $HealthUrlFile, $PidFile -Force -ErrorAction SilentlyContinue
+    Clear-StaleRunFiles
+    Remove-Item -LiteralPath $StdoutLogFile, $StderrLogFile -Force -ErrorAction SilentlyContinue
     Write-TunnelStatus -Status "starting" -ReasonCode $null -Ready $false -Attempt $attempt
     $runArguments = @(
       "run", "--profile", $Profile,
@@ -438,9 +646,13 @@ try {
     )
     if ($openUi) { $runArguments += "--open-web-ui"; $openUi = $false }
     $argumentLine = ($runArguments | ForEach-Object { Quote-ProcessArgument $_ }) -join " "
-    $script:TunnelProcess = Start-Process -FilePath $TunnelClientExe -ArgumentList $argumentLine -PassThru -WindowStyle Hidden
+    Write-Host "[run-config] command: tunnel-client $($runArguments -join ' ')"
+    $redirectedCommand = '""' + $TunnelClientExe + '" ' + $argumentLine + ' 1>"' + $StdoutLogFile + '" 2>"' + $StderrLogFile + '""'
+    $processArgumentLine = '/d /s /c ' + $redirectedCommand
+    $script:TunnelProcess = Start-Process -FilePath $env:ComSpec -ArgumentList $processArgumentLine `
+      -WorkingDirectory $ProjectRoot -PassThru -WindowStyle Hidden
     Write-TunnelStatus -Status "connecting" -ReasonCode $null -Ready $false -Attempt $attempt -ProcessId $script:TunnelProcess.Id
-    Write-Host "[run] tunnel-client PID $($script:TunnelProcess.Id), attempt $attempt"
+    Write-Host "[run] supervised command PID $($script:TunnelProcess.Id), attempt $attempt"
 
     $unreadySince = $null
     $restartForHealth = $false
@@ -450,11 +662,11 @@ try {
       $health = Get-TunnelHealth
       if ($health -and $health.healthz.ok -and $health.readyz.ok) {
         $unreadySince = $null
-        Write-TunnelStatus -Status "ready" -ReasonCode $null -Ready $true -Attempt $attempt -ProcessId $script:TunnelProcess.Id
+        Write-TunnelStatus -Status "ready" -ReasonCode $null -Ready $true -Attempt $attempt -ProcessId (Get-TrackedTunnelProcessId)
         continue
       }
       if (-not $unreadySince) { $unreadySince = Get-Date }
-      Write-TunnelStatus -Status "degraded" -ReasonCode "tunnel_not_ready" -Ready $false -Attempt $attempt -ProcessId $script:TunnelProcess.Id -LastError "Tunnel process is running but /readyz is not ready."
+      Write-TunnelStatus -Status "degraded" -ReasonCode "tunnel_not_ready" -Ready $false -Attempt $attempt -ProcessId (Get-TrackedTunnelProcessId) -LastError "Tunnel process is running but /readyz is not ready."
       if (((Get-Date) - $unreadySince).TotalSeconds -ge $UnreadyRestartSeconds) {
         $doctor = Invoke-TunnelDoctor
         if ($doctor.ExitCode -ne 0 -and $doctor.ReasonCode -ne "transient_connection_failure") {
@@ -469,21 +681,37 @@ try {
       }
     }
 
+    try { [void]$script:TunnelProcess.WaitForExit(5000) } catch {}
+    try { $script:TunnelProcess.Refresh() } catch {}
     $exitCode = $script:TunnelProcess.ExitCode
+    Protect-LogFile -Path $StdoutLogFile
+    Protect-LogFile -Path $StderrLogFile
+    $stdoutTail = @(Get-LogTail -Path $StdoutLogFile -LineCount 30)
+    $stderrTail = @(Get-LogTail -Path $StderrLogFile -LineCount 30)
+    $exitError = Get-LastDiagnosticLine -Lines $stderrTail -Fallback "Tunnel process exited with code $exitCode."
+    if ($exitCode -ne 0) {
+      Write-Host "[error] tunnel-client exited with code $exitCode." -ForegroundColor Red
+      Write-Host "[error] stderr tail:" -ForegroundColor Red
+      if ($stderrTail.Count -gt 0) {
+        $stderrTail | ForEach-Object { Write-Host $_ -ForegroundColor DarkRed }
+      } else {
+        Write-Host "(stderr log was empty)" -ForegroundColor DarkRed
+      }
+    }
     $doctor = Invoke-TunnelDoctor
     if ($doctor.ExitCode -ne 0 -and $doctor.ReasonCode -ne "transient_connection_failure") {
-      Write-TunnelStatus -Status "stopped" -ReasonCode $doctor.ReasonCode -Ready $false -Attempt $attempt -LastError "Tunnel exited and doctor reported a non-retryable error."
+      Write-TunnelStatus -Status "stopped" -ReasonCode $doctor.ReasonCode -Ready $false -Attempt $attempt -LastError $exitError -ProcessExitCode $exitCode -StdoutTail $stdoutTail -StderrTail $stderrTail
       Write-Host "[doctor] Non-retryable diagnostic: $($doctor.ReasonCode)"
       throw "Tunnel stopped after non-retryable error: $($doctor.ReasonCode)"
     }
     if ($MaxReconnectAttempts -gt 0 -and $attempt -ge $MaxReconnectAttempts) {
-      Write-TunnelStatus -Status "stopped" -ReasonCode "retry_limit_reached" -Ready $false -Attempt $attempt -LastError "Reconnect attempt limit reached."
+      Write-TunnelStatus -Status "stopped" -ReasonCode "retry_limit_reached" -Ready $false -Attempt $attempt -LastError $exitError -ProcessExitCode $exitCode -StdoutTail $stdoutTail -StderrTail $stderrTail
       throw "Tunnel reconnect attempt limit reached."
     }
     $delay = [Math]::Min($ReconnectMaxSeconds, $ReconnectBaseSeconds * [Math]::Pow(2, [Math]::Min(3, $attempt - 1)))
     $nextRetry = (Get-Date).AddSeconds($delay).ToUniversalTime().ToString("o")
     $reason = if ($restartForHealth) { "tunnel_not_ready" } else { "tunnel_process_exited" }
-    Write-TunnelStatus -Status "reconnecting" -ReasonCode $reason -Ready $false -Attempt $attempt -LastError "Tunnel process exited with code $exitCode; retrying." -NextRetryAt $nextRetry
+    Write-TunnelStatus -Status "reconnecting" -ReasonCode $reason -Ready $false -Attempt $attempt -LastError $exitError -NextRetryAt $nextRetry -ProcessExitCode $exitCode -StdoutTail $stdoutTail -StderrTail $stderrTail
     Write-Host "[retry] tunnel-client exited with code $exitCode; retrying in $delay seconds."
     Start-Sleep -Seconds $delay
   }

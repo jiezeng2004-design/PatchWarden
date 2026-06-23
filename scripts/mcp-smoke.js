@@ -101,9 +101,13 @@ try {
   const tools = await client.listTools();
   const names = tools.tools.map((tool) => tool.name).sort();
   const expected = [
+    "apply_patch",
+    "audit_session",
     "audit_task",
     "cancel_task",
+    "create_direct_session",
     "create_task",
+    "finalize_direct_session",
     "get_diff",
     "get_plan",
     "get_result",
@@ -121,7 +125,9 @@ try {
     "list_workspace",
     "read_workspace_file",
     "retry_task",
+    "run_verification",
     "save_plan",
+    "search_workspace",
     "wait_for_task",
   ];
   if (JSON.stringify(names) !== JSON.stringify(expected)) {
@@ -133,7 +139,7 @@ try {
   if (!tools._meta || typeof tools._meta.tool_manifest_sha256 !== "string" || tools._meta.tool_manifest_sha256.length !== 64) {
     throw new Error(`tools/list _meta missing manifest hash: ${JSON.stringify(tools._meta || null)}`);
   }
-  if (tools._meta.tool_profile !== "full" || tools._meta.tool_count !== 22) {
+  if (tools._meta.tool_profile !== "full" || tools._meta.tool_count !== 28) {
     throw new Error(`tools/list _meta profile/count mismatch: ${JSON.stringify(tools._meta)}`);
   }
   if (typeof tools._meta.schema_epoch !== "string" || typeof tools._meta.server_version !== "string") {
@@ -204,7 +210,7 @@ try {
     test_command: "npm test",
   });
   if (
-    task.server_version !== "0.4.0" ||
+    task.server_version !== "0.6.0" ||
     !/^[a-f0-9]{64}$/.test(task.tool_manifest_sha256 || "") ||
     task.next_tool_call?.name !== "wait_for_task" ||
     task.next_tool_call?.arguments?.timeout_seconds !== 25
@@ -298,9 +304,16 @@ try {
   if (!summary.terminal || summary.acceptance_status !== "ready_for_review") {
     throw new Error(`unexpected terminal summary: ${JSON.stringify(summary)}`);
   }
+  const compactSummary = await parseToolJson("get_task_summary", { task_id: task.task_id, view: "compact", max_items: 2 });
+  if (compactSummary.view !== "compact" || "log_tails" in compactSummary || compactSummary.artifact_hygiene?.max_items !== 2) {
+    throw new Error(`unexpected compact summary: ${JSON.stringify(compactSummary)}`);
+  }
   const waited = await parseToolJson("wait_for_task", { task_id: task.task_id, timeout_seconds: 1 });
   if (!waited.terminal || waited.continuation_required || waited.next_tool_call?.name !== "audit_task") {
     throw new Error(`wait_for_task did not return terminal acceptance: ${JSON.stringify(waited)}`);
+  }
+  if (waited.summary?.view !== "compact" || "log_tails" in (waited.summary || {})) {
+    throw new Error(`wait_for_task did not embed compact evidence: ${JSON.stringify(waited.summary)}`);
   }
   const legacyWaited = await parseToolJson("wait_for_task", { task_id: task.task_id, wait_seconds: 1 });
   if (!legacyWaited.terminal) throw new Error("legacy wait_seconds alias stopped working");
@@ -323,6 +336,148 @@ try {
   }
   await client.close();
   ok("runner executes a task and writes result files");
+
+  // ── Direct profile checks (lightweight) ──────────────────────────
+
+  // 1. chatgpt_direct disabled: only health_check exposed
+  const disabledConfigPath = join(tempRoot, "direct-disabled.json");
+  writeFileSync(
+    disabledConfigPath,
+    JSON.stringify({
+      workspaceRoot,
+      plansDir: ".patchwarden/plans",
+      tasksDir: ".patchwarden/tasks",
+      agents: { codex: { command: "node", args: ["-e", "console.log('agent')"] } },
+      allowedTestCommands: ["npm test"],
+      maxReadFileBytes: 200000,
+      enableDirectProfile: false,
+    }, null, 2),
+    "utf-8"
+  );
+
+  const disabledTransport = new StdioClientTransport({
+    command: "node",
+    args: ["dist/index.js"],
+    cwd: root,
+    env: {
+      PATCHWARDEN_CONFIG: disabledConfigPath,
+      PATCHWARDEN_TOOL_PROFILE: "chatgpt_direct",
+    },
+    stderr: "pipe",
+  });
+  const disabledClient = new Client(
+    { name: "patchwarden-direct-disabled", version: "0.1.0" },
+    { capabilities: {} }
+  );
+  await disabledClient.connect(disabledTransport);
+
+  const disabledTools = await disabledClient.listTools();
+  const disabledNames = disabledTools.tools.map((t) => t.name).sort();
+  if (disabledNames.length !== 1 || disabledNames[0] !== "health_check") {
+    throw new Error(`chatgpt_direct disabled should expose only health_check, got: ${disabledNames.join(", ")}`);
+  }
+  if (disabledTools._meta.tool_count !== 1) {
+    throw new Error(`chatgpt_direct disabled tool_count should be 1, got ${disabledTools._meta.tool_count}`);
+  }
+
+  const disabledHealth = JSON.parse(
+    (await disabledClient.callTool({ name: "health_check", arguments: {} })).content?.[0]?.text || "{}"
+  );
+  if (disabledHealth.direct_profile_enabled !== false) {
+    throw new Error(`direct_profile_enabled should be false, got ${disabledHealth.direct_profile_enabled}`);
+  }
+  await disabledClient.close();
+  ok("chatgpt_direct disabled exposes only health_check with diagnostic");
+
+  // 2. chatgpt_direct enabled: 9 tools + minimal create_direct_session
+  const enabledConfigPath = join(tempRoot, "direct-enabled.json");
+  const directRepo = join(workspaceRoot, "direct-fixture");
+  mkdirSync(join(directRepo, "src"), { recursive: true });
+  writeFileSync(join(directRepo, "src", "index.ts"), "export const x = 1;\n", "utf-8");
+  writeFileSync(join(directRepo, "package.json"), JSON.stringify({
+    name: "direct-fixture",
+    private: true,
+    scripts: { test: 'node -e "console.log(\'ok\')"' },
+  }, null, 2), "utf-8");
+
+  writeFileSync(
+    enabledConfigPath,
+    JSON.stringify({
+      workspaceRoot,
+      plansDir: ".patchwarden/plans",
+      tasksDir: ".patchwarden/tasks",
+      agents: { codex: { command: "node", args: ["-e", "console.log('agent')"] } },
+      allowedTestCommands: ["npm test"],
+      maxReadFileBytes: 200000,
+      enableDirectProfile: true,
+      directAllowedCommands: ["npm test", "npm run build", "npm run lint"],
+      directSessionsDir: ".patchwarden/direct-sessions",
+      directSessionTtlSeconds: 3600,
+      directMaxPatchBytes: 200000,
+      directMaxFileBytes: 500000,
+    }, null, 2),
+    "utf-8"
+  );
+
+  const enabledTransport = new StdioClientTransport({
+    command: "node",
+    args: ["dist/index.js"],
+    cwd: root,
+    env: {
+      PATCHWARDEN_CONFIG: enabledConfigPath,
+      PATCHWARDEN_TOOL_PROFILE: "chatgpt_direct",
+    },
+    stderr: "pipe",
+  });
+  const enabledClient = new Client(
+    { name: "patchwarden-direct-enabled", version: "0.1.0" },
+    { capabilities: {} }
+  );
+  await enabledClient.connect(enabledTransport);
+
+  const enabledTools = await enabledClient.listTools();
+  const enabledNames = enabledTools.tools.map((t) => t.name).sort();
+  const expectedDirect = [
+    "apply_patch",
+    "audit_session",
+    "create_direct_session",
+    "finalize_direct_session",
+    "health_check",
+    "list_workspace",
+    "read_workspace_file",
+    "run_verification",
+    "search_workspace",
+  ];
+  if (JSON.stringify(enabledNames) !== JSON.stringify(expectedDirect)) {
+    throw new Error(`chatgpt_direct enabled tools mismatch: ${enabledNames.join(", ")}`);
+  }
+  if (enabledTools._meta.tool_count !== 9) {
+    throw new Error(`chatgpt_direct enabled tool_count should be 9, got ${enabledTools._meta.tool_count}`);
+  }
+
+  // Minimal create_direct_session
+  const sessionResult = JSON.parse(
+    (await enabledClient.callTool({
+      name: "create_direct_session",
+      arguments: { repo_path: "direct-fixture", title: "smoke test" },
+    })).content?.[0]?.text || "{}"
+  );
+  if (!sessionResult.session_id || !sessionResult.session_id.startsWith("direct_")) {
+    throw new Error(`create_direct_session failed: ${JSON.stringify(sessionResult)}`);
+  }
+
+  const enabledHealth = JSON.parse(
+    (await enabledClient.callTool({ name: "health_check", arguments: {} })).content?.[0]?.text || "{}"
+  );
+  if (enabledHealth.direct_profile_enabled !== true) {
+    throw new Error(`direct_profile_enabled should be true, got ${enabledHealth.direct_profile_enabled}`);
+  }
+  if (enabledHealth.direct_tool_count !== 9) {
+    throw new Error(`direct_tool_count should be 9, got ${enabledHealth.direct_tool_count}`);
+  }
+
+  await enabledClient.close();
+  ok("chatgpt_direct enabled exposes 9 tools and create_direct_session works");
 } catch (error) {
   fail("MCP smoke test", error);
 } finally {

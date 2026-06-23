@@ -37,7 +37,7 @@ try {
   });
 
   await runExternalScenario();
-  console.log("ok - watcher supervisor handles exit, stale heartbeat, retry limit, and external ownership");
+  console.log("ok - watcher supervisor isolates environment and handles exit, stale heartbeat, retry limit, and external ownership");
 } finally {
   for (const child of children) {
     if (child.exitCode === null) child.kill("SIGKILL");
@@ -67,6 +67,7 @@ async function runExternalScenario() {
       PATCHWARDEN_CONFIG: fixture.configPath,
       PATCHWARDEN_WATCHER_INSTANCE_ID: "external-fixture",
       PATCHWARDEN_WATCHER_LAUNCHER_PID: "999999",
+      XDG_CONFIG_HOME: join(fixture.localAppData, "patchwarden", "opencode-config"),
     },
     stdio: "ignore",
   });
@@ -95,8 +96,8 @@ function createFixture(name) {
   writeFileSync(join(scripts, "patchwarden-mcp-stdio.cmd"), "@echo off\r\nexit /b 0\r\n", "utf-8");
   const manifestFixture = JSON.stringify({
     ok: true,
-    server_version: "0.4.0",
-    schema_epoch: "2026-06-20-v2",
+    server_version: "0.6.0",
+    schema_epoch: "2026-06-22-v6",
     tool_profile: "chatgpt_core",
     tool_count: 16,
     tool_names: [],
@@ -144,6 +145,7 @@ function runLauncher(fixture, mode, maxRestarts, lifetimeMs) {
     "-TunnelClientExe", fixture.mockCmd,
     "-ProxyUrl", "http://127.0.0.1:1",
     "-MaxReconnectAttempts", "1",
+    "-HealthListenAddr", "127.0.0.1:8080",
     "-WatcherMaxRestartAttempts", String(maxRestarts),
     "-WatcherHealthyResetSeconds", "60",
   ], {
@@ -168,6 +170,7 @@ function fixtureEnv(fixture, mode, lifetimeMs) {
 function watcherFixtureSource(attemptPath) {
   return `
 const fs=require('fs');const path=require('path');
+if(!process.env.XDG_CONFIG_HOME){console.error('watcher did not receive XDG_CONFIG_HOME');process.exit(12)}
 let attempt=0;try{attempt=Number(fs.readFileSync(${JSON.stringify(attemptPath)},'utf8'))||0}catch{}
 attempt++;fs.writeFileSync(${JSON.stringify(attemptPath)},String(attempt));
 const cfg=JSON.parse(fs.readFileSync(process.env.PATCHWARDEN_CONFIG,'utf8'));
@@ -182,11 +185,12 @@ else setInterval(write,250);
 
 function tunnelFixtureSource() {
   return `
-const fs=require('fs');const args=process.argv.slice(2);const command=args[0]||'';
+const fs=require('fs');const path=require('path');const args=process.argv.slice(2);const command=args[0]||'';
 const flag=(name)=>{const i=args.indexOf(name);return i>=0?args[i+1]:''};
-if(command==='init'||command==='doctor'){console.log('{}');process.exit(0)}
+if(command==='init'){const profile=flag('--profile')||'patchwarden';const mcpCommand=flag('--mcp-command')||'';const yamlDir=path.join(process.env.APPDATA,'tunnel-client');const yamlPath=path.join(yamlDir,profile+'.yaml');fs.mkdirSync(yamlDir,{recursive:true});fs.writeFileSync(yamlPath,'mcp:\\n  commands:\\n    - channel: main\\n      command: \"'+mcpCommand.replace(/\\\\/g,'/')+'\"\\n\\nhealth:\\n  listen_addr: \"127.0.0.1:8080\"\\n');console.log('{}');process.exit(0)}
+if(command==='doctor'){console.log('{}');process.exit(0)}
 if(command==='health'){console.log(JSON.stringify({healthz:{ok:true},readyz:{ok:true}}));process.exit(0)}
-if(command==='run'){const url=flag('--health.url-file'),pid=flag('--pid.file');fs.mkdirSync(require('path').dirname(url),{recursive:true});fs.writeFileSync(url,'http://127.0.0.1:18889');fs.writeFileSync(pid,String(process.pid));setTimeout(()=>process.exit(9),Number(process.env.TUNNEL_FIXTURE_LIFETIME_MS)||9000)}
+if(command==='run'){if(process.env.XDG_CONFIG_HOME){console.error('watcher XDG_CONFIG_HOME leaked into tunnel-client');process.exit(21)}const url=flag('--health.url-file'),pid=flag('--pid.file');fs.mkdirSync(path.dirname(url),{recursive:true});fs.writeFileSync(url,'http://127.0.0.1:18889');fs.writeFileSync(pid,String(process.pid));setTimeout(()=>process.exit(9),Number(process.env.TUNNEL_FIXTURE_LIFETIME_MS)||9000)}
 `;
 }
 

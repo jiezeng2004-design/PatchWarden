@@ -21,6 +21,13 @@ export interface AuditTaskOutput {
   summary: string;
   checks: AuditCheck[];
   risks: AuditRisk[];
+  confirmed_failures: AuditCheck[];
+  possible_false_positives: Array<{
+    check: string;
+    reason: string;
+  }>;
+  manual_verification_required: boolean;
+  manual_verification_items: string[];
   recommended_next_actions: string[];
 }
 
@@ -78,6 +85,16 @@ export function auditTask(taskId: string): AuditTaskOutput {
   const checks: AuditCheck[] = [];
   const risks: AuditRisk[] = [];
   const actions: string[] = [];
+  const possibleFalsePositives: AuditTaskOutput["possible_false_positives"] = [];
+  const manualVerificationItems: string[] = [];
+  const addManualVerification = (item: string) => {
+    if (!manualVerificationItems.includes(item)) manualVerificationItems.push(item);
+  };
+  const addPossibleFalsePositive = (check: string, reason: string) => {
+    if (!possibleFalsePositives.some((item) => item.check === check && item.reason === reason)) {
+      possibleFalsePositives.push({ check, reason });
+    }
+  };
 
   // ── 1. Task status ──
   const taskStatus = statusData.status || "unknown";
@@ -87,6 +104,9 @@ export function auditTask(taskId: string): AuditTaskOutput {
     result: taskStatus === "done" ? "pass" : failedStatuses.has(taskStatus) ? "fail" : "warn",
     detail: `Task status is "${taskStatus}".`,
   });
+  if (taskStatus !== "done" && !failedStatuses.has(taskStatus)) {
+    addManualVerification(`Task status is "${taskStatus}"; audit evidence may be incomplete until terminal state.`);
+  }
 
   // ── 2. result.md ──
   const resultFile = join(taskDir, "result.md");
@@ -111,6 +131,9 @@ export function auditTask(taskId: string): AuditTaskOutput {
     result: existsSync(verifyJsonFile) ? "pass" : "warn",
     detail: existsSync(verifyJsonFile) ? "verify.json found." : "verify.json is missing.",
   });
+  if (!existsSync(verifyJsonFile)) {
+    addManualVerification("verify.json is missing; determine whether independent verification was expected.");
+  }
   if (existsSync(verifyJsonFile)) {
     try {
       const verify = JSON.parse(readFileSync(verifyJsonFile, "utf-8"));
@@ -133,6 +156,42 @@ export function auditTask(taskId: string): AuditTaskOutput {
       : "No out-of-scope changes recorded.",
   });
 
+  const changedFilesFile = join(taskDir, "changed-files.json");
+  if (existsSync(changedFilesFile)) {
+    try {
+      const changeEvidence = JSON.parse(readFileSync(changedFilesFile, "utf-8"));
+      const hygiene = changeEvidence.artifact_hygiene;
+      if (hygiene?.counts) {
+        const trackedArtifacts = Number(hygiene.counts.tracked_build_artifacts || 0);
+        const ignoredArtifacts = Number(hygiene.counts.ignored_untracked_artifacts || 0);
+        const runtimeFiles = Number(hygiene.counts.runtime_generated_files || 0);
+        const suspicious = Number(hygiene.counts.suspicious_changes || 0);
+        checks.push({
+          name: "artifact_hygiene",
+          result: suspicious > 0 ? "warn" : "pass",
+          detail: suspicious > 0
+            ? `${suspicious} generated or artifact-like change(s) are tracked or not ignored and require review.`
+            : `${ignoredArtifacts} ignored artifact change(s) and ${runtimeFiles} runtime-generated change(s) are classified separately from source risk.`,
+        });
+        if (trackedArtifacts > 0) {
+          risks.push({ severity: "medium", description: `${trackedArtifacts} tracked build artifact change(s) require intentional source-control review.` });
+          addPossibleFalsePositive("artifact_hygiene", "Tracked build outputs may be intentional release assets rather than accidental source changes.");
+        }
+        if (suspicious > 0) {
+          actions.push("Review artifact_hygiene.suspicious_changes before accepting the task; add generated paths to Git ignore rules when appropriate.");
+          addPossibleFalsePositive("artifact_hygiene", "Artifact-like path classification is heuristic and may include intentionally maintained files.");
+          addManualVerification("Review artifact_hygiene.suspicious_changes and decide whether each path is intentional.");
+        }
+      } else {
+        checks.push({ name: "artifact_hygiene", result: "warn", detail: "Change evidence uses the legacy format without artifact classification." });
+        addManualVerification("Legacy changed-files evidence has no artifact classification; inspect changed paths manually.");
+      }
+    } catch {
+      checks.push({ name: "artifact_hygiene", result: "warn", detail: "changed-files.json could not be parsed for artifact classification." });
+      addManualVerification("changed-files.json could not be parsed; inspect repository changes directly.");
+    }
+  }
+
   // ── 3. test.log ──
   const testLogFile = join(taskDir, "test.log");
   const hasTestLog = existsSync(testLogFile);
@@ -141,6 +200,7 @@ export function auditTask(taskId: string): AuditTaskOutput {
     result: hasTestLog ? "pass" : "warn",
     detail: hasTestLog ? "test.log found." : "test.log is missing.",
   });
+  if (!hasTestLog) addManualVerification("test.log is missing; confirm whether the task required an agent-side test run.");
 
   // ── 4. git.diff ──
   const diffFile = join(taskDir, "git.diff");
@@ -149,6 +209,7 @@ export function auditTask(taskId: string): AuditTaskOutput {
     result: existsSync(diffFile) ? "pass" : "warn",
     detail: existsSync(diffFile) ? "git.diff found." : "git.diff is missing.",
   });
+  if (!existsSync(diffFile)) addManualVerification("git.diff is missing; inspect repository state before accepting code changes.");
 
   // ── 5. repo_path consistency — use resolved_repo_path, NOT resolve() ──
   let repoPathSafe = "";
@@ -192,6 +253,7 @@ export function auditTask(taskId: string): AuditTaskOutput {
       });
     } catch {
       checks.push({ name: "package_json_scripts", result: "warn", detail: "package.json exists but could not be read (may be sensitive)." });
+      addManualVerification("package.json could not be read, so documented commands were not fully cross-checked.");
     }
   }
 
@@ -246,6 +308,11 @@ export function auditTask(taskId: string): AuditTaskOutput {
         description: `Command "npm run ${scriptName}" referenced in docs but not found in package.json scripts.`,
       });
       actions.push(`Verify whether "npm run ${scriptName}" should exist or if the agent fabricated it.`);
+      addPossibleFalsePositive(
+        `npm_script_${scriptName}`,
+        "Documentation may describe another package, historical version, or example command rather than the current package.json."
+      );
+      addManualVerification(`Check whether documented command "npm run ${scriptName}" belongs to another package or should be added here.`);
     }
   }
   if (allNpmRunRefs.size > 0 && pkgScripts.length > 0) {
@@ -271,6 +338,7 @@ export function auditTask(taskId: string): AuditTaskOutput {
       description: `${allReleaseClaims.length} remote publish/release/deploy claim(s) found in docs. PatchWarden cannot independently verify npm/GitHub actions. Manual confirmation required.`,
     });
     actions.push("Manually verify all npm publish / GitHub release / git tag claims before accepting the task as complete.");
+    addManualVerification("Verify remote npm, GitHub Release, and Git tag claims against authoritative remote services.");
   }
 
   // ── 9. test.log Exit code check ──
@@ -282,6 +350,7 @@ export function auditTask(taskId: string): AuditTaskOutput {
       checks.push({ name: "test_command_in_log", result: "pass", detail: "test.log contains the configured test command." });
     } else if (statusData.test_command) {
       checks.push({ name: "test_command_in_log", result: "warn", detail: `test.log does not clearly show "${statusData.test_command}".` });
+      addManualVerification("Confirm that test.log belongs to the configured test command.");
     }
 
     // Extract Exit code
@@ -298,6 +367,7 @@ export function auditTask(taskId: string): AuditTaskOutput {
     } else if (statusData.test_command) {
       checks.push({ name: "test_exit_code", result: "warn", detail: "test.log does not contain 'Exit code:' line — cannot verify test result." });
       risks.push({ severity: "medium", description: "Test command was configured but test.log has no exit code." });
+      addManualVerification("The configured test command has no recorded exit code; rerun or inspect verification evidence.");
     }
   }
 
@@ -306,9 +376,11 @@ export function auditTask(taskId: string): AuditTaskOutput {
   const warnCount = checks.filter((c) => c.result === "warn").length;
   const passCount = checks.filter((c) => c.result === "pass").length;
   const verdict: AuditTaskOutput["verdict"] = failCount > 0 ? "fail" : warnCount > 0 ? "warn" : "pass";
+  const confirmedFailures = checks.filter((check) => check.result === "fail");
 
   let summary = `Audit complete: ${passCount} pass, ${warnCount} warn, ${failCount} fail across ${checks.length} checks. `;
-  summary += risks.length > 0 ? `${risks.length} risk(s) identified.` : "No risks identified.";
+  summary += risks.length > 0 ? `${risks.length} risk(s) identified. ` : "No risks identified. ";
+  summary += `${confirmedFailures.length} confirmed failure(s), ${possibleFalsePositives.length} possible false-positive warning(s), and ${manualVerificationItems.length} manual verification item(s).`;
 
   if (actions.length === 0) {
     actions.push("No specific actions recommended.");
@@ -330,11 +402,37 @@ export function auditTask(taskId: string): AuditTaskOutput {
     "## Risks",
     ...risks.map((r) => `- [${r.severity}] ${r.description}`),
     "",
+    "## Confirmed Failures",
+    ...(confirmedFailures.length > 0
+      ? confirmedFailures.map((check) => `- **${check.name}**: ${check.detail}`)
+      : ["- None."]),
+    "",
+    "## Possible False Positives",
+    ...(possibleFalsePositives.length > 0
+      ? possibleFalsePositives.map((item) => `- **${item.check}**: ${item.reason}`)
+      : ["- None identified."]),
+    "",
+    "## Manual Verification Required",
+    ...(manualVerificationItems.length > 0
+      ? manualVerificationItems.map((item) => `- ${item}`)
+      : ["- No additional manual verification identified by this audit."]),
+    "",
     "## Recommended Actions",
     ...actions.map((a) => `- ${a}`),
   ].join("\n");
 
   writeFileSync(join(taskDir, "independent-review.md"), reviewMd, "utf-8");
 
-  return { task_id: taskId, verdict, summary, checks, risks, recommended_next_actions: actions };
+  return {
+    task_id: taskId,
+    verdict,
+    summary,
+    checks,
+    risks,
+    confirmed_failures: confirmedFailures,
+    possible_false_positives: possibleFalsePositives,
+    manual_verification_required: manualVerificationItems.length > 0,
+    manual_verification_items: manualVerificationItems,
+    recommended_next_actions: actions,
+  };
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
 
 const allowedLegacyFiles = new Set([
   ".gitignore",
@@ -10,17 +11,35 @@ const allowedLegacyFiles = new Set([
   "docs/migration-from-safe-bifrost.md",
   "docs/release-v0.3.0.md",
   "docs/release-v0.4.0.md",
+  "docs/release-v0.6.0.md",
   "scripts/brand-check.js",
   "scripts/pack-clean.js",
 ]);
 const legacyPattern = /safe-bifrost|Safe-Bifrost|SAFE_BIFROST|SafeBifrost|safe_bifrost/;
-const trackedFiles = execFileSync(
-  "git",
-  ["ls-files", "--cached", "--others", "--exclude-standard"],
-  { encoding: "utf-8" }
-)
-  .split(/\r?\n/)
-  .filter(Boolean);
+
+const EXCLUDE_DIRS = new Set(["node_modules", ".npm-cache", "dist", "release", ".patchwarden", ".git", "logs", "tmp", "coverage", "build", "out", ".next"]);
+
+let trackedFiles;
+let inGit = false;
+try {
+  trackedFiles = execFileSync(
+    "git",
+    ["ls-files", "--cached", "--others", "--exclude-standard"],
+    { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }
+  )
+    .split(/\r?\n/)
+    .filter(Boolean);
+  inGit = true;
+} catch {
+  // Not a git repository — fall back to filesystem walk
+  console.warn("[brand-check] Not a Git repository; using filesystem walk.");
+  trackedFiles = walkFiles(".");
+  if (trackedFiles.length === 0) {
+    console.warn("[brand-check] WARNING: no files found in non-Git walk. Exiting cleanly.");
+    process.exit(0);
+  }
+}
+
 const failures = [];
 
 for (const file of trackedFiles) {
@@ -30,9 +49,13 @@ for (const file of trackedFiles) {
     failures.push(`${normalized}: legacy brand in path`);
     continue;
   }
-  const content = readFileSync(file);
-  if (!content.includes(0) && legacyPattern.test(content.toString("utf-8"))) {
-    failures.push(`${normalized}: legacy brand in content`);
+  try {
+    const content = readFileSync(file);
+    if (!content.includes(0) && legacyPattern.test(content.toString("utf-8"))) {
+      failures.push(`${normalized}: legacy brand in content`);
+    }
+  } catch {
+    // skip unreadable files
   }
 }
 
@@ -42,4 +65,26 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log(`[brand-check] OK: ${trackedFiles.length} tracked files checked.`);
+const label = inGit ? "tracked files checked" : "files scanned (non-Git fallback)";
+console.log(`[brand-check] OK: ${trackedFiles.length} ${label}.`);
+
+function walkFiles(root) {
+  const results = [];
+  const visit = (dir) => {
+    if (results.length > 10000) return;
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (results.length > 10000) break;
+      if (e.isDirectory()) {
+        if (EXCLUDE_DIRS.has(e.name)) continue;
+        visit(join(dir, e.name));
+      } else if (e.isFile()) {
+        const rel = relative(root, join(dir, e.name)).replace(/\\/g, "/");
+        results.push(rel);
+      }
+    }
+  };
+  visit(root);
+  return results;
+}
