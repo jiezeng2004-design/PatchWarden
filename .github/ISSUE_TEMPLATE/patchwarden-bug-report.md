@@ -1,9 +1,8 @@
 ---
 name: PatchWarden Bug Report
 about: Report a bug or unexpected behavior in PatchWarden
-title: ''
 labels: bug
-assignees: jiezeng2004-design
+title: '[Bug] '
 
 ---
 
@@ -36,6 +35,7 @@ What actually happened?
 ## Logs or Screenshots
 
 Please paste relevant logs, error messages, or screenshots here.
+Do not paste API keys, tokens, cookies, `.env` contents, or unredacted task artifacts.
 
 ## Additional Context
 

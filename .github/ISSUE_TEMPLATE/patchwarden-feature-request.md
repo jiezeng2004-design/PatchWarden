@@ -1,9 +1,8 @@
 ---
 name: PatchWarden Feature Request
 about: Suggest an idea or improvement for PatchWarden
-title: "[Feature]"
+title: "[Feature] "
 labels: enhancement
-assignees: jiezeng2004-design
 
 ---
 
@@ -26,6 +25,10 @@ Have you considered any other solutions, tools, or workarounds?
 ## Expected Impact
 
 How would this improve PatchWarden?
+
+## Safety Impact
+
+Explain effects on workspace confinement, command allow-lists, credentials, and auditability.
 
 ## Additional Context
 
