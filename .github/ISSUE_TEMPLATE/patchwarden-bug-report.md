@@ -1,9 +1,8 @@
 ---
 name: PatchWarden Bug Report
 about: Report a bug or unexpected behavior in PatchWarden
-title: ''
+title: "[Bug] "
 labels: bug
-assignees: jiezeng2004-design
 
 ---
 
