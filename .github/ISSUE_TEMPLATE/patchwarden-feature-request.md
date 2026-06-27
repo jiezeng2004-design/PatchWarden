@@ -22,6 +22,10 @@ Describe how you think this feature should work.
 
 Have you considered any other solutions, tools, or workarounds?
 
+## Safety Impact
+
+How would this affect workspace confinement, command allow-lists, credentials, and auditability?
+
 ## Expected Impact
 
 How would this improve PatchWarden?
