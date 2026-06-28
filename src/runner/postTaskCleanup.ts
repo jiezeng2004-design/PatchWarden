@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-const EXCLUDED_DIRS = new Set([".git", ".venv", "node_modules", "samples", "docs"]);
+const EXCLUDED_DIRS = new Set([".git", ".patchwarden", ".venv", "node_modules", "samples", "docs"]);
 const CLEANUP_DIRS = new Set(["__pycache__", "dist", "release_packages", "temp_files"]);
 const CLEANUP_FILES = [/\.pyc$/i];
 

@@ -97,7 +97,7 @@ export function listTasks(input?: ListTasksInput): ListTasksOutput {
           : null;
         if (taskAcceptance !== filterAcceptance) continue;
       }
-      if (input?.active_only && data.status !== "pending" && data.status !== "running") continue;
+      if (input?.active_only && !["pending", "running", "collecting_artifacts"].includes(String(data.status))) continue;
       const normalizedRepo = String(data.repo_path || ".").replace(/\\/g, "/");
       const normalizedResolvedRepo = String(data.resolved_repo_path || "").replace(/\\/g, "/");
       if (filterRepo && normalizedRepo !== filterRepo && normalizedResolvedRepo !== filterRepo) continue;

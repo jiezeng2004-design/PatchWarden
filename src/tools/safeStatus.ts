@@ -12,8 +12,8 @@ export interface SafeStatusOutput {
   task_id: string;
   status: TaskStatus | "not_found";
   /**
-   * v0.7.0: For done_by_agent tasks, legacy_status echoes "done" so older
-   * UI/clients that do not understand done_by_agent still see a familiar value.
+   * v0.7.0: For done_by_agent or accepted tasks, legacy_status echoes "done"
+   * so older UI/clients that do not understand those statuses still see a familiar value.
    * Null for all other statuses.
    */
   legacy_status: "done" | null;

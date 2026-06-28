@@ -8,7 +8,7 @@ import { getTaskSummary } from "./getTaskSummary.js";
 import { guardReadPath } from "../security/pathGuard.js";
 import { redactSensitiveValue } from "../security/contentRedaction.js";
 import { readDirectSession, type DirectSessionRecord, type DirectSessionVerificationRun } from "../direct/directSessionStore.js";
-import type { ChangeArtifacts, ChangedFile, ClassifiedChange } from "../runner/changeCapture.js";
+import type { ChangedFile, ClassifiedChange } from "../runner/changeCapture.js";
 
 export interface SafeViewOptions {
   max_items?: number;
@@ -234,7 +234,12 @@ function getTaskDir(taskId: string) {
 function readJson(path: string, config: ReturnType<typeof getConfig>): Record<string, any> {
   guardReadPath(path, config.workspaceRoot, config.tasksDir);
   if (!existsSync(path)) return {};
-  return JSON.parse(readFileSync(path, "utf-8"));
+  try {
+    const raw = readFileSync(path, "utf-8").replace(/^\uFEFF/, "");
+    return asRecord(JSON.parse(raw));
+  } catch {
+    return {};
+  }
 }
 
 function normalizeMaxItems(value: number | undefined): number {

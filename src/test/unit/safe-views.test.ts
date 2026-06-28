@@ -92,6 +92,36 @@ describe("safeViews", () => {
     assert.ok(payload.includes("src/index.ts"));
   });
 
+  it("treats corrupted safe-view JSON artifacts as empty summaries", () => {
+    const taskId = "task-safe-corrupt";
+    const taskDir = join(tempDir, ".patchwarden", "tasks", taskId);
+    mkdirSync(taskDir, { recursive: true });
+    writeFileSync(join(taskDir, "status.json"), JSON.stringify({
+      task_id: taskId,
+      status: "done_by_agent",
+      phase: "done_by_agent",
+      repo_path: "repo",
+      resolved_repo_path: join(tempDir, "repo"),
+      verify_status: "passed",
+    }), "utf-8");
+    writeFileSync(join(taskDir, "result.json"), JSON.stringify({
+      task_id: taskId,
+      status: "done_by_agent",
+      summary: "Finished safely",
+      changed_files: [],
+      verify_status: "passed",
+      warnings: [],
+    }), "utf-8");
+    writeFileSync(join(taskDir, "verify.json"), "\uFEFF{not json", "utf-8");
+    writeFileSync(join(taskDir, "changed-files.json"), "{not json", "utf-8");
+
+    const tests = safeTestSummary(taskId);
+    const diff = safeDiffSummary(taskId);
+
+    assert.equal(tests.command_count, 0);
+    assert.equal(diff.changed_files_total, 0);
+  });
+
   it("returns Direct safe summaries without verification tails", () => {
     const sessionId = "direct-safe-001";
     const sessionDir = join(tempDir, ".patchwarden", "direct-sessions", sessionId);

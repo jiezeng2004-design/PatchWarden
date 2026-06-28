@@ -25,7 +25,7 @@ export interface ToolDefLike {
   inputSchema: unknown;
 }
 
-/** chatgpt_core profile 的预期工具数（17）。 */
+/** chatgpt_core profile 的预期工具数（来自 CHATGPT_CORE_TOOL_NAMES）。 */
 const EXPECTED_CORE_COUNT = CHATGPT_CORE_TOOL_NAMES.length;
 
 // ── 检查 1: registry schema digest 一致性 ─────────────────────────
@@ -55,10 +55,10 @@ export function checkRegistrySchemaDigest(
 // ── 检查 2: chatgpt_core manifest 稳定性 ──────────────────────────
 
 /**
- * 校验 chatgpt_core profile 的 17 工具 manifest 是否稳定。
+ * 校验 chatgpt_core profile 的工具 manifest 是否稳定。
  *
  * toolCatalog.ts 未导出独立的 manifest hash 计算函数（stableJson 为私有），
- * 因此采用 fallback 方案：校验 CHATGPT_CORE_TOOL_NAMES 中的 17 个工具名
+ * 因此采用 fallback 方案：校验 CHATGPT_CORE_TOOL_NAMES 中的工具名
  * 全部存在于 toolDefs 中（集合比较，不比较顺序——Map 迭代顺序取决于构造
  * 方式，不一定与 chatgpt_core profile 顺序一致）。
  *
@@ -83,7 +83,7 @@ export function checkChatgptCoreManifestStable(
 // ── 检查 3: chatgpt_core profile 工具数未变 ───────────────────────
 
 /**
- * 校验 chatgpt_core profile 的工具数仍然是 17。
+ * 校验 chatgpt_core profile 的工具数仍与 CHATGPT_CORE_TOOL_NAMES 一致。
  * 用于检测是否有新工具被意外追加到 chatgpt_core profile。
  */
 export function checkNewToolsProfileAppend(

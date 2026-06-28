@@ -1,4 +1,4 @@
-﻿import { createHash } from "node:crypto";
+import { createHash } from "node:crypto";
 import { PATCHWARDEN_VERSION, TOOL_SCHEMA_EPOCH } from "../version.js";
 
 export type ToolProfile = "full" | "chatgpt_core" | "chatgpt_direct" | "chatgpt_search";

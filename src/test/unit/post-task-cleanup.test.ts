@@ -21,10 +21,12 @@ describe("postTaskCleanup", () => {
 
       mkdirSync(join(root, "backend", "__pycache__"), { recursive: true });
       mkdirSync(join(root, ".venv", "__pycache__"), { recursive: true });
+      mkdirSync(join(root, ".patchwarden", "tasks", "old-task", "__pycache__"), { recursive: true });
       mkdirSync(join(root, "node_modules", "pkg", "__pycache__"), { recursive: true });
       mkdirSync(join(root, "docs", "__pycache__"), { recursive: true });
       writeFileSync(join(root, "backend", "__pycache__", "drop.pyc"), "drop", "utf-8");
       writeFileSync(join(root, ".venv", "__pycache__", "skip.pyc"), "skip", "utf-8");
+      writeFileSync(join(root, ".patchwarden", "tasks", "old-task", "__pycache__", "skip.pyc"), "skip", "utf-8");
       writeFileSync(join(root, "node_modules", "pkg", "__pycache__", "skip.pyc"), "skip", "utf-8");
       writeFileSync(join(root, "docs", "__pycache__", "skip.pyc"), "skip", "utf-8");
 
@@ -38,6 +40,7 @@ describe("postTaskCleanup", () => {
       assert.ok(!existsSync(join(root, "backend", "__pycache__")));
       assert.ok(existsSync(join(root, "tracked", "__pycache__", "keep.pyc")));
       assert.ok(existsSync(join(root, ".venv", "__pycache__", "skip.pyc")));
+      assert.ok(existsSync(join(root, ".patchwarden", "tasks", "old-task", "__pycache__", "skip.pyc")));
       assert.ok(existsSync(join(root, "node_modules", "pkg", "__pycache__", "skip.pyc")));
       assert.ok(existsSync(join(root, "docs", "__pycache__", "skip.pyc")));
 
