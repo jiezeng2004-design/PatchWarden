@@ -26,7 +26,7 @@ import { resolve, join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
-import { loadConfig, getConfig, reloadConfig } from "./config.js";
+import { loadConfig, getConfig, getTasksDir, reloadConfig } from "./config.js";
 import { savePlan } from "./tools/savePlan.js";
 import { getPlan } from "./tools/getPlan.js";
 import { createTask } from "./tools/createTask.js";
@@ -592,7 +592,7 @@ test("D8b. tool profiles are exact and schema changes alter the manifest hash", 
   try {
     process.env.PATCHWARDEN_TOOL_PROFILE = "full";
     const fullTools = getToolDefs();
-    if (fullTools.length !== 30) throw new Error(`Expected 30 full tools, got ${fullTools.length}`);
+    if (fullTools.length !== 54) throw new Error(`Expected 54 full tools, got ${fullTools.length}`);
 
     const coreTools = selectToolsForProfile(fullTools, "chatgpt_core", getConfig().enableDirectProfile);
     const names = coreTools.map((tool) => tool.name);
@@ -1023,6 +1023,11 @@ test("I1. list_tasks returns tasks array", () => {
   mgmtPlanId = savePlan({ title: "Mgmt Test", content: "# Test" }).plan_id;
   mgmtTaskId = createTask({ plan_id: mgmtPlanId, agent: "codex", repo_path: "." }).task_id;
   mgmtTaskId2 = createTask({ plan_id: mgmtPlanId, agent: "codex", repo_path: "." }).task_id;
+  const collectingStatusFile = join(getTasksDir(getConfig()), mgmtTaskId2, "status.json");
+  const collectingStatus = JSON.parse(readFileSync(collectingStatusFile, "utf-8"));
+  collectingStatus.status = "collecting_artifacts";
+  collectingStatus.phase = "collecting_artifacts";
+  writeFileSync(collectingStatusFile, JSON.stringify(collectingStatus, null, 2), "utf-8");
   const result = listTasks({ limit: 5 });
   if (!Array.isArray(result.tasks)) throw new Error("tasks not array");
   if (result.tasks.length < 2) throw new Error(`Expected >=2 tasks, got ${result.tasks.length}`);
@@ -1039,8 +1044,11 @@ test("I2b. list_tasks filters by repo and active status with watcher evidence", 
   if (result.returned !== result.tasks.length || !result.watcher?.status) {
     throw new Error(`Missing list_tasks pagination or watcher evidence: ${JSON.stringify(result)}`);
   }
-  if (result.tasks.some((task) => !["pending", "running"].includes(task.status) || task.repo_path !== ".")) {
+  if (result.tasks.some((task) => !["pending", "running", "collecting_artifacts"].includes(task.status) || task.repo_path !== ".")) {
     throw new Error(`list_tasks active/repo filter mismatch: ${JSON.stringify(result.tasks)}`);
+  }
+  if (!result.tasks.some((task) => task.task_id === mgmtTaskId2 && task.status === "collecting_artifacts")) {
+    throw new Error(`list_tasks active_only omitted collecting_artifacts task: ${JSON.stringify(result.tasks)}`);
   }
 });
 
@@ -1926,10 +1934,10 @@ reloadConfig();
 
 let directSessionId = "";
 
-test("M1. chatgpt_core still has 17 tools", () => {
+test("M1. chatgpt_core still has 21 tools", () => {
   const tools = getToolDefs();
   const coreTools = selectToolsForProfile(tools, "chatgpt_core", true);
-  if (coreTools.length !== 17) throw new Error(`Expected 17, got ${coreTools.length}`);
+  if (coreTools.length !== 21) throw new Error(`Expected 21, got ${coreTools.length}`);
   if (JSON.stringify(coreTools.map((t) => t.name)) !== JSON.stringify(CHATGPT_CORE_TOOL_NAMES)) {
     throw new Error("Tool names mismatch");
   }
@@ -1942,10 +1950,10 @@ test("M2. chatgpt_direct disabled exposes only health_check", () => {
   if (disabledTools[0].name !== "health_check") throw new Error(`Expected health_check, got ${disabledTools[0].name}`);
 });
 
-test("M3. chatgpt_direct enabled has 10 tools", () => {
+test("M3. chatgpt_direct enabled has 13 tools", () => {
   const tools = getToolDefs();
   const directTools = selectToolsForProfile(tools, "chatgpt_direct", true);
-  if (directTools.length !== 10) throw new Error(`Expected 10, got ${directTools.length}`);
+  if (directTools.length !== 13) throw new Error(`Expected 13, got ${directTools.length}`);
   if (JSON.stringify(directTools.map((t) => t.name)) !== JSON.stringify(CHATGPT_DIRECT_TOOL_NAMES)) {
     throw new Error("Tool names mismatch");
   }
