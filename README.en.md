@@ -8,7 +8,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Current source version: **v1.1.0**. See the
+Current source version: **v1.5.0**. See the
 [CHANGELOG](CHANGELOG.md), [migration guide](docs/migration-from-safe-bifrost.md), and
 [release checklist](docs/release-checklist.md). Verify GitHub Release / npm publication separately before release.
 
@@ -493,7 +493,7 @@ PatchWarden.cmd start core
 The launcher:
 
 - Builds `dist/index.js` if it is missing.
-- Verifies v1.1.0, the fixed 21-tool `chatgpt_core` catalog, and its schema
+- Verifies v1.5.0, the fixed 26-tool `chatgpt_core` catalog, and its schema
   manifest.
 - Reads or prompts for the Tunnel ID.
 - Reads or prompts for the runtime API key.
@@ -930,10 +930,12 @@ names.
 
 ## MCP tools and profiles
 
-`chatgpt_core` is the fixed 21-tool profile used by the ChatGPT tunnel:
+`chatgpt_core` is the fixed 26-tool profile used by the ChatGPT tunnel:
 
 `health_check`, `list_agents`, `list_workspace`,
-`read_workspace_file`, `save_plan`, `create_task`,
+`read_workspace_file`, `save_plan`, `create_task`, `run_task_loop`,
+`recommend_agent_for_task`, `get_task_lineage`, `export_task_evidence_pack`,
+`get_project_policy`,
 `wait_for_task`, `get_task_summary`, `get_diff`, `get_result`,
 `get_result_json`, `get_test_log`, `get_task_status`, `list_tasks`,
 `cancel_task`, `audit_task`, `safe_status`, `safe_result`, `safe_audit`, `safe_test_summary`, and `safe_diff_summary`.
@@ -941,6 +943,38 @@ names.
 `get_task_summary` keeps the backward-compatible `standard` view by default.
 ChatGPT should request `view: "compact"` first; terminal `wait_for_task`
 responses also embed compact acceptance evidence only.
+
+`run_task_loop` is the v1.2 safe orchestration entrypoint. It only composes
+existing `create_task`, `wait_for_task`, safe summary, and `audit_task`
+behavior; it does not bypass the Watcher, command allowlist, workspace
+confinement, or local confirmation boundaries. `get_task_lineage` reads the
+bounded `.patchwarden/lineages/<lineage_id>/` summary without returning full
+logs or diffs.
+
+`get_project_policy` is the v1.3 read-only policy entrypoint. It returns the
+bounded effective `.patchwarden/project-policy.json` policy and release
+readiness summary without expanding command permissions. The v1.3 release mode
+tools, `release_check`, `release_prepare`, `release_verify`, and
+`release_cleanup`, are full-profile only and never perform publish, push, tag,
+or GitHub Release writes. The Control Center dashboard also shows bounded
+lineage, policy, and release status summaries without full logs, diffs, or
+secret-bearing content.
+
+v1.4 adds Direct-assisted loop verification. `run_task_loop` can opt into
+`direct_verify=true`; after the guarded task and audit succeed, PatchWarden
+creates a Direct session, runs only allowlisted verification commands, safe
+finalizes, safe audits, and records bounded Direct evidence in lineage. It does
+not call Direct patching tools, publish, push, tag, create releases, restart
+watchers, or return full stdout/stderr/diffs.
+
+v1.5 adds worktree-assisted loop isolation, bounded agent routing, and evidence
+pack export. `run_task_loop(isolation_mode="worktree")` creates an isolated git
+worktree for the task and records the worktree id, path, branch, and next action
+in lineage. It does not auto-merge or auto-delete the worktree. `agent="auto"`
+uses `recommend_agent_for_task` to select a configured agent before task
+creation. `export_task_evidence_pack` writes bounded `evidence.json` and
+`EVIDENCE.md` files under `.patchwarden/evidence-packs/<lineage_id>/` without
+stdout/stderr tails, full diffs, verification logs, or sensitive file content.
 
 `full` additionally provides:
 
@@ -956,9 +990,9 @@ to `full`.
 
 ### ChatGPT Direct mode
 
-Direct mode exposes thirteen guarded tools so ChatGPT can create an editing
+Direct mode exposes fourteen guarded tools so ChatGPT can create an editing
 session, read and search source files, apply hash-bound JSON patches, run
-exactly allowlisted verification commands, finalize the evidence, and audit
+exactly allowlisted verification commands or a bounded verification bundle, finalize the evidence, and audit
 the result without a local execution agent.
 
 Enable it in the trusted local configuration while keeping the ordinary Core
@@ -980,7 +1014,7 @@ On first use, provide the `tunnel-client.exe` path and a Tunnel ID dedicated
 to the Direct Connector. The launcher uses the `patchwarden-direct` profile,
 stores runtime state under `%LOCALAPPDATA%\patchwarden\runtime-direct`, skips
 the Watcher, and retains the existing DPAPI credential handling. In a fresh
-ChatGPT conversation, `health_check` should report `chatgpt_direct`, thirteen
+ChatGPT conversation, `health_check` should report `chatgpt_direct`, fourteen
 tools, and `direct_profile_enabled=true`.
 
 ## Security boundaries and local data

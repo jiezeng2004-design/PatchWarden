@@ -16,6 +16,10 @@ export interface RunVerificationOutput {
   exit_code: number | null;
   passed: boolean;
   timed_out: boolean;
+  redacted: boolean;
+  redaction_categories: string[];
+  started_at: string;
+  finished_at: string;
   stdout_tail: string;
   stderr_tail: string;
   log_path: string;
@@ -48,6 +52,10 @@ export async function runVerification(
     exit_code: result.run.exit_code,
     passed: result.run.passed,
     timed_out: result.run.timed_out,
+    redacted: Boolean(result.run.redacted),
+    redaction_categories: result.run.redaction_categories || [],
+    started_at: result.run.started_at,
+    finished_at: result.run.finished_at,
     stdout_tail: result.run.stdout_tail,
     stderr_tail: result.run.stderr_tail,
     log_path: result.run.log_path,

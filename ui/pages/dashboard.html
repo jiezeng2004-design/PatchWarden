@@ -304,6 +304,38 @@ html.dark {
         <div id="suggestions-body" class="px-4 py-2"></div>
       </div>
 
+      <!-- ===== V1.5 RELEASE / POLICY / LINEAGE / EVIDENCE OVERVIEW ===== -->
+      <div class="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-6">
+        <div class="rounded-lg" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
+          <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
+            <h2 class="text-sm font-semibold truncate" style="color: var(--pw-text-primary);">Lineage</h2>
+            <span id="lineage-count" class="text-xs whitespace-nowrap" style="color: var(--pw-text-tertiary);">...</span>
+          </div>
+          <div id="lineage-overview-body" class="px-4 py-3 text-sm" style="color: var(--pw-text-tertiary);">Loading</div>
+        </div>
+        <div class="rounded-lg" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
+          <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
+            <h2 class="text-sm font-semibold truncate" style="color: var(--pw-text-primary);">Project Policy</h2>
+            <span id="policy-status" class="text-xs whitespace-nowrap" style="color: var(--pw-text-tertiary);">...</span>
+          </div>
+          <div id="policy-overview-body" class="px-4 py-3 text-sm" style="color: var(--pw-text-tertiary);">Loading</div>
+        </div>
+        <div class="rounded-lg" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
+          <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
+            <h2 class="text-sm font-semibold truncate" style="color: var(--pw-text-primary);">Release</h2>
+            <span id="release-status" class="text-xs whitespace-nowrap" style="color: var(--pw-text-tertiary);">...</span>
+          </div>
+          <div id="release-overview-body" class="px-4 py-3 text-sm" style="color: var(--pw-text-tertiary);">Loading</div>
+        </div>
+        <div id="evidence-pack-card" class="rounded-lg" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
+          <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
+            <h2 class="text-sm font-semibold truncate" style="color: var(--pw-text-primary);">Evidence Pack</h2>
+            <span id="evidence-pack-status" class="text-xs whitespace-nowrap" style="color: var(--pw-text-tertiary);">...</span>
+          </div>
+          <div id="evidence-pack-overview-body" class="px-4 py-3 text-sm" style="color: var(--pw-text-tertiary);">Loading</div>
+        </div>
+      </div>
+
       <!-- ===== TWO-COLUMN LAYOUT ===== -->
       <div class="grid grid-cols-1 lg:grid-cols-5 gap-4 mb-6">
 
@@ -1027,6 +1059,115 @@ html.dark {
         + '</details>';
     }
 
+    // ---------- V1.4 panels ----------
+    async function refreshLineages() {
+      const body = $('lineage-overview-body');
+      const count = $('lineage-count');
+      if (!body) return;
+      try {
+        const data = await fetchJson('/api/lineages');
+        const lineages = Array.isArray(data.lineages) ? data.lineages : [];
+        if (count) count.textContent = String(data.total || lineages.length);
+        if (!lineages.length) {
+          body.innerHTML = '<div class="text-xs" style="color: var(--pw-text-tertiary);">No loop lineage yet</div>';
+          return;
+        }
+        const top = lineages[0];
+        const directSessions = top.tasks && Array.isArray(top.tasks.direct_sessions) ? top.tasks.direct_sessions : [];
+        const direct = directSessions.length ? directSessions[0] : null;
+        const worktree = top.worktree || {};
+        const directStatus = direct
+          ? ((direct.status || 'unknown') + ' / audit ' + (direct.audit_decision || 'not_run'))
+          : 'not run';
+        body.innerHTML =
+          '<div class="flex items-center justify-between gap-2 mb-2">'
+          + '<span class="text-xs truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);" title="' + escapeHtml(top.lineage_id || '') + '">' + escapeHtml(shortId(top.lineage_id)) + '</span>'
+          + badgeHtml(top.stop_reason || 'unknown', statusKind(top.final_status))
+          + '</div>'
+          + '<div class="text-xs truncate mb-1" style="color: var(--pw-text-secondary);" title="' + escapeHtml(top.goal || '') + '">' + escapeHtml(top.goal || 'No goal') + '</div>'
+          + '<div class="text-xs truncate mb-1" style="color: var(--pw-text-tertiary);">Isolation: ' + escapeHtml(worktree.isolation_mode || 'current_repo') + '</div>'
+          + '<div class="text-xs truncate mb-1" style="color: var(--pw-text-tertiary);" title="' + escapeHtml(direct && direct.session_id ? direct.session_id : '') + '">Direct: ' + escapeHtml(directStatus) + '</div>'
+          + '<div class="text-xs" style="color: var(--pw-text-tertiary);">Next: ' + escapeHtml(top.next_action || 'none') + '</div>';
+      } catch (err) {
+        if (count) count.textContent = 'error';
+        body.innerHTML = '<div class="text-xs" style="color: var(--pw-state-error);">' + escapeHtml(err.message) + '</div>';
+      }
+    }
+
+    async function refreshProjectPolicy() {
+      const body = $('policy-overview-body');
+      const status = $('policy-status');
+      if (!body) return;
+      try {
+        const data = await fetchJson('/api/project-policy?repo_path=.');
+        const valid = data && data.valid !== false;
+        if (status) status.textContent = valid ? 'valid' : 'issues';
+        const issueCount = Array.isArray(data.issues) ? data.issues.length : 0;
+        const policy = data.effective_policy || {};
+        const release = (policy.release_mode || {});
+        body.innerHTML =
+          '<div class="flex items-center justify-between gap-2 mb-2">'
+          + '<span class="text-xs" style="color: var(--pw-text-secondary);">policy file</span>'
+          + badgeHtml(data.exists ? 'present' : 'defaults', data.exists ? 'success' : 'warning')
+          + '</div>'
+          + '<div class="text-xs mb-1" style="color: var(--pw-text-tertiary);">issues: ' + issueCount + '</div>'
+          + '<div class="text-xs truncate" style="color: var(--pw-text-tertiary);" title="' + escapeHtml(release.version_source || '') + '">version: ' + escapeHtml(release.version_source || 'package.json') + '</div>';
+      } catch (err) {
+        if (status) status.textContent = 'error';
+        body.innerHTML = '<div class="text-xs" style="color: var(--pw-state-error);">' + escapeHtml(err.message) + '</div>';
+      }
+    }
+
+    async function refreshReleaseStatus() {
+      const body = $('release-overview-body');
+      const status = $('release-status');
+      if (!body) return;
+      try {
+        const data = await fetchJson('/api/release/status?repo_path=.');
+        const ready = data && data.policy_valid && data.release_readiness && data.release_readiness.version_consistent !== false;
+        if (status) status.textContent = ready ? 'ready' : 'blocked';
+        const readiness = data.release_readiness || {};
+        const commands = Array.isArray(readiness.required_commands) ? readiness.required_commands : [];
+        const blocked = commands.filter(function (entry) { return !entry.allowed; }).length;
+        body.innerHTML =
+          '<div class="flex items-center justify-between gap-2 mb-2">'
+          + '<span class="text-xs" style="color: var(--pw-text-secondary);">version</span>'
+          + '<span class="text-xs" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">' + escapeHtml(readiness.version || 'unknown') + '</span>'
+          + '</div>'
+          + '<div class="text-xs mb-1" style="color: var(--pw-text-tertiary);">commands blocked: ' + blocked + ' / ' + commands.length + '</div>'
+          + '<div class="text-xs" style="color: var(--pw-text-tertiary);">' + escapeHtml(data.next_action || '') + '</div>';
+      } catch (err) {
+        if (status) status.textContent = 'error';
+        body.innerHTML = '<div class="text-xs" style="color: var(--pw-state-error);">' + escapeHtml(err.message) + '</div>';
+      }
+    }
+
+    async function refreshEvidencePacks() {
+      const body = $('evidence-pack-overview-body');
+      const status = $('evidence-pack-status');
+      if (!body) return;
+      try {
+        const data = await fetchJson('/api/evidence-packs');
+        const packs = Array.isArray(data.evidence_packs) ? data.evidence_packs : [];
+        if (status) status.textContent = String(data.total || packs.length);
+        if (!packs.length) {
+          body.innerHTML = '<div class="text-xs" style="color: var(--pw-text-tertiary);">No exported evidence pack yet</div>';
+          return;
+        }
+        const top = packs[0];
+        body.innerHTML =
+          '<div class="flex items-center justify-between gap-2 mb-2">'
+          + '<span class="text-xs truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);" title="' + escapeHtml(top.lineage_id || '') + '">' + escapeHtml(shortId(top.lineage_id)) + '</span>'
+          + badgeHtml(top.lineage && top.lineage.stop_reason ? top.lineage.stop_reason : 'unknown', statusKind(top.lineage && top.lineage.final_status))
+          + '</div>'
+          + '<div class="text-xs mb-1" style="color: var(--pw-text-tertiary);">policy issues: ' + escapeHtml(String(top.policy ? top.policy.issue_count : 0)) + '</div>'
+          + '<div class="text-xs truncate" style="color: var(--pw-text-tertiary);" title="' + escapeHtml(top.next_action || '') + '">Next: ' + escapeHtml(top.next_action || 'review') + '</div>';
+      } catch (err) {
+        if (status) status.textContent = 'error';
+        body.innerHTML = '<div class="text-xs" style="color: var(--pw-state-error);">' + escapeHtml(err.message) + '</div>';
+      }
+    }
+
     // ---------- Refresh orchestrators ----------
     async function refreshStatus() {
       try {
@@ -1067,14 +1208,14 @@ html.dark {
     }
 
     async function refreshAll() {
-      await Promise.all([refreshStatus(), refreshTasks(), refreshLogs(), refreshEvents()]);
+      await Promise.all([refreshStatus(), refreshTasks(), refreshLogs(), refreshEvents(), refreshLineages(), refreshProjectPolicy(), refreshReleaseStatus(), refreshEvidencePacks()]);
     }
 
     // ---------- Actions ----------
     async function handleAction(action, btnEl) {
       try {
         if (action === 'refresh') {
-          await Promise.all([refreshStatus(), refreshTasks()]);
+          await Promise.all([refreshStatus(), refreshTasks(), refreshLineages(), refreshProjectPolicy(), refreshReleaseStatus(), refreshEvidencePacks()]);
           return;
         }
 

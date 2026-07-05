@@ -40,6 +40,8 @@ export interface DirectSessionVerificationRun {
   exit_code: number | null;
   passed: boolean;
   timed_out: boolean;
+  redacted?: boolean;
+  redaction_categories?: string[];
   stdout_tail: string;
   stderr_tail: string;
   started_at: string;

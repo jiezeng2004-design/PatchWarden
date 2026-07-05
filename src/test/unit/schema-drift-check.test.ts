@@ -34,6 +34,8 @@ const OTHER_SCHEMA = {
   required: ["plan_id"],
 };
 
+const CORE_COUNT = CHATGPT_CORE_TOOL_NAMES.length;
+
 interface MakeMetaOpts {
   name: string;
   inputSchema?: unknown;
@@ -151,7 +153,7 @@ describe("checkChatgptCoreManifestStable", () => {
 
   it("缺少工具时 ok=false", () => {
     // 移除最后一个工具，使 chatgpt_core 工具数为 20
-    const names = [...CHATGPT_CORE_TOOL_NAMES].slice(0, 20);
+    const names = [...CHATGPT_CORE_TOOL_NAMES].slice(0, CORE_COUNT - 1);
     const toolDefs = makeToolDefs(names.map((name) => ({ name })));
 
     const result = checkChatgptCoreManifestStable(toolDefs);
@@ -163,7 +165,7 @@ describe("checkChatgptCoreManifestStable", () => {
       "warning 应包含 missing tools",
     );
     assert.ok(
-      result.warnings[0].includes(CHATGPT_CORE_TOOL_NAMES[20]),
+      result.warnings[0].includes(CHATGPT_CORE_TOOL_NAMES[CORE_COUNT - 1]),
       "warning 应包含缺失的工具名",
     );
   });
@@ -173,7 +175,7 @@ describe("checkChatgptCoreManifestStable", () => {
 
 describe("checkNewToolsProfileAppend", () => {
   it("chatgpt_core 21 工具时 ok=true", () => {
-    const registry = makeCoreRegistry(21);
+    const registry = makeCoreRegistry(CORE_COUNT);
 
     const result = checkNewToolsProfileAppend(registry);
 
@@ -183,7 +185,7 @@ describe("checkNewToolsProfileAppend", () => {
 
   it("chatgpt_core 工具数不为 21 时 ok=false", () => {
     // 22 个 chatgpt_core 工具：21 个标准工具 + 1 个重复名（模拟新工具追加）
-    const registry = makeCoreRegistry(21);
+    const registry = makeCoreRegistry(CORE_COUNT);
     registry.push(makeMeta({ name: "extra_tool", profiles: ["chatgpt_core"] }));
 
     const result = checkNewToolsProfileAppend(registry);
@@ -191,11 +193,11 @@ describe("checkNewToolsProfileAppend", () => {
     assert.equal(result.ok, false);
     assert.equal(result.warnings.length, 1);
     assert.ok(
-      result.warnings[0].includes("expected 21"),
+      result.warnings[0].includes(`expected ${CORE_COUNT}`),
       "warning 应包含预期数量 21",
     );
     assert.ok(
-      result.warnings[0].includes("got 22"),
+      result.warnings[0].includes(`got ${CORE_COUNT + 1}`),
       "warning 应包含实际数量 22",
     );
   });
@@ -206,7 +208,7 @@ describe("checkNewToolsProfileAppend", () => {
 describe("runAllSchemaDriftChecks", () => {
   it("无 drift 时 ok=true", () => {
     // registry 与 toolDefs 完全一致，且 chatgpt_core 工具数为 21
-    const registry = makeCoreRegistry(21);
+    const registry = makeCoreRegistry(CORE_COUNT);
     const toolDefs = makeCoreToolDefs();
 
     const result = runAllSchemaDriftChecks(registry, toolDefs);
@@ -221,7 +223,7 @@ describe("runAllSchemaDriftChecks", () => {
     // - check 2: toolDefs 缺少一个 chatgpt_core 工具（数量 16）
     // - check 3: registry 有 22 个 chatgpt_core 工具
     const driftedSchema = OTHER_SCHEMA;
-    const registry = makeCoreRegistry(21);
+    const registry = makeCoreRegistry(CORE_COUNT);
     // 第一个工具的 digest 指向 SAMPLE_SCHEMA，但 toolDefs 中该工具用 driftedSchema
     registry[0] = makeMeta({
       name: CHATGPT_CORE_TOOL_NAMES[0],
@@ -233,7 +235,7 @@ describe("runAllSchemaDriftChecks", () => {
 
     // toolDefs：第一个工具用 driftedSchema（触发 check 1），且移除最后一个核心工具（触发 check 2）
     const coreNames = [...CHATGPT_CORE_TOOL_NAMES];
-    const toolDefEntries = coreNames.slice(0, 20).map((name) => ({
+    const toolDefEntries = coreNames.slice(0, CORE_COUNT - 1).map((name) => ({
       name,
       inputSchema: name === CHATGPT_CORE_TOOL_NAMES[0] ? driftedSchema : SAMPLE_SCHEMA,
     }));

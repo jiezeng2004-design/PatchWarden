@@ -105,7 +105,7 @@ function createFixture(name) {
     server_version: "0.6.0",
     schema_epoch: "2026-06-22-v6",
     tool_profile: "chatgpt_core",
-    tool_count: 21,
+    tool_count: 26,
     tool_names: [],
     tool_manifest_sha256: "a".repeat(64),
   });
