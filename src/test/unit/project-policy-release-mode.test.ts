@@ -116,7 +116,7 @@ describe("project policy and release mode", () => {
     assert.equal(result.mode, "release_cleanup");
     assert.equal((result.summary as any).dry_run, true);
     assert.equal(existsSync(join(repoPath, "release_packages")), true);
-    const reportPath = join(repoPath, String((result.summary as any).report_path).replace(/\//g, "\\"));
+    const reportPath = join(repoPath, String((result.summary as any).report_path));
     const raw = readFileSync(reportPath, "utf-8");
     assert.notEqual(raw.charCodeAt(0), 0xfeff);
     assert.doesNotThrow(() => JSON.parse(raw));
