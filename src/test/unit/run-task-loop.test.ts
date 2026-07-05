@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import { strict as assert } from "node:assert";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, normalize } from "node:path";
 import { tmpdir } from "node:os";
 import { reloadConfig } from "../../config.js";
 import { runTaskLoopWithDeps } from "../../tools/runTaskLoop.js";
@@ -148,11 +148,14 @@ function depsFor(options: {
       suggested_verify_commands: ["npm test"],
       bounded: true,
     })) as any,
-    createWorktree: (() => ({
-      worktreeId: "wt-test",
-      worktreePath: tempDir,
-      branch: "pw-test",
-    })) as any,
+    createWorktree: ((goalId: string, subgoalId: string, workspaceRoot: string) => {
+      calls.push(`worktree:${workspaceRoot}`);
+      return {
+        worktreeId: "wt-test",
+        worktreePath: tempDir,
+        branch: "pw-test",
+      };
+    }) as any,
     now: () => new Date("2026-07-04T12:00:00.000Z"),
     sleep: async () => {},
   };
@@ -224,9 +227,9 @@ describe("runTaskLoop", () => {
   });
 
   it("uses worktree isolation for task execution and records worktree evidence", async () => {
-    const { deps } = depsFor({});
+    const { deps, calls } = depsFor({});
     const result = await runTaskLoopWithDeps({
-      repo_path: ".",
+      repo_path: "child-repo",
       goal: "Run in a worktree",
       agent: "fake",
       verify_commands: ["npm test"],
@@ -239,6 +242,7 @@ describe("runTaskLoop", () => {
     assert.equal(result.worktree.worktree_id, "wt-test");
     assert.equal(result.worktree.branch, "pw-test");
     assert.equal(result.worktree.status, "active");
+    assert.ok(calls.includes(`worktree:${normalize(join(tempDir, "child-repo"))}`));
   });
 
   it("records Direct verification evidence when direct_verify succeeds", async () => {

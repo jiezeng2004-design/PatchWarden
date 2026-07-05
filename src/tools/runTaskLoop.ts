@@ -1,6 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { getConfig } from "../config.js";
 import { createWorktree } from "../goal/worktreeManager.js";
+import { guardWorkspacePath } from "../security/pathGuard.js";
 import { createDirectSession } from "./createDirectSession.js";
 import { createTask, type CreateTaskInput } from "./createTask.js";
 import { recommendAgentForTask } from "./recommendAgentForTask.js";
@@ -104,13 +105,14 @@ export async function runTaskLoopWithDeps(
   deps: RunTaskLoopDeps
 ): Promise<RunTaskLoopOutput> {
   const normalized = normalizeInput(input);
+  const resolvedRepoPath = guardWorkspacePath(normalized.repo_path, getConfig().workspaceRoot);
   const routing = resolveAgentRouting(normalized, deps);
   const selectedAgent = routing.selected_agent;
   const now = deps.now().toISOString();
   const lineage: TaskLineageRecord = {
     lineage_id: deps.createLineageId(deps.now()),
     goal: normalized.goal,
-    repo_path: normalized.repo_path,
+    repo_path: resolvedRepoPath,
     created_at: now,
     updated_at: now,
     final_status: "blocked",
@@ -159,10 +161,10 @@ export async function runTaskLoopWithDeps(
     };
   };
 
-  let taskRepoPath = normalized.repo_path;
+  let taskRepoPath = resolvedRepoPath;
   if (normalized.isolation_mode === "worktree") {
     try {
-      const worktree = deps.createWorktree(lineage.lineage_id, "task_loop", getConfig().workspaceRoot);
+      const worktree = deps.createWorktree(lineage.lineage_id, "task_loop", resolvedRepoPath);
       taskRepoPath = worktree.worktreePath;
       lineage.repo_path = taskRepoPath;
       lineage.worktree = {
@@ -243,7 +245,7 @@ export async function runTaskLoopWithDeps(
       return finalize("accepted", "success", "accept");
     }
 
-    if (isHardStop(round, result, audit)) {
+    if (isHardStop(round, result, audit, normalized.stop_on_high_risk)) {
       return finalize("blocked", hardStopReason(round, result), round.next_action || "review_task");
     }
 
@@ -320,8 +322,9 @@ function isSuccessfulRound(round: TaskLineageRound): boolean {
   );
 }
 
-function isHardStop(round: TaskLineageRound, result: any, audit: any): boolean {
+function isHardStop(round: TaskLineageRound, result: any, audit: any, stopOnHighRisk: boolean): boolean {
   if (["failed_scope_violation", "failed_policy_violation", "canceled"].includes(round.status)) return true;
+  if (!stopOnHighRisk) return false;
   const checkNames = [...round.fail_checks, ...round.warn_checks].join(" ").toLowerCase();
   const reason = String(result.failure_reason || audit.acceptance?.reason || "").toLowerCase();
   return /scope|secret|sensitive|publish|release|policy|push/.test(`${checkNames} ${reason}`);

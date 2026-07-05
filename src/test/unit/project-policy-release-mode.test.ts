@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { reloadConfig } from "../../config.js";
 import { getProjectPolicySummary } from "../../policy/projectPolicy.js";
-import { releaseCleanup, releasePrepare } from "../../tools/releaseMode.js";
+import { releaseCleanup, releasePrepare, releaseVerify } from "../../tools/releaseMode.js";
 
 let tempDir: string;
 let repoPath: string;
@@ -120,6 +120,32 @@ describe("project policy and release mode", () => {
     const raw = readFileSync(reportPath, "utf-8");
     assert.notEqual(raw.charCodeAt(0), 0xfeff);
     assert.doesNotThrow(() => JSON.parse(raw));
+  });
+
+  it("release_cleanup honors auto_cleanup.enabled=false before deleting", () => {
+    mkdirSync(join(repoPath, ".patchwarden"), { recursive: true });
+    writeFileSync(
+      join(repoPath, ".patchwarden", "project-policy.json"),
+      JSON.stringify({
+        auto_cleanup: { enabled: false, patterns: ["release_packages"], exclude: [] },
+      }),
+      "utf-8",
+    );
+    mkdirSync(join(repoPath, "release_packages"), { recursive: true });
+    const result = releaseCleanup({ repo_path: repoPath, dry_run: false });
+    assert.equal((result.summary as any).cleanup_disabled_by_policy, true);
+    assert.deepEqual((result.summary as any).removed, []);
+    assert.equal(existsSync(join(repoPath, "release_packages")), true);
+  });
+
+  it("release_verify fails when required metadata cannot be inferred", async () => {
+    writeFileSync(join(repoPath, "package.json"), JSON.stringify({ name: "", version: "" }), "utf-8");
+    const result = await releaseVerify({ repo_path: repoPath });
+    assert.equal(result.ok, false);
+    const stages = result.summary.stages as Record<string, string>;
+    assert.equal(stages.published_verified, "failed");
+    assert.equal(stages.github_release_verified, "failed");
+    assert.equal(stages.ci_verified, "failed");
   });
 
   it("release_prepare blocks commands not accepted by the existing command guard", () => {

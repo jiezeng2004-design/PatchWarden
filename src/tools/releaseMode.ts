@@ -186,6 +186,7 @@ export async function releaseVerify(input: ReleaseVerifyInput): Promise<ReleaseM
   const reasons: Record<string, string | null> = {};
 
   if (!packageName || !version) {
+    stages.published_verified = "failed";
     reasons.published_verified = "package_name and version are required";
   } else {
     const published = await checkPublishedVerified(packageName, version);
@@ -194,6 +195,7 @@ export async function releaseVerify(input: ReleaseVerifyInput): Promise<ReleaseM
   }
 
   if (!githubRepo || !version) {
+    stages.github_release_verified = "failed";
     reasons.github_release_verified = "github_repo and version are required";
   } else {
     const github = await checkGitHubReleaseVerified(githubRepo, `v${version}`);
@@ -202,6 +204,7 @@ export async function releaseVerify(input: ReleaseVerifyInput): Promise<ReleaseM
   }
 
   if (!githubRepo || !branch) {
+    stages.ci_verified = "failed";
     reasons.ci_verified = "github_repo and branch are required";
   } else {
     const ci = await checkCiVerified(githubRepo, branch);
@@ -232,9 +235,12 @@ export function releaseCleanup(input: ReleaseCleanupInput): ReleaseModeResult {
   const repoPath = guardWorkspacePath(input.repo_path, config.workspaceRoot);
   const policy = getProjectPolicySummary(input.repo_path);
   const dryRun = input.dry_run !== false;
-  const patterns = input.patterns && input.patterns.length > 0
+  const cleanupEnabled = policy.effective_policy.auto_cleanup.enabled !== false;
+  const patterns = cleanupEnabled && input.patterns && input.patterns.length > 0
     ? input.patterns.map((pattern) => pattern.trim()).filter(Boolean)
-    : policy.effective_policy.auto_cleanup.patterns;
+    : cleanupEnabled
+      ? policy.effective_policy.auto_cleanup.patterns
+      : [];
   const candidates = collectCleanupCandidates(repoPath, patterns);
   const removed: string[] = [];
   const skipped: Array<{ path: string; reason: string }> = [];
@@ -266,6 +272,7 @@ export function releaseCleanup(input: ReleaseCleanupInput): ReleaseModeResult {
     generated_at: new Date().toISOString(),
     dry_run: dryRun,
     patterns,
+    cleanup_disabled_by_policy: !cleanupEnabled,
     removed,
     skipped,
     candidate_count: candidates.length,

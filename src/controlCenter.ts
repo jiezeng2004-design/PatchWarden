@@ -13,7 +13,7 @@
  */
 
 import { createServer, get as httpGet, type IncomingMessage, type ServerResponse } from "node:http";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -249,6 +249,25 @@ function readJsonFileSafe<T = unknown>(filePath: string): T | null {
   try {
     const raw = readFileSync(filePath, "utf-8");
     return JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function isPathInside(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function readJsonFileSafeUnder<T = unknown>(root: string, relPath: string): T | null {
+  const base = resolve(root);
+  const target = resolve(base, relPath);
+  if (!isPathInside(base, target) || !existsSync(target)) return null;
+  try {
+    const realBase = realpathSync(base);
+    const realTarget = realpathSync(target);
+    if (!isPathInside(realBase, realTarget)) return null;
+    return readJsonFileSafe<T>(realTarget);
   } catch {
     return null;
   }
@@ -1033,7 +1052,7 @@ function handleLineages(res: ServerResponse): void {
     }
     const lineages = readdirSync(root, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
-      .map((entry) => readJsonFileSafe<TaskLineageRecord>(join(root, entry.name, "lineage.json")))
+      .map((entry) => readJsonFileSafeUnder<TaskLineageRecord>(root, join(entry.name, "lineage.json")))
       .filter((entry): entry is TaskLineageRecord => entry !== null)
       .map((entry) => toSafeTaskLineage(entry, 6))
       .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
@@ -1050,8 +1069,9 @@ function handleLineageDetail(res: ServerResponse, lineageId: string): void {
       sendJson(res, 400, { error: "Invalid lineage id" });
       return;
     }
-    const data = readJsonFileSafe<TaskLineageRecord>(
-      join(config.workspaceRoot, ".patchwarden", "lineages", lineageId, "lineage.json")
+    const data = readJsonFileSafeUnder<TaskLineageRecord>(
+      join(config.workspaceRoot, ".patchwarden", "lineages"),
+      join(lineageId, "lineage.json")
     );
     if (!data) {
       sendJson(res, 404, { error: "Lineage not found" });

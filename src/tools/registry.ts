@@ -275,7 +275,7 @@ export function getToolDefs(): ToolDef[] {
           stop_on_high_risk: {
             type: "boolean",
             default: true,
-            description: "When true, stop immediately on high-risk or policy-blocking evidence. Confirmation boundaries are always respected.",
+            description: "When true, stop immediately on non-policy high-risk audit evidence. Scope, policy, sensitive-path, release/publish, and confirmation boundaries always stop regardless of this flag.",
           },
           direct_verify: {
             type: "boolean",
