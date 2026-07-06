@@ -71,9 +71,18 @@
   "keywords": [
     "mcp",
     "model-context-protocol",
+    "mcp-server",
+    "security",
+    "automation",
+    "typescript",
+    "ai-agents",
+    "local-first",
+    "local-agents",
+    "safe-summaries",
+    "github-copilot",
+    "chatgpt",
     "codex",
-    "opencode",
-    "local-agent"
+    "opencode"
   ],
   "repository": {
     "type": "git",
