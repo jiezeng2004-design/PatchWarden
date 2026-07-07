@@ -1,12 +1,12 @@
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { getConfig, getTasksDir, resolveWorkspaceRoot } from "../config.js";
+import { getConfig, getTasksDir, getDirectSessionsDir, resolveWorkspaceRoot } from "../config.js";
 import { listAgents } from "./listAgents.js";
 import { redactSensitiveContent, redactSensitiveValue } from "../security/contentRedaction.js";
 import { PATCHWARDEN_VERSION, TOOL_SCHEMA_EPOCH } from "../version.js";
 import type { ToolCatalogSnapshot } from "./toolCatalog.js";
-import { CHATGPT_CORE_TOOL_NAMES, resolveToolProfile } from "./toolCatalog.js";
+import { CHATGPT_CORE_TOOL_NAMES, CHATGPT_DIRECT_TOOL_NAMES, CHATGPT_SEARCH_TOOL_NAMES, resolveToolProfile } from "./toolCatalog.js";
 import { readWatcherStatus } from "../watcherStatus.js";
 import { listTasks } from "./listTasks.js";
 
@@ -35,9 +35,19 @@ export function healthCheck(catalog?: ToolCatalogSnapshot, input: HealthCheckInp
   let profileConsistent = true;
   if (catalog) {
     const activeProfile = resolveToolProfile(config.toolProfile);
-    const expectedNames = activeProfile === "chatgpt_core"
-      ? [...CHATGPT_CORE_TOOL_NAMES]
-      : null; // full profile: all tools are accepted
+    let expectedNames: string[] | null = null;
+    if (activeProfile === "chatgpt_core") {
+      expectedNames = [...CHATGPT_CORE_TOOL_NAMES];
+    } else if (activeProfile === "chatgpt_direct" && config.enableDirectProfile) {
+      expectedNames = [...CHATGPT_DIRECT_TOOL_NAMES];
+    } else if (activeProfile === "chatgpt_direct" && !config.enableDirectProfile) {
+      // Degraded mode: only health_check should be exposed
+      expectedNames = ["health_check"];
+      profileErrors.push("Direct profile is disabled (enableDirectProfile=false). Only health_check is available. Set enableDirectProfile: true to enable Direct session tools.");
+      profileConsistent = false;
+    } else if (activeProfile === "chatgpt_search") {
+      expectedNames = [...CHATGPT_SEARCH_TOOL_NAMES];
+    }
     if (expectedNames) {
       const catalogNames = new Set(catalog.tool_names);
       for (const name of expectedNames) {
@@ -76,6 +86,11 @@ export function healthCheck(catalog?: ToolCatalogSnapshot, input: HealthCheckInp
   const status = watcher.available && workspace.available && tasks.available && agentReady && catalogConsistent
     ? "healthy"
     : "degraded";
+
+  const directSessionsDir = getDirectSessionsDir(config);
+  const directSessions = directoryStatus(directSessionsDir, true, workspaceRoot);
+  const activeProfile = resolveToolProfile(config.toolProfile);
+
   return {
     status,
     server_version: catalog?.server_version || PATCHWARDEN_VERSION,
@@ -89,11 +104,16 @@ export function healthCheck(catalog?: ToolCatalogSnapshot, input: HealthCheckInp
     catalog_consistent: catalogConsistent,
     mismatch_report: mismatchReport,
     tunnel_catalog_comparison: tunnelCatalogComparison,
+    direct_profile_enabled: config.enableDirectProfile ?? false,
+    direct_sessions_dir: directSessions,
+    direct_session_ttl_seconds: config.directSessionTtlSeconds,
+    ...(activeProfile === "chatgpt_direct" ? { direct_tool_count: config.enableDirectProfile ? CHATGPT_DIRECT_TOOL_NAMES.length : 1 } : {}),
+    ...(activeProfile === "chatgpt_search" ? { search_tool_count: CHATGPT_SEARCH_TOOL_NAMES.length } : {}),
     connector_visibility: {
       status: "not_observable_server_side",
       verification: "Refresh or reconnect the Connector and verify tools/list from a new ChatGPT conversation.",
       refresh_steps: [
-        "1. Run Check-PatchWarden-Health.cmd to confirm tool_profile=chatgpt_core, tool_count=16, and catalog_consistent=true.",
+        "1. Run PatchWarden.cmd health to confirm the active profile, tool count, and catalog consistency.",
         "2. In ChatGPT Platform, refresh or reconnect the Connector (do not reuse an old session).",
         "3. Open a NEW ChatGPT conversation (old conversations retain their cached tool catalog).",
         "4. Call health_check in the new conversation; verify tool_manifest_sha256 matches the local report.",
@@ -105,6 +125,7 @@ export function healthCheck(catalog?: ToolCatalogSnapshot, input: HealthCheckInp
       uptime_seconds: Math.round((Date.now() - SERVER_STARTED_AT) / 1000),
       checked_at: new Date().toISOString(),
     },
+    path_encoding: checkPathEncoding(),
     watcher,
     workspace_root: workspace,
     tasks_dir: tasks,
@@ -231,4 +252,25 @@ function readTunnelStatus(): Record<string, unknown> & { last_error: string | nu
 
 function safeText(value: unknown, maxLength: number): string {
   return typeof value === "string" ? value.replace(/[\r\n]+/g, " ").slice(0, maxLength) : "";
+}
+
+function checkPathEncoding(): { encoding: string; warnings: string[] } {
+  const warnings: string[] = [];
+  // Node.js always uses UTF-8 for fs operations, but on Windows the console
+  // codepage can cause display issues. We check if the environment is likely
+  // to cause problems with non-ASCII paths.
+  if (process.platform === "win32") {
+    // Check if the system locale uses a codepage that might not support UTF-8
+    const lang = process.env.LANG || process.env.LC_ALL || "";
+    const chcp = process.env.PATCHWARDEN_CHCP || "";
+    if (chcp && !chcp.includes("65001") && !chcp.includes("utf")) {
+      warnings.push(`Windows codepage "${chcp}" may cause display issues with non-ASCII paths. Consider setting codepage to 65001 (UTF-8).`);
+    }
+  }
+  // Verify that Node.js fs operations use UTF-8 by default
+  // This is always true in Node.js >= 18
+  return {
+    encoding: "utf-8",
+    warnings,
+  };
 }

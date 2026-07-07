@@ -8,16 +8,18 @@
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Current stable release: **v0.4.0**. See the
-[release notes](docs/release-v0.4.0.md),
-[migration guide](docs/migration-from-safe-bifrost.md), and
-[GitHub Release](https://github.com/jiezeng2004-design/PatchWarden/releases/tag/v0.4.0).
+Current source version: **v1.5.0**. See the
+[CHANGELOG](CHANGELOG.md), [migration guide](docs/migration-from-safe-bifrost.md), and
+[release checklist](docs/release-checklist.md). Verify GitHub Release / npm publication separately before release.
 
-PatchWarden is a security-focused MCP bridge for local coding agents.
-ChatGPT, Codex, OpenCode, or another MCP client can plan and review work;
+PatchWarden is a local-first MCP safety and verification layer for AI coding
+agents, with workspace confinement, command allowlists, scope-violation
+detection, and auditable task evidence.
+
+ChatGPT, Codex, OpenCode, or another MCP client can plan and review work.
 PatchWarden stores that plan as a workspace-scoped task, lets a preconfigured
-local agent execute it, and returns results, diffs, and independent
-verification evidence.
+local agent execute it, and returns results, diffs, artifact manifests, and
+independent verification evidence.
 
 ![PatchWarden ChatGPT connector demo](docs/assets/patchwarden-chatgpt-demo.svg)
 
@@ -30,6 +32,8 @@ verification evidence.
 ## Contents
 
 - [What PatchWarden solves](#what-patchwarden-solves)
+- [How PatchWarden differs](#how-patchwarden-differs)
+- [Evidence example](#evidence-example)
 - [Runtime architecture](#runtime-architecture)
 - [Requirements](#requirements)
 - [Five-minute quick start](#five-minute-quick-start)
@@ -76,6 +80,83 @@ PatchWarden is not designed for:
 - Giving an MCP client unrestricted shell access.
 - Managing an entire drive, home directory, or directory full of private data.
 - Unattended commits, pushes, releases, or production changes.
+
+## How PatchWarden differs
+
+PatchWarden sits between an MCP client and local coding tools. It is not a
+replacement for every adjacent layer:
+
+| Layer | Primary job | PatchWarden's role |
+| --- | --- | --- |
+| Sandbox | Isolate a process or filesystem at runtime. | Add task-level policy, evidence, verification, and review records around local agent work. |
+| Coding agent | Edit code and run local tools. | Launch only preconfigured agents with trusted argument templates and bounded repositories. |
+| Generic MCP server | Expose tools to an MCP client. | Expose a constrained task workflow instead of a broad shell or arbitrary filesystem access. |
+
+The first reusable capability to evaluate independently is:
+
+> Artifact manifest + verified completion evidence
+
+This capability is intentionally small: a task can finish with structured
+status, changed-file groups, release-artifact metadata, verification records,
+and scope-violation evidence in JSON. Other projects can inspect or adapt that
+evidence model without adopting PatchWarden's full runtime.
+
+## Evidence example
+
+A completed task writes bounded, reviewable artifacts under
+`.patchwarden/tasks/<task_id>/`. The high-signal files are:
+
+- `result.json` - final status, verification status, changed-file groups, and warnings.
+- `artifact_manifest.json` - generated artifacts with size, type, and SHA-256.
+- `verify.json` - exact verification commands and exit codes.
+- `diff.patch` - complete source diff when Git evidence is available.
+- `rollback_scope_violation_plan.md` - review plan when a task changes files outside `repo_path`.
+
+Example compact evidence:
+
+```json
+{
+  "task_id": "task_20260625_010513_ad59bb",
+  "status": "done",
+  "verify_status": "passed",
+  "changed_file_groups": {
+    "source_changes": 2,
+    "docs_changes": 1,
+    "config_changes": 0,
+    "test_changes": 1,
+    "release_artifacts": 1,
+    "runtime_generated_files": 0
+  },
+  "artifact_status": "collected",
+  "artifact_manifest": {
+    "artifacts": [
+      {
+        "path": "release/app.zip",
+        "type": "zip",
+        "size": 467725,
+        "sha256": "03731a12990718325d3cb9ecdc9dbc899fc840e8ef6e2de3e810577999b5f864"
+      }
+    ]
+  },
+  "new_out_of_scope_changes": []
+}
+```
+
+
+A scope violation remains explicit:
+
+```json
+{
+  "status": "failed_scope_violation",
+  "verify_status": "failed",
+  "new_out_of_scope_changes": [
+    {
+      "path": "external/external-renamed.txt",
+      "change": "modified"
+    }
+  ]
+}
+```
 
 ## Runtime architecture
 
@@ -184,7 +265,7 @@ execution still requires a separate Watcher.
 New-Item -ItemType Directory .\patchwarden-runtime
 Set-Location .\patchwarden-runtime
 npm.cmd init -y
-npm.cmd install patchwarden@0.4.0
+npm.cmd install patchwarden@<published-version>
 Copy-Item .\node_modules\patchwarden\examples\config.example.json .\patchwarden.config.json
 $env:PATCHWARDEN_CONFIG = (Resolve-Path .\patchwarden.config.json)
 node .\node_modules\patchwarden\dist\runner\watch.js
@@ -193,10 +274,10 @@ node .\node_modules\patchwarden\dist\runner\watch.js
 An MCP client can launch:
 
 ```text
-npx.cmd -y patchwarden@0.4.0
+npx.cmd -y patchwarden@<published-version>
 ```
 
-Pin the version in important environments instead of using `latest`
+Replace `<published-version>` with a version that exists on npm/GitHub, and pin that version in important environments instead of using `latest`
 unconditionally.
 
 ## Complete configuration guide
@@ -231,6 +312,9 @@ Recommended Windows example:
     "npm run lint",
     "pytest"
   ],
+  "repoAllowedTestCommands": {
+    "desktop-app": ["npm run release:check"]
+  },
   "maxReadFileBytes": 200000,
   "defaultTaskTimeoutSeconds": 900,
   "maxTaskTimeoutSeconds": 3600,
@@ -246,9 +330,10 @@ Configuration fields:
 | `workspaceRoot` | Yes | The only workspace root PatchWarden may access. |
 | `plansDir` | Yes | Plan directory, normally `.patchwarden/plans`. |
 | `tasksDir` | Yes | Task and result directory, normally `.patchwarden/tasks`. |
-| `toolProfile` | No | `full` or `chatgpt_core`; use `full` for local clients. |
+| `toolProfile` | No | `full`, `chatgpt_core`, `chatgpt_direct`, or `chatgpt_search`; use `full` for local clients and `chatgpt_search` for compact discovery-driven clients. |
 | `agents` | Yes | Execution-agent allowlist; supports `{repo}` and `{prompt}` placeholders. |
 | `allowedTestCommands` | Yes | Exact allowlist for independent verification commands. |
+| `repoAllowedTestCommands` | No | Extra exact commands keyed by workspace-relative repository path; wildcards are unsupported. |
 | `maxReadFileBytes` | Yes | Maximum bytes returned by one MCP file read. |
 | `defaultTaskTimeoutSeconds` | Yes | Default task timeout. |
 | `maxTaskTimeoutSeconds` | Yes | Maximum timeout a client may request. |
@@ -267,6 +352,8 @@ Important configuration rules:
 - `repo_path` must stay inside `workspaceRoot` and cannot escape with `..`.
 - `allowedTestCommands` uses exact matching; similar commands are not
   automatically authorized.
+- Repository-specific commands come only from trusted local configuration;
+  a target repository cannot authorize itself through `package.json`.
 - Configuration may contain private paths and should not be committed.
 
 Set the configuration path:
@@ -346,7 +433,7 @@ Pinned npm configuration:
 ```toml
 [mcp_servers.patchwarden]
 command = "npx.cmd"
-args = ["-y", "patchwarden@0.4.0"]
+args = ["-y", "patchwarden@<published-version>"]
 
 [mcp_servers.patchwarden.env]
 PATCHWARDEN_CONFIG = "D:\\path\\to\\patchwarden.config.json"
@@ -400,13 +487,13 @@ Prepare:
 Configure the proxy first, then run:
 
 ```text
-Start-PatchWarden-Tunnel.cmd
+PatchWarden.cmd start core
 ```
 
 The launcher:
 
 - Builds `dist/index.js` if it is missing.
-- Verifies v0.4.0, the fixed 16-tool `chatgpt_core` catalog, and its schema
+- Verifies v1.5.0, the fixed 26-tool `chatgpt_core` catalog, and its schema
   manifest.
 - Reads or prompts for the Tunnel ID.
 - Reads or prompts for the runtime API key.
@@ -440,7 +527,7 @@ the expanded tunnel examples.
 
 ### Launcher default
 
-`scripts/start-patchwarden-tunnel.ps1` first reads `HTTPS_PROXY` from the
+`scripts/control/start-patchwarden-tunnel.ps1` first reads `HTTPS_PROXY` from the
 current process. If it is absent, the launcher defaults to:
 
 ```text
@@ -470,7 +557,7 @@ $env:HTTPS_PROXY = "http://127.0.0.1:YOUR_HTTP_OR_MIXED_PORT"
 $env:HTTP_PROXY  = $env:HTTPS_PROXY
 $env:ALL_PROXY   = $env:HTTPS_PROXY
 $env:NO_PROXY    = "localhost,127.0.0.1,::1"
-.\Start-PatchWarden-Tunnel.cmd
+.\PatchWarden.cmd start core
 ```
 
 Example for a Mixed port of 7890:
@@ -480,7 +567,7 @@ $env:HTTPS_PROXY = "http://127.0.0.1:7890"
 $env:HTTP_PROXY  = $env:HTTPS_PROXY
 $env:ALL_PROXY   = $env:HTTPS_PROXY
 $env:NO_PROXY    = "localhost,127.0.0.1,::1"
-.\Start-PatchWarden-Tunnel.cmd
+.\PatchWarden.cmd start core
 ```
 
 Using `HTTPS_PROXY=http://...` is expected: the variable identifies HTTPS
@@ -524,7 +611,7 @@ country list.
 4. Set `HTTPS_PROXY` in the same terminal that starts the tunnel.
 5. Keep local addresses in `NO_PROXY`.
 6. Check whether the exit region is accepted.
-7. Then run `Check-PatchWarden-Health.cmd` and tunnel-client doctor.
+7. Then run `PatchWarden.cmd health` and tunnel-client doctor.
 
 ## Recommended task workflow
 
@@ -535,8 +622,8 @@ Use this sequence:
 3. `list_workspace` — identify the correct `repo_path`.
 4. `save_plan`, or provide an `inline_plan` when creating the task.
 5. `create_task` — specify the agent, repository, and verification commands.
-6. `wait_for_task(timeout_seconds: 25)` — continue waiting in the same turn.
-7. `get_task_summary` — inspect the structured summary first.
+6. Use `wait_for_task(timeout_seconds: 25)` for short tasks; poll long tasks with `list_tasks` and `get_task_status`.
+7. `get_task_summary(view: "compact")` — inspect bounded structured evidence first.
 8. `get_result_json`, `get_diff`, and `get_test_log` — inspect detail as needed.
 9. `audit_task` — independently verify the result.
 10. Let a human decide whether to accept, commit, or publish.
@@ -559,7 +646,8 @@ Example `create_task` payload:
 Rules:
 
 - `repo_path` must stay inside `workspaceRoot`.
-- Every `verify_commands` entry must exactly match `allowedTestCommands`.
+- Every `verify_commands` entry must exactly match the global or current
+  repository's trusted command allowlist.
 - Select exactly one plan source: `plan_id`, `inline_plan`, or `template`.
 - When `wait_for_task` returns `continuation_required: true`, call it again.
 - `terminal: true` means the task reached a terminal state, not that the work
@@ -573,9 +661,22 @@ Built-in templates:
 - `release_check`
 - `rollback_scope_violation`
 
+ChatGPT tasks should prefer the first three guarded templates: use
+`inspect_only` for read-only diagnosis, `feature_small` for a narrowly scoped
+change, and `fix_tests` for a known verification failure. Use `inline_plan` or
+a saved long plan only when these templates cannot express the goal. Prefer an
+`execution_mode: "assess_only"` call followed by the returned `next_tool_call`;
+do not resend the goal, plan, repository, agent, or verification arguments in
+the execute call.
+
 `inspect_only` and rollback-review tasks fail with
 `failed_policy_violation` if they modify files. Rollback review only writes a
 plan; it never automatically reverts user changes.
+
+`audit_task` places evidence-backed failures in `confirmed_failures` and lists
+heuristic warnings separately in `possible_false_positives` and
+`manual_verification_items`. A `warn` verdict therefore does not automatically
+mean the task is wrong.
 
 ### Task artifacts
 
@@ -586,6 +687,7 @@ plan; it never automatically reverts user changes.
 | `result.md` | Human-readable execution report. |
 | `result.json` | Structured result, paths, changes, warnings, and next steps. |
 | `diff.patch` | Complete task change evidence. |
+| `artifact_manifest.json` | Generated artifact paths, types, sizes, and SHA-256 hashes. |
 | `file-stats.json` | Per-file addition and deletion statistics. |
 | `verify.json` | Structured record for every independent verification command. |
 | `verify.log` | Human-readable independent verification output. |
@@ -639,7 +741,7 @@ Optional token configuration:
 Set the token in the PowerShell process that starts the server:
 
 ```powershell
-$env:PATCHWARDEN_OWNER_TOKEN = "use-a-random-local-only-value"
+$env:PATCHWARDEN_OWNER_TOKEN = "<token>"
 ```
 
 Clients can send `Authorization: Bearer ...` or `x-patchwarden-token`. Never
@@ -662,10 +764,52 @@ Doctor checks Node, npm, Git, configuration, workspace containment, sensitive
 path protection, agent commands, the tool manifest, HTTP port, task
 directories, and build output.
 
-Windows tunnel health:
+### Unified Windows control entry point
+
+Double-click `PatchWarden.cmd` for one menu that starts, stops, restarts, and
+checks Core Agent and Direct independently or together. The same operations are
+available from PowerShell:
+
+```powershell
+.\PatchWarden.cmd start core
+.\PatchWarden.cmd start direct
+.\PatchWarden.cmd stop all
+.\PatchWarden.cmd restart all
+.\PatchWarden.cmd status all
+.\PatchWarden.cmd kill all
+.\Stop-PatchWarden.cmd
+```
+
+For daily desktop use, start with `PatchWarden-Desktop.cmd`; it starts the tray and keeps Control Center available without opening extra browser windows. Use `PatchWarden-Control-Tray.cmd --foreground` only for tray debugging, `PatchWarden-Control.cmd` for the full local Web dashboard, and `Stop-PatchWarden.cmd` for one-click shutdown of Core/Direct, Control Center, and the tray.
+
+The old single-purpose launchers remain under `scripts/launchers/` as a
+compatibility layer. Personal launchers live under `.local/launchers/` and
+remain excluded from Git and release packages. `stop` and `restart` correlate
+runtime state with the exact Tunnel profile, project launcher, and process tree,
+so they can clean up an orphaned `tunnel-client.exe` for that profile without
+terminating unrelated processes. `kill` is an explicit force-clean command but
+keeps the same profile and project-path restrictions. If an unrelated process
+owns port 8080 or 8081, the operation stops and reports its PID.
+
+`status` cross-checks runtime JSON, the health URL file, the fixed `/readyz` and
+`/healthz` endpoints, and the real process list. A ready endpoint therefore wins
+over a stale stopped status file. Supervisor output is written to:
 
 ```text
-Check-PatchWarden-Health.cmd
+%LOCALAPPDATA%\patchwarden\runtime\tunnel-client.stdout.log
+%LOCALAPPDATA%\patchwarden\runtime\tunnel-client.stderr.log
+%LOCALAPPDATA%\patchwarden\runtime-direct\tunnel-client.stdout.log
+%LOCALAPPDATA%\patchwarden\runtime-direct\tunnel-client.stderr.log
+```
+
+On a non-zero exit, the launcher displays the last 30 stderr lines and records
+the exit code, redacted stdout/stderr tails, and log paths in
+`tunnel-status.json`. It never prints the API key value.
+
+Detailed Windows tunnel health:
+
+```text
+PatchWarden.cmd health
 ```
 
 It reports:
@@ -694,12 +838,12 @@ catalog consistency.
 After a configuration or version change, use:
 
 ```text
-Restart-PatchWarden.cmd
+PatchWarden.cmd restart all
 ```
 
-It stops only the process tree recorded as owned by the current launcher. It
-does not globally terminate unrelated PatchWarden, OpenCode, or Codex
-instances.
+It stops only this project's launchers and Watcher plus `tunnel-client.exe`
+processes that exactly match the selected profile. It does not globally
+terminate unrelated PatchWarden, OpenCode, or Codex instances.
 
 ## Lessons learned and troubleshooting
 
@@ -709,15 +853,17 @@ instances.
 | --- | --- | --- |
 | Tunnel connection keeps timing out | No proxy is listening on default port 7892 | Find the real HTTP/Mixed port, set `HTTPS_PROXY`, and start from the same terminal. |
 | Logs show 403 and `unsupported_country_region_territory` | Unsupported proxy exit region | Switch exit region and restart the tunnel. |
-| `list_workspace` only shows `tunnel-client.exe` | MCP started in the wrong directory or did not receive the config path | Use `scripts/patchwarden-mcp-stdio.cmd`. |
+| `list_workspace` only shows `tunnel-client.exe` | MCP started in the wrong directory or did not receive the config path | Use `scripts/mcp/patchwarden-mcp-stdio.cmd`. |
 | MCP is connected, but tasks do not run | Watcher is missing or stale | Start `npm.cmd run watch` and inspect `health_check`. |
 | `Agent command not found` | Agent is not on PATH, or Codex Desktop was mistaken for the CLI | Run `where.exe` and use the real CLI path in `agents.command`. |
 | Verification command is rejected | It does not exactly match the allowlist | Add the exact command to `allowedTestCommands`. |
 | ChatGPT still shows old tools | Connector or conversation cached the old catalog | Reconnect and open a new ChatGPT conversation. |
 | ChatGPT stops after `create_task` | The same turn did not continue with `wait_for_task` | Loop while `continuation_required` is true. |
 | HTTP reports `EADDRINUSE` | Port 7331 is already in use | Check the existing instance or change `httpPort`. |
-| DPAPI credential cannot be decrypted | Windows user/machine changed or the cache is damaged | Run `Reset-PatchWarden-Tunnel-Key.cmd` and enter it again. |
+| DPAPI credential cannot be decrypted | Windows user/machine changed or the cache is damaged | Run `PatchWarden.cmd reset-key` and enter it again. |
 | Code changed but runtime behavior did not | Old `dist` or process is still active | Build, compare the manifest, and restart owned processes. |
+| The supervisor shows only exit code 1 | The real tunnel-client failure is in child-process stderr | Read the mode's `tunnel-client.stderr.log` or `tunnel-status.json.stderr_tail`. |
+| Core looks for its profile under `opencode-config\tunnel-client` | An older launcher leaked the Watcher's `XDG_CONFIG_HOME` into tunnel-client | Upgrade to v0.6.0 and run `PatchWarden.cmd restart core`; v0.6.0 isolates Watcher-only environment variables. |
 | npm MCP initializes, but tasks remain queued | npm launched only the MCP Server | Start `dist/runner/watch.js` in the local installation. |
 | Config exists but is not found | Variable was set in another terminal or path escaping is wrong | Use an absolute path and set `PATCHWARDEN_CONFIG` in the launching terminal. |
 | Legacy environment names are ignored | v0.4.0 intentionally broke old names | Use `PATCHWARDEN_*` everywhere. |
@@ -784,13 +930,51 @@ names.
 
 ## MCP tools and profiles
 
-`chatgpt_core` is the fixed 16-tool profile used by the ChatGPT tunnel:
+`chatgpt_core` is the fixed 26-tool profile used by the ChatGPT tunnel:
 
 `health_check`, `list_agents`, `list_workspace`,
-`read_workspace_file`, `save_plan`, `create_task`,
+`read_workspace_file`, `save_plan`, `create_task`, `run_task_loop`,
+`recommend_agent_for_task`, `get_task_lineage`, `export_task_evidence_pack`,
+`get_project_policy`,
 `wait_for_task`, `get_task_summary`, `get_diff`, `get_result`,
 `get_result_json`, `get_test_log`, `get_task_status`, `list_tasks`,
-`cancel_task`, and `audit_task`.
+`cancel_task`, `audit_task`, `safe_status`, `safe_result`, `safe_audit`, `safe_test_summary`, and `safe_diff_summary`.
+
+`get_task_summary` keeps the backward-compatible `standard` view by default.
+ChatGPT should request `view: "compact"` first; terminal `wait_for_task`
+responses also embed compact acceptance evidence only.
+
+`run_task_loop` is the v1.2 safe orchestration entrypoint. It only composes
+existing `create_task`, `wait_for_task`, safe summary, and `audit_task`
+behavior; it does not bypass the Watcher, command allowlist, workspace
+confinement, or local confirmation boundaries. `get_task_lineage` reads the
+bounded `.patchwarden/lineages/<lineage_id>/` summary without returning full
+logs or diffs.
+
+`get_project_policy` is the v1.3 read-only policy entrypoint. It returns the
+bounded effective `.patchwarden/project-policy.json` policy and release
+readiness summary without expanding command permissions. The v1.3 release mode
+tools, `release_check`, `release_prepare`, `release_verify`, and
+`release_cleanup`, are full-profile only and never perform publish, push, tag,
+or GitHub Release writes. The Control Center dashboard also shows bounded
+lineage, policy, and release status summaries without full logs, diffs, or
+secret-bearing content.
+
+v1.4 adds Direct-assisted loop verification. `run_task_loop` can opt into
+`direct_verify=true`; after the guarded task and audit succeed, PatchWarden
+creates a Direct session, runs only allowlisted verification commands, safe
+finalizes, safe audits, and records bounded Direct evidence in lineage. It does
+not call Direct patching tools, publish, push, tag, create releases, restart
+watchers, or return full stdout/stderr/diffs.
+
+v1.5 adds worktree-assisted loop isolation, bounded agent routing, and evidence
+pack export. `run_task_loop(isolation_mode="worktree")` creates an isolated git
+worktree for the task and records the worktree id, path, branch, and next action
+in lineage. It does not auto-merge or auto-delete the worktree. `agent="auto"`
+uses `recommend_agent_for_task` to select a configured agent before task
+creation. `export_task_evidence_pack` writes bounded `evidence.json` and
+`EVIDENCE.md` files under `.patchwarden/evidence-packs/<lineage_id>/` without
+stdout/stderr tails, full diffs, verification logs, or sensitive file content.
 
 `full` additionally provides:
 
@@ -803,6 +987,35 @@ names.
 
 The tunnel wrapper forces `chatgpt_core`. Ordinary local development defaults
 to `full`.
+
+### ChatGPT Direct mode
+
+Direct mode exposes fourteen guarded tools so ChatGPT can create an editing
+session, read and search source files, apply hash-bound JSON patches, run
+exactly allowlisted verification commands or a bounded verification bundle, finalize the evidence, and audit
+the result without a local execution agent.
+
+Enable it in the trusted local configuration while keeping the ordinary Core
+profile unchanged:
+
+```json
+{
+  "enableDirectProfile": true
+}
+```
+
+Start the separate Direct tunnel entrypoint:
+
+```text
+PatchWarden.cmd start direct
+```
+
+On first use, provide the `tunnel-client.exe` path and a Tunnel ID dedicated
+to the Direct Connector. The launcher uses the `patchwarden-direct` profile,
+stores runtime state under `%LOCALAPPDATA%\patchwarden\runtime-direct`, skips
+the Watcher, and retains the existing DPAPI credential handling. In a fresh
+ChatGPT conversation, `health_check` should report `chatgpt_direct`, fourteen
+tools, and `direct_profile_enabled=true`.
 
 ## Security boundaries and local data
 
@@ -837,7 +1050,7 @@ Start with a dedicated test workspace and a repository you can recover.
 Upgrade a pinned npm installation:
 
 ```powershell
-npm.cmd install patchwarden@0.4.0
+npm.cmd install patchwarden@<published-version>
 ```
 
 Upgrade a source checkout:
@@ -852,15 +1065,16 @@ npm.cmd test
 After upgrading:
 
 1. Run `npm.cmd run doctor`.
-2. Run `Check-PatchWarden-Health.cmd`.
+2. Run `PatchWarden.cmd health`.
 3. Compare version, schema epoch, and manifest hash.
-4. Restart owned processes with `Restart-PatchWarden.cmd`.
+4. Restart owned processes with `PatchWarden.cmd restart all`.
 5. Reconnect the MCP client or Connector.
 6. Validate in a new session instead of relying on an old conversation.
 
 When migrating from Safe-Bifrost, manually update:
 
-- npm package and CLI to `patchwarden` and `patchwarden-runner`
+- npm package and CLIs include `patchwarden`, `patchwarden-runner`, and the
+  local-only medium-risk ticket confirmation command `patchwarden-confirm`
 - Configuration filename to `patchwarden.config.json`
 - Environment variables to `PATCHWARDEN_*`
 - Task directory to `.patchwarden/`
@@ -902,7 +1116,10 @@ and release-asset checksums independently.
 
 ## Related documentation
 
-- [v0.4.0 release notes](docs/release-v0.4.0.md)
+- [v0.6.4 release notes](docs/release-v0.6.4.md)
+- [v0.6.1 release notes](docs/release-v0.6.1.md)
+- [v0.6.0 release notes](docs/release-v0.6.0.md)
+- [ChatGPT usage guide](docs/chatgpt-usage.md)
 - [Migration guide](docs/migration-from-safe-bifrost.md)
 - [ChatGPT Connector demo](docs/demo.md)
 - [OpenAI tunnel examples](examples/openai-tunnel/README.md)
@@ -917,8 +1134,9 @@ and release-asset checksums independently.
 - [x] ChatGPT Connector / tunnel
 - [x] Doctor and runtime health checks
 - [x] Tool manifest and schema-drift detection
-- [ ] Worktree isolation
-- [ ] Multi-agent task queue
+- [x] Release Gate (five-stage pre-release verification)
+- [x] Worktree isolation
+- [x] Multi-agent routing
 - [ ] Local dashboard
 
 ## License

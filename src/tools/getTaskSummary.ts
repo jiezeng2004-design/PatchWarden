@@ -7,6 +7,7 @@ import { redactSensitiveValue } from "../security/contentRedaction.js";
 
 const TERMINAL_STATUSES = new Set([
   "done",
+  "done_by_agent",
   "failed",
   "failed_verification",
   "failed_scope_violation",
@@ -78,9 +79,57 @@ export interface TaskSummaryOutput {
   watcher: unknown;
   pending_reason: string | null;
   execution_blocked: boolean;
+  artifact_hygiene: Record<string, unknown>;
 }
 
-export function getTaskSummary(taskId: string): TaskSummaryOutput {
+export interface CompactTaskSummaryOutput {
+  view: "compact";
+  task_id: string;
+  status: string;
+  terminal: boolean;
+  acceptance_status: TaskSummaryOutput["acceptance_status"];
+  phase: string;
+  repo_path: string;
+  changed_files_total: number;
+  out_of_scope_changes_total: number;
+  artifact_hygiene: {
+    counts: Record<string, number>;
+    source_changes: unknown[];
+    tracked_build_artifacts: unknown[];
+    ignored_untracked_artifacts: unknown[];
+    runtime_generated_files: unknown[];
+    suspicious_changes: unknown[];
+    max_items: number;
+    truncated: boolean;
+  };
+  release_artifacts_count: number;
+  release_artifact_paths: string[];
+  artifact_status: string | null;
+  verification_summary: TaskSummaryOutput["verification_summary"];
+  summary: string;
+  warnings: string[];
+  errors: string[];
+  failure_reason: string | null;
+  failed_command: string | null;
+  suggested_next_action: string;
+  execution_blocked: boolean;
+  pending_reason: string | null;
+  redacted: boolean;
+  redaction_categories: string[];
+}
+
+export interface GetTaskSummaryOptions {
+  view?: "compact" | "standard";
+  max_items?: number;
+}
+
+export type TaskSummaryResult = TaskSummaryOutput | CompactTaskSummaryOutput;
+
+export function getTaskSummary(taskId: string): TaskSummaryOutput;
+export function getTaskSummary(taskId: string, options: { view: "compact"; max_items?: number }): CompactTaskSummaryOutput;
+export function getTaskSummary(taskId: string, options: { view?: "standard"; max_items?: number }): TaskSummaryOutput;
+export function getTaskSummary(taskId: string, options: GetTaskSummaryOptions): TaskSummaryResult;
+export function getTaskSummary(taskId: string, options: GetTaskSummaryOptions = {}): TaskSummaryResult {
   const config = getConfig();
   const taskDir = resolve(getTasksDir(config), taskId);
   const statusFile = join(taskDir, "status.json");
@@ -91,7 +140,14 @@ export function getTaskSummary(taskId: string): TaskSummaryOutput {
   const result = resultRead.data;
   const verify = verifyRead.data;
   const terminal = TERMINAL_STATUSES.has(String(status.status));
-  const outOfScope = asArray(result.out_of_scope_changes ?? status.out_of_scope_changes);
+  // Phase 4: Use new_out_of_scope_changes (task-caused) for acceptance status.
+  // Pre-existing external dirty files that didn't change should NOT fail acceptance.
+  const outOfScope = asArray(
+    result.new_out_of_scope_changes
+    ?? status.new_out_of_scope_changes
+    ?? result.out_of_scope_changes
+    ?? status.out_of_scope_changes
+  );
   const verifyStatus = String(verify.status ?? result.verify_status ?? result.verify?.status ?? status.verify_status ?? "not_available");
   const errors = [status.error, ...asArray(result.errors), ...asArray(result.known_issues)]
     .filter((value): value is string => typeof value === "string" && value.trim() !== "");
@@ -140,7 +196,7 @@ export function getTaskSummary(taskId: string): TaskSummaryOutput {
       warnings.push("acceptance.json exists but could not be parsed.");
     }
   } else if (terminal) {
-    if (status.status !== "done" || outOfScope.length > 0 || verifyStatus === "failed") {
+    if ((status.status !== "done" && status.status !== "done_by_agent") || outOfScope.length > 0 || verifyStatus === "failed") {
       acceptanceStatus = "failed";
     } else if (verifyStatus === "passed") {
       acceptanceStatus = "ready_for_review";
@@ -156,6 +212,10 @@ export function getTaskSummary(taskId: string): TaskSummaryOutput {
     ? Math.max(0, (Number.isFinite(finishedAt) ? finishedAt : Date.now()) - startedAt)
     : 0;
   const changedFiles = asArray(result.changed_files ?? status.changed_files);
+  const changedFilesRead = tryReadJson(join(taskDir, "changed-files.json"));
+  const artifactHygiene = asRecord(result.artifact_hygiene ?? changedFilesRead.data.artifact_hygiene ?? {
+    counts: status.artifact_hygiene_counts || {},
+  });
   const verifyCommands = asArray(verify.commands ?? result.verify_commands ?? result.verify?.commands);
   const testLogSummary = summarizeTestLog(join(taskDir, "test.log"));
   const verificationSummary = buildVerificationSummary(verifyStatus, verifyCommands, testLogSummary);
@@ -227,13 +287,81 @@ export function getTaskSummary(taskId: string): TaskSummaryOutput {
     watcher: status.watcher,
     pending_reason: status.pending_reason || null,
     execution_blocked: Boolean(status.execution_blocked),
+    artifact_hygiene: artifactHygiene,
   };
+  if ((options.view || "standard") === "compact") {
+    return buildCompactSummary(output, normalizeMaxItems(options.max_items));
+  }
   const safe = redactSensitiveValue(output);
   return {
     ...safe.value,
     redacted: safe.redacted,
     redaction_categories: safe.redaction_categories,
   } as TaskSummaryOutput;
+}
+
+function buildCompactSummary(output: Record<string, any>, maxItems: number): CompactTaskSummaryOutput {
+  const hygiene = asRecord(output.artifact_hygiene);
+  const groupNames = [
+    "source_changes",
+    "tracked_build_artifacts",
+    "ignored_untracked_artifacts",
+    "runtime_generated_files",
+    "suspicious_changes",
+  ] as const;
+  const groups = Object.fromEntries(groupNames.map((name) => [name, asArray(hygiene[name]).slice(0, maxItems)]));
+  const truncated = groupNames.some((name) => asArray(hygiene[name]).length > maxItems);
+
+  // Phase 6: Read artifact_manifest.json for release artifact info
+  const taskDir = resolve(getTasksDir(getConfig()), String(output.task_id));
+  const manifestRead = tryReadJson(join(taskDir, "artifact_manifest.json"));
+  const manifest = asRecord(manifestRead.data);
+  const releaseArtifacts = asArray(manifest.artifacts);
+  const releaseArtifactPaths = releaseArtifacts.map((a: any) => String(a.path || "")).slice(0, maxItems);
+
+  const compact = {
+    view: "compact" as const,
+    task_id: String(output.task_id),
+    status: String(output.status),
+    terminal: Boolean(output.terminal),
+    acceptance_status: output.acceptance_status,
+    phase: String(output.phase),
+    repo_path: String(output.repo_path),
+    changed_files_total: asArray(output.changed_files).length,
+    out_of_scope_changes_total: asArray(output.out_of_scope_changes).length,
+    artifact_hygiene: {
+      counts: asRecord(hygiene.counts) as Record<string, number>,
+      ...groups,
+      max_items: maxItems,
+      truncated,
+    },
+    release_artifacts_count: releaseArtifacts.length,
+    release_artifact_paths: releaseArtifactPaths,
+    artifact_status: String(output.artifact_status || manifest.status || "collected"),
+    verification_summary: output.verification_summary,
+    summary: String(output.summary).slice(0, 1000),
+    warnings: asArray(output.warnings).slice(0, maxItems),
+    errors: asArray(output.errors).slice(0, maxItems),
+    failure_reason: output.failure_reason || null,
+    failed_command: output.failed_command || null,
+    suggested_next_action: String(output.suggested_next_action),
+    execution_blocked: Boolean(output.execution_blocked),
+    pending_reason: output.pending_reason || null,
+  };
+  const safe = redactSensitiveValue(compact);
+  return {
+    ...safe.value,
+    redacted: safe.redacted,
+    redaction_categories: safe.redaction_categories,
+  } as CompactTaskSummaryOutput;
+}
+
+function normalizeMaxItems(value: number | undefined): number {
+  if (value === undefined) return 8;
+  if (!Number.isInteger(value) || value < 1 || value > 50) {
+    throw new Error("max_items must be an integer from 1 to 50.");
+  }
+  return value;
 }
 
 function tryReadJson(path: string): { data: Record<string, any>; error?: string } {
@@ -247,6 +375,10 @@ function tryReadJson(path: string): { data: Record<string, any>; error?: string 
 
 function asArray(value: unknown): any[] {
   return Array.isArray(value) ? value : [];
+}
+
+function asRecord(value: unknown): Record<string, any> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {};
 }
 
 function summarizeTestLog(path: string): string {

@@ -33,6 +33,11 @@
     "cargo test",
     "go test ./..."
   ],
+  "repoAllowedTestCommands": {
+    "desktop-app": [
+      "npm run release:check"
+    ]
+  },
   "maxReadFileBytes": 200000,
   "defaultTaskTimeoutSeconds": 900,
   "maxTaskTimeoutSeconds": 3600,

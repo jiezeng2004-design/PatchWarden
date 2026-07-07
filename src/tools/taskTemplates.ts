@@ -42,7 +42,8 @@ export function expandTaskTemplate(input: TaskTemplateInput): ExpandedTaskTempla
     `## Goal\n${goal}`,
     "## Safety boundaries",
     "- Work only inside the resolved repository path.",
-    "- Do not commit, push, publish, expose credentials, or modify unrelated files.",
+    "- Leave repository changes uncommitted for review; remote operations are outside this task.",
+    "- Keep credentials private and do not modify unrelated files.",
     "- Report exact files inspected or changed and any remaining uncertainty.",
   ];
 

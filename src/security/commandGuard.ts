@@ -1,4 +1,4 @@
-import { PatchWardenConfig } from "../config.js";
+import { getRepoAllowedTestCommands, getRepoDirectAllowedCommands, PatchWardenConfig } from "../config.js";
 import { PatchWardenError } from "../errors.js";
 
 /**
@@ -65,7 +65,8 @@ function isSafeConfiguredCommand(command: string): boolean {
 
 export function guardTestCommand(
   testCommand: string,
-  config: PatchWardenConfig
+  config: PatchWardenConfig,
+  repoPath?: string
 ): string {
   if (!testCommand || typeof testCommand !== "string") {
     // If no test command specified, that's ok — skip tests
@@ -75,11 +76,52 @@ export function guardTestCommand(
   const trimmed = testCommand.trim();
   if (trimmed === "") return "";
 
-  if (!config.allowedTestCommands.includes(trimmed)) {
+  const allowedCommands = [
+    ...config.allowedTestCommands,
+    ...(repoPath ? getRepoAllowedTestCommands(config, repoPath) : []),
+  ];
+  if (!allowedCommands.includes(trimmed)) {
     throw new PatchWardenError(
       "test_command_not_allowlisted",
-      `Test command "${trimmed}" is not in the allowed list. Allowed: ${config.allowedTestCommands.join(", ")}`,
+      `Test command "${trimmed}" is not allowed for this repository. Allowed: ${allowedCommands.join(", ")}`,
       "Use an exact allowed command shown by create_task, or omit test_command."
+    );
+  }
+
+  return trimmed;
+}
+
+export function guardDirectCommand(
+  command: string,
+  config: PatchWardenConfig,
+  repoPath?: string
+): string {
+  if (!command || typeof command !== "string") {
+    throw new PatchWardenError(
+      "direct_command_required",
+      "A command string is required for run_verification.",
+      "Provide one of the allowed Direct verification commands."
+    );
+  }
+
+  const trimmed = command.trim();
+  if (trimmed === "") {
+    throw new PatchWardenError(
+      "direct_command_required",
+      "A command string is required for run_verification.",
+      "Provide one of the allowed Direct verification commands."
+    );
+  }
+
+  const allowedCommands = [
+    ...(config.directAllowedCommands || []),
+    ...(repoPath ? getRepoDirectAllowedCommands(config, repoPath) : []),
+  ];
+  if (!allowedCommands.includes(trimmed)) {
+    throw new PatchWardenError(
+      "direct_command_not_allowlisted",
+      `Direct command "${trimmed}" is not allowed. Allowed: ${allowedCommands.join(", ")}`,
+      "Use an exact allowed command from the Direct allowlist."
     );
   }
 

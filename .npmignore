@@ -6,8 +6,14 @@ dist/
 *.log
 patchwarden.config.json
 safe-bifrost.config.json
+*.local.cmd
+*.local.ps1
 release/
 patchwarden-release.zip
 patchwarden-release.tar.gz
 safe-bifrost-release.zip
 safe-bifrost-release.tar.gz
+docs/optimization-proposal.md
+Kill-PatchWarden.cmd
+scripts/control/kill-patchwarden.ps1
+scripts/launchers/Kill-PatchWarden.cmd
