@@ -26,6 +26,10 @@ import { listAgents } from "../tools/listAgents.js";
 import { healthCheck } from "../tools/healthCheck.js";
 import { getTaskSummary } from "../tools/getTaskSummary.js";
 import { waitForTask } from "../tools/waitForTask.js";
+import { runTaskLoop } from "./runTaskLoop.js";
+import { getTaskLineage } from "./taskLineage.js";
+import { exportTaskEvidencePack } from "./evidencePack.js";
+import { recommendAgentForTask } from "./recommendAgentForTask.js";
 import { errorPayload, PatchWardenError } from "../errors.js";
 import { auditTask } from "../tools/auditTask.js";
 import { safeStatus } from "../tools/safeStatus.js";
@@ -49,6 +53,7 @@ import { createDirectSession } from "../tools/createDirectSession.js";
 import { searchWorkspace } from "../tools/searchWorkspace.js";
 import { applyPatch } from "../tools/applyPatch.js";
 import { runVerification } from "../tools/runVerification.js";
+import { runDirectVerificationBundle } from "../tools/runDirectVerificationBundle.js";
 import { finalizeDirectSession } from "../tools/finalizeDirectSession.js";
 import { auditSession } from "../tools/auditSession.js";
 import { syncFile } from "../tools/syncFile.js";
@@ -58,6 +63,13 @@ import { exportHandoff } from "../goal/handoffExport.js";
 import { acceptSubgoal, rejectSubgoal, summarizeGoalProgress } from "../goal/goalProgress.js";
 import { createSubgoalTask } from "./goalSubgoalTask.js";
 import { checkReleaseGate } from "./checkReleaseGate.js";
+import {
+  getProjectPolicyTool,
+  releaseCheck,
+  releaseCleanup,
+  releasePrepare,
+  releaseVerify,
+} from "./releaseMode.js";
 import { mergeWorktreeTool } from "./mergeWorktree.js";
 import { discardWorktreeTool } from "./discardWorktree.js";
 import { TASK_TEMPLATE_NAMES } from "./taskTemplates.js";
@@ -84,10 +96,12 @@ export interface ToolDef {
 export function getToolDefs(): ToolDef[] {
   const config = getConfig();
   const agentNames = Object.keys(config.agents).sort();
+  const routableAgentNames = [...agentNames, "auto"];
   const agentDescription = agentNames.length > 0
-    ? `Configured local agent name. Available agents: ${agentNames.map((name) => JSON.stringify(name)).join(", ")}`
+    ? `Configured local agent name. Available agents: ${agentNames.map((name) => JSON.stringify(name)).join(", ")}. run_task_loop also accepts "auto" for bounded routing.`
     : "Configured local agent name. No agents are currently configured.";
   const testCommands = getAllConfiguredTestCommands(config).sort();
+  const directCommands = getAllConfiguredDirectCommands(config);
   const tools: ToolDef[] = [
     {
       name: "save_plan",
@@ -199,6 +213,178 @@ export function getToolDefs(): ToolDef[] {
           },
         },
         required: [],
+      },
+    },
+    {
+      name: "run_task_loop",
+      description:
+        "Run a guarded PatchWarden task loop by composing create_task, wait_for_task, safe summaries, and audit_task. It does not bypass the watcher, command allow-list, workspace confinement, or confirmation boundaries. Returns only bounded structured lineage and final status.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_path: {
+            type: "string",
+            description: "Required repository path inside workspaceRoot. No implicit workspace-root fallback is allowed.",
+          },
+          goal: { type: "string", description: "Task goal to execute through the guarded loop." },
+          verify_commands: {
+            type: "array",
+            minItems: 1,
+            maxItems: 20,
+            items: {
+              type: "string",
+              ...(testCommands.length > 0 ? { enum: testCommands } : {}),
+            },
+            description: "Exact-match verification commands. The loop reuses create_task validation and will not run commands outside the allow-list.",
+          },
+          agent: {
+            type: "string",
+            description: agentDescription,
+            ...(agentNames.length > 0 ? { enum: routableAgentNames } : {}),
+          },
+          template: {
+            type: "string",
+            enum: ["inspect_only", "feature_small", "release_check"],
+            default: "feature_small",
+            description: "Initial guarded task template. Follow-up repair tasks use fix_tests automatically when verification fails.",
+          },
+          max_iterations: {
+            type: "integer",
+            minimum: 1,
+            maximum: 5,
+            default: 3,
+            description: "Maximum total main/fix task attempts.",
+          },
+          task_timeout_seconds: {
+            type: "integer",
+            minimum: 1,
+            maximum: config.maxTaskTimeoutSeconds,
+            default: config.defaultTaskTimeoutSeconds,
+            description: `Per-task wait budget in seconds (default ${config.defaultTaskTimeoutSeconds}, max ${config.maxTaskTimeoutSeconds}).`,
+          },
+          auto_fix_tests: {
+            type: "boolean",
+            default: true,
+            description: "When true, create a fix_tests follow-up task after failed_verification until max_iterations is reached.",
+          },
+          auto_cleanup_artifacts: {
+            type: "boolean",
+            default: true,
+            description: "Records cleanup intent in lineage. Low-risk cleanup remains handled by runTask post-task cleanup.",
+          },
+          stop_on_high_risk: {
+            type: "boolean",
+            default: true,
+            description: "When true, stop immediately on non-policy high-risk audit evidence. Scope, policy, sensitive-path, release/publish, and confirmation boundaries always stop regardless of this flag.",
+          },
+          direct_verify: {
+            type: "boolean",
+            default: false,
+            description: "When true, run an independent Direct verification session after the guarded task/audit succeeds. Direct never patches files in this loop.",
+          },
+          direct_verify_commands: {
+            type: "array",
+            minItems: 1,
+            maxItems: 20,
+            items: {
+              type: "string",
+              ...(directCommands.length > 0 ? { enum: directCommands } : {}),
+            },
+            description: "Optional Direct verification commands. Defaults to verify_commands and still must pass the Direct command allow-list.",
+          },
+          direct_verify_timeout_seconds: {
+            type: "integer",
+            minimum: 1,
+            maximum: Math.min(config.maxTaskTimeoutSeconds, config.directSessionTtlSeconds),
+            default: 120,
+            description: "Per-command timeout for Direct verification.",
+          },
+          scope_files: {
+            type: "array",
+            maxItems: 50,
+            items: { type: "string" },
+            description: "Optional bounded file scope used only for agent routing hints.",
+          },
+          isolation_mode: {
+            type: "string",
+            enum: ["current_repo", "worktree"],
+            default: "current_repo",
+            description: "Use current_repo by default. worktree creates an isolated git worktree for the task but never auto-merges it.",
+          },
+          worktree_base_branch: {
+            type: "string",
+            description: "Optional base-branch label recorded in lineage. v1.5 does not auto-checkout or merge this branch.",
+          },
+          worktree_cleanup: {
+            type: "string",
+            enum: ["keep", "archive", "delete_ignored_only"],
+            default: "keep",
+            description: "Cleanup intent recorded in lineage. v1.5 keeps worktrees by default and does not auto-delete them.",
+          },
+        },
+        required: ["repo_path", "goal", "verify_commands"],
+      },
+    },
+    {
+      name: "recommend_agent_for_task",
+      description:
+        "Return a bounded read-only agent routing recommendation for a repo-scoped task. Does not start an agent, create a task, or read logs.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_path: { type: "string", description: "Repository path inside workspaceRoot." },
+          goal: { type: "string", description: "Task goal used for routing hints." },
+          scope_files: {
+            type: "array",
+            maxItems: 50,
+            items: { type: "string" },
+            description: "Optional bounded list of files or directories expected to be in scope.",
+          },
+          template: { type: "string", description: "Optional task template hint." },
+          risk_hint: { type: "string", description: "Optional compact risk hint text." },
+        },
+        required: ["repo_path", "goal"],
+      },
+    },
+    {
+      name: "get_task_lineage",
+      description:
+        "Read a bounded safe summary for a run_task_loop lineage. Does not return full logs, diffs, stdout, stderr, or markdown artifacts.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          lineage_id: { type: "string", description: "Lineage ID returned by run_task_loop." },
+          max_items: { type: "integer", minimum: 1, maximum: 50, default: 8, description: "Maximum rounds/tasks/warnings to return." },
+        },
+        required: ["lineage_id"],
+      },
+    },
+    {
+      name: "export_task_evidence_pack",
+      description:
+        "Export a bounded evidence pack for a run_task_loop lineage. Writes evidence.json and EVIDENCE.md without stdout, stderr, full logs, full diff, or sensitive file contents.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          lineage_id: { type: "string", description: "Lineage ID returned by run_task_loop." },
+          max_items: { type: "integer", minimum: 1, maximum: 50, default: 12, description: "Maximum rounds/tasks/warnings to include." },
+        },
+        required: ["lineage_id"],
+      },
+    },
+    {
+      name: "get_project_policy",
+      description:
+        "Read the bounded effective .patchwarden/project-policy.json summary for a repository. Missing policy returns safe defaults. Project policy never expands PatchWarden command allow-lists, workspace confinement, sensitive-path blocking, or watcher/audit boundaries.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_path: {
+            type: "string",
+            description: "Repository path inside workspaceRoot.",
+          },
+        },
+        required: ["repo_path"],
       },
     },
     {
@@ -790,6 +976,91 @@ export function getToolDefs(): ToolDef[] {
       },
     },
     {
+      name: "release_check",
+      description:
+        "v1.3.0: Run a bounded release readiness check by wrapping the existing release gate. Local stages use existing guarded release-gate commands; remote stages are read-only. Does not publish, push, tag, or create a GitHub Release.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_path: { type: "string", description: "Repository path inside workspaceRoot." },
+          target_stage: {
+            type: "string",
+            enum: ["local_ready", "packed_ready", "published_verified", "github_release_verified", "ci_verified"],
+            default: "local_ready",
+            description: "Release gate stage to check. Defaults to local_ready.",
+          },
+          package_name: { type: "string", description: "npm package name for remote verification." },
+          version: { type: "string", description: "Version to verify. Defaults to project policy/package.json when omitted." },
+          github_repo: { type: "string", description: "GitHub repo in owner/repo form for release/CI verification." },
+          branch: { type: "string", default: "main", description: "Branch for CI verification." },
+        },
+        required: ["repo_path"],
+      },
+    },
+    {
+      name: "release_prepare",
+      description:
+        "v1.3.0: Run project-policy release preparation commands only when each command is already accepted by the existing PatchWarden command guard. Returns command status only, never stdout/stderr. Does not publish, push, tag, or create a GitHub Release.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_path: { type: "string", description: "Repository path inside workspaceRoot." },
+          required_commands: {
+            type: "array",
+            maxItems: 10,
+            items: {
+              type: "string",
+              ...(testCommands.length > 0 ? { enum: testCommands } : {}),
+            },
+            description: "Optional exact-match release preparation commands. Defaults to project policy release_mode.required_commands.",
+          },
+          timeout_seconds: {
+            type: "integer",
+            minimum: 1,
+            maximum: config.maxTaskTimeoutSeconds,
+            default: 300,
+            description: "Per-command timeout in seconds.",
+          },
+        },
+        required: ["repo_path"],
+      },
+    },
+    {
+      name: "release_verify",
+      description:
+        "v1.3.0: Verify npm/GitHub/CI release facts with read-only HTTPS requests. Does not run local shell commands and does not publish, push, tag, or create a GitHub Release.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_path: { type: "string", description: "Repository path inside workspaceRoot." },
+          package_name: { type: "string", description: "npm package name. Defaults to package.json name." },
+          version: { type: "string", description: "Version to verify. Defaults to project policy/package.json." },
+          github_repo: { type: "string", description: "GitHub repo in owner/repo form. Defaults to package.json repository when available." },
+          branch: { type: "string", default: "main", description: "Branch for CI verification." },
+        },
+        required: ["repo_path"],
+      },
+    },
+    {
+      name: "release_cleanup",
+      description:
+        "v1.3.0: Clean up release artifacts using project-policy auto_cleanup rules. Defaults to dry_run=true. Non-dry-run cleanup only removes low-risk ignored/untracked artifacts under repo_path and writes an audit summary.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_path: { type: "string", description: "Repository path inside workspaceRoot." },
+          dry_run: { type: "boolean", default: true, description: "Preview cleanup by default. Set false to remove eligible artifacts." },
+          patterns: {
+            type: "array",
+            maxItems: 20,
+            items: { type: "string" },
+            description: "Optional cleanup patterns. Defaults to project policy auto_cleanup.patterns.",
+          },
+        },
+        required: ["repo_path"],
+      },
+    },
+    {
       name: "merge_worktree",
       description:
         "v1.0.0: Merge an isolated git worktree's changes back into the main workspace. Use after a subgoal task (created with isolate_worktree=true) is accepted. Updates worktree_status.json to status='merged'. Merge failures do NOT delete the worktree (preserved for manual inspection).",
@@ -818,7 +1089,6 @@ export function getToolDefs(): ToolDef[] {
   ];
 
   // Direct session tools
-  const directCommands = getAllConfiguredDirectCommands(config);
   tools.push({
     name: "create_direct_session",
     description:
@@ -905,6 +1175,30 @@ export function getToolDefs(): ToolDef[] {
         timeout_seconds: { type: "number", description: "Timeout in seconds (default 120)" },
       },
       required: ["session_id", "command"],
+    },
+  });
+
+  tools.push({
+    name: "run_direct_verification_bundle",
+    description:
+      "Run multiple allowlisted Direct verification commands sequentially and return only bounded structured status. Omits stdout/stderr tails and log content.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string", description: "Direct session ID" },
+        commands: {
+          type: "array",
+          minItems: 1,
+          maxItems: 20,
+          items: {
+            type: "string",
+            ...(directCommands.length > 0 ? { enum: directCommands } : {}),
+          },
+          description: "Verification commands to run in order. Each command must be accepted by the existing Direct command guard.",
+        },
+        timeout_seconds: { type: "integer", minimum: 1, maximum: Math.min(config.maxTaskTimeoutSeconds, config.directSessionTtlSeconds), default: 120 },
+      },
+      required: ["session_id", "commands"],
     },
   });
 
@@ -1089,6 +1383,67 @@ async function handleToolCallInternal(name: string, args: Record<string, unknown
           assessment_id: args?.assessment_id ? String(args.assessment_id) : undefined,
         })
       );
+    }
+
+    case "run_task_loop": {
+      return toResult(await runTaskLoop({
+        repo_path: String(args?.repo_path ?? ""),
+        goal: String(args?.goal ?? ""),
+        verify_commands: Array.isArray(args?.verify_commands)
+          ? args.verify_commands.map((command) => String(command))
+          : [],
+        agent: args?.agent ? String(args.agent) : undefined,
+        template:
+          args?.template === "inspect_only" || args?.template === "release_check"
+            ? args.template
+            : "feature_small",
+        max_iterations: args?.max_iterations !== undefined ? Number(args.max_iterations) : undefined,
+        task_timeout_seconds: args?.task_timeout_seconds !== undefined ? Number(args.task_timeout_seconds) : undefined,
+        auto_fix_tests: args?.auto_fix_tests !== undefined ? Boolean(args.auto_fix_tests) : undefined,
+        auto_cleanup_artifacts: args?.auto_cleanup_artifacts !== undefined ? Boolean(args.auto_cleanup_artifacts) : undefined,
+        stop_on_high_risk: args?.stop_on_high_risk !== undefined ? Boolean(args.stop_on_high_risk) : undefined,
+        direct_verify: args?.direct_verify !== undefined ? Boolean(args.direct_verify) : undefined,
+        direct_verify_commands: Array.isArray(args?.direct_verify_commands)
+          ? args.direct_verify_commands.map((command) => String(command))
+          : undefined,
+        direct_verify_timeout_seconds: args?.direct_verify_timeout_seconds !== undefined ? Number(args.direct_verify_timeout_seconds) : undefined,
+        scope_files: Array.isArray(args?.scope_files)
+          ? args.scope_files.map((entry) => String(entry))
+          : undefined,
+        isolation_mode: args?.isolation_mode === "worktree" ? "worktree" : "current_repo",
+        worktree_base_branch: args?.worktree_base_branch ? String(args.worktree_base_branch) : undefined,
+        worktree_cleanup:
+          args?.worktree_cleanup === "archive" || args?.worktree_cleanup === "delete_ignored_only"
+            ? args.worktree_cleanup
+            : "keep",
+      }));
+    }
+
+    case "recommend_agent_for_task": {
+      return toResult(recommendAgentForTask({
+        repo_path: String(args?.repo_path ?? ""),
+        goal: String(args?.goal ?? ""),
+        scope_files: Array.isArray(args?.scope_files) ? args.scope_files.map((entry) => String(entry)) : undefined,
+        template: args?.template ? String(args.template) : undefined,
+        risk_hint: args?.risk_hint ? String(args.risk_hint) : undefined,
+      }));
+    }
+
+    case "get_task_lineage": {
+      return toResult(getTaskLineage(String(args?.lineage_id ?? ""), {
+        max_items: args?.max_items !== undefined ? Number(args.max_items) : undefined,
+      }));
+    }
+
+    case "export_task_evidence_pack": {
+      return toResult(exportTaskEvidencePack({
+        lineage_id: String(args?.lineage_id ?? ""),
+        max_items: args?.max_items !== undefined ? Number(args.max_items) : undefined,
+      }));
+    }
+
+    case "get_project_policy": {
+      return toResult(getProjectPolicyTool(String(args?.repo_path ?? "")));
     }
 
     case "get_task_status": {
@@ -1329,6 +1684,15 @@ async function handleToolCallInternal(name: string, args: Record<string, unknown
       }));
     }
 
+    case "run_direct_verification_bundle": {
+      guardDirectProfileEnabled();
+      return toResult(await runDirectVerificationBundle({
+        session_id: String(args?.session_id ?? ""),
+        commands: Array.isArray(args?.commands) ? args.commands.map((command) => String(command)) : [],
+        timeout_seconds: args?.timeout_seconds ? Number(args.timeout_seconds) : undefined,
+      }));
+    }
+
     case "finalize_direct_session": {
       guardDirectProfileEnabled();
       return toResult(finalizeDirectSession({
@@ -1453,6 +1817,45 @@ async function handleToolCallInternal(name: string, args: Record<string, unknown
         version: args?.version ? String(args.version) : undefined,
         github_repo: args?.github_repo ? String(args.github_repo) : undefined,
         branch: args?.branch ? String(args.branch) : undefined,
+      }));
+    }
+
+    case "release_check": {
+      return toResult(await releaseCheck({
+        repo_path: String(args?.repo_path ?? ""),
+        target_stage: String(args?.target_stage ?? "local_ready") as any,
+        package_name: args?.package_name ? String(args.package_name) : undefined,
+        version: args?.version ? String(args.version) : undefined,
+        github_repo: args?.github_repo ? String(args.github_repo) : undefined,
+        branch: args?.branch ? String(args.branch) : undefined,
+      }));
+    }
+
+    case "release_prepare": {
+      return toResult(releasePrepare({
+        repo_path: String(args?.repo_path ?? ""),
+        required_commands: Array.isArray(args?.required_commands)
+          ? args.required_commands.map(String)
+          : undefined,
+        timeout_seconds: args?.timeout_seconds !== undefined ? Number(args.timeout_seconds) : undefined,
+      }));
+    }
+
+    case "release_verify": {
+      return toResult(await releaseVerify({
+        repo_path: String(args?.repo_path ?? ""),
+        package_name: args?.package_name ? String(args.package_name) : undefined,
+        version: args?.version ? String(args.version) : undefined,
+        github_repo: args?.github_repo ? String(args.github_repo) : undefined,
+        branch: args?.branch ? String(args.branch) : undefined,
+      }));
+    }
+
+    case "release_cleanup": {
+      return toResult(releaseCleanup({
+        repo_path: String(args?.repo_path ?? ""),
+        dry_run: args?.dry_run !== undefined ? Boolean(args.dry_run) : undefined,
+        patterns: Array.isArray(args?.patterns) ? args.patterns.map(String) : undefined,
       }));
     }
 

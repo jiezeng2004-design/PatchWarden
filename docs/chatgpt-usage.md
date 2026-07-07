@@ -92,6 +92,37 @@ safety boundaries and complete evidence.
 7. Changes remain uncommitted for review; commit, push, and publish are outside
    the ordinary task scope.
 
+For routine guarded work, `run_task_loop` can perform the assess-only preflight,
+task creation, waiting, safe summary review, audit, and bounded `fix_tests`
+follow-up cycle in one tool call. It still uses the existing Watcher and
+allow-listed verification commands, stops at local confirmation boundaries, and
+returns a `lineage_id` for `get_task_lineage` instead of full logs or diffs.
+
+For v1.4 Direct-assisted verification, set `direct_verify=true` only when the
+local Direct profile is enabled and the desired Direct verification commands are
+already allow-listed. The loop creates a Direct session after the normal task
+and audit have succeeded, runs verification, safe-finalizes, safe-audits, and
+stores bounded Direct evidence in lineage. It does not call Direct patching
+tools, publish, push, tag, create releases, or restart live services.
+
+For v1.5 isolated loop work, set `agent="auto"` when you want PatchWarden to
+pick from configured local agents using bounded routing, and set
+`isolation_mode="worktree"` only when the target repo is a git repository and
+you want the task to run in an isolated worktree. Worktree mode records evidence
+in lineage but never auto-merges or auto-deletes the worktree. After a loop
+finishes, call `export_task_evidence_pack(lineage_id)` to write bounded
+`evidence.json` and `EVIDENCE.md` files without stdout/stderr tails, full diffs,
+verification logs, or sensitive file content.
+
+For v1.3 policy-aware work, call `get_project_policy` before release-oriented
+changes. It reads the bounded effective `.patchwarden/project-policy.json`
+summary and release readiness without granting new command permissions. Release
+mode tools are full-profile only: `release_check` wraps the existing release
+gate, `release_prepare` runs only already allow-listed local commands,
+`release_verify` performs read-only npm/GitHub/CI checks, and `release_cleanup`
+defaults to dry run. None of these tools publish, push, tag, create GitHub
+Releases, restart live tunnels/watchers, or return full logs/diffs.
+
 `needs_confirm` assessments must be confirmed locally with
 `patchwarden-confirm <full_assessment_id>`. The confirmation command is not an
 MCP tool. A `blocked` assessment cannot be confirmed.

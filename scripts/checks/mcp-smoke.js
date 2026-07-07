@@ -118,11 +118,14 @@ try {
     "discover_tools",
     "explain_tool",
     "export_handoff",
+    "export_task_evidence_pack",
     "finalize_direct_session",
     "get_diff",
     "get_plan",
+    "get_project_policy",
     "get_result",
     "get_result_json",
+    "get_task_lineage",
     "get_task_log_tail",
     "get_task_progress",
     "get_task_status",
@@ -139,9 +142,16 @@ try {
     "merge_worktree",
     "read_goal",
     "read_workspace_file",
+    "recommend_agent_for_task",
     "reconcile_tasks",
     "reject_subgoal",
+    "release_check",
+    "release_cleanup",
+    "release_prepare",
+    "release_verify",
     "retry_task",
+    "run_direct_verification_bundle",
+    "run_task_loop",
     "run_verification",
     "safe_audit",
     "safe_audit_direct_session",
@@ -167,7 +177,7 @@ try {
   if (!tools._meta || typeof tools._meta.tool_manifest_sha256 !== "string" || tools._meta.tool_manifest_sha256.length !== 64) {
     throw new Error(`tools/list _meta missing manifest hash: ${JSON.stringify(tools._meta || null)}`);
   }
-  if (tools._meta.tool_profile !== "full" || tools._meta.tool_count !== 54) {
+  if (tools._meta.tool_profile !== "full" || tools._meta.tool_count !== 64) {
     throw new Error(`tools/list _meta profile/count mismatch: ${JSON.stringify(tools._meta)}`);
   }
   if (typeof tools._meta.schema_epoch !== "string" || typeof tools._meta.server_version !== "string") {
@@ -417,7 +427,7 @@ try {
   await disabledClient.close();
   ok("chatgpt_direct disabled exposes only health_check with diagnostic");
 
-  // 2. chatgpt_direct enabled: 13 tools + minimal create_direct_session
+  // 2. chatgpt_direct enabled: 14 tools + minimal create_direct_session
   const enabledConfigPath = join(tempRoot, "direct-enabled.json");
   const directRepo = join(workspaceRoot, "direct-fixture");
   mkdirSync(join(directRepo, "src"), { recursive: true });
@@ -473,6 +483,7 @@ try {
     "health_check",
     "list_workspace",
     "read_workspace_file",
+    "run_direct_verification_bundle",
     "run_verification",
     "safe_audit_direct_session",
     "safe_direct_summary",
@@ -483,8 +494,8 @@ try {
   if (JSON.stringify(enabledNames) !== JSON.stringify(expectedDirect)) {
     throw new Error(`chatgpt_direct enabled tools mismatch: ${enabledNames.join(", ")}`);
   }
-  if (enabledTools._meta.tool_count !== 13) {
-    throw new Error(`chatgpt_direct enabled tool_count should be 13, got ${enabledTools._meta.tool_count}`);
+  if (enabledTools._meta.tool_count !== 14) {
+    throw new Error(`chatgpt_direct enabled tool_count should be 14, got ${enabledTools._meta.tool_count}`);
   }
 
   // Minimal create_direct_session
@@ -497,6 +508,19 @@ try {
   if (!sessionResult.session_id || !sessionResult.session_id.startsWith("direct_")) {
     throw new Error(`create_direct_session failed: ${JSON.stringify(sessionResult)}`);
   }
+  const bundleResult = JSON.parse(
+    (await enabledClient.callTool({
+      name: "run_direct_verification_bundle",
+      arguments: { session_id: sessionResult.session_id, commands: ["npm test"], timeout_seconds: 30 },
+    })).content?.[0]?.text || "{}"
+  );
+  if (bundleResult.status !== "passed" || bundleResult.command_count !== 1 || bundleResult.passed_commands !== 1) {
+    throw new Error(`run_direct_verification_bundle failed: ${JSON.stringify(bundleResult)}`);
+  }
+  const bundleText = JSON.stringify(bundleResult).toLowerCase();
+  if (bundleText.includes("stdout_tail") || bundleText.includes("stderr_tail") || bundleText.includes("verification.log")) {
+    throw new Error("run_direct_verification_bundle leaked log tail fields");
+  }
 
   const enabledHealth = JSON.parse(
     (await enabledClient.callTool({ name: "health_check", arguments: {} })).content?.[0]?.text || "{}"
@@ -504,12 +528,12 @@ try {
   if (enabledHealth.direct_profile_enabled !== true) {
     throw new Error(`direct_profile_enabled should be true, got ${enabledHealth.direct_profile_enabled}`);
   }
-  if (enabledHealth.direct_tool_count !== 13) {
-    throw new Error(`direct_tool_count should be 13, got ${enabledHealth.direct_tool_count}`);
+  if (enabledHealth.direct_tool_count !== 14) {
+    throw new Error(`direct_tool_count should be 14, got ${enabledHealth.direct_tool_count}`);
   }
 
   await enabledClient.close();
-  ok("chatgpt_direct enabled exposes 13 tools and create_direct_session works");
+  ok("chatgpt_direct enabled exposes 14 tools and create_direct_session works");
 } catch (error) {
   fail("MCP smoke test", error);
 } finally {

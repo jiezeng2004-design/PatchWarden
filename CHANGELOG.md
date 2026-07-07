@@ -1,5 +1,141 @@
 # PatchWarden CHANGELOG
 
+## v1.5.0 (2026-07-05)
+
+### Theme: Worktree Isolation, Agent Routing, and Evidence Packs
+
+v1.5 extends the guarded loop without changing PatchWarden's safety boundary:
+tasks still run through the Watcher, command allow-lists, workspace confinement,
+sensitive-path blocking, safe summaries, and audit artifacts. Worktree mode does
+not auto-merge or auto-delete worktrees, and evidence packs do not include full
+logs, stdout/stderr tails, diffs, verification logs, or secret-bearing content.
+
+### New Tools
+
+- Core/full: `recommend_agent_for_task`
+- Core/full: `export_task_evidence_pack`
+
+### Loop and Evidence
+
+- `run_task_loop` now accepts `agent="auto"` for bounded routing,
+  `scope_files` as a routing hint, and `isolation_mode="worktree"` for optional
+  git worktree isolation.
+- Lineage records now include worktree evidence and the selected agent routing
+  decision.
+- Evidence packs are written to `.patchwarden/evidence-packs/<lineage_id>/` as
+  `evidence.json` and `EVIDENCE.md`.
+
+### Dashboard and HTTP
+
+- Control Center shows Evidence Pack status on the Dashboard.
+- `GET /api/evidence-packs` and `GET /api/evidence-packs/:lineage_id` expose
+  bounded read-only evidence summaries.
+
+### Tool Count
+
+- full profile: 62 -> 64
+- `chatgpt_core` profile: 24 -> 26
+- `chatgpt_direct` profile: 14 unchanged
+- `chatgpt_search` profile: 5 unchanged
+
+## v1.4.0 (2026-07-05)
+
+### Theme: Direct-Assisted Loop Verification
+
+v1.4 connects Direct session verification to the guarded task loop. Direct is
+used only as an independent verification channel after the watcher-driven task
+and normal audit succeed; it does not patch files automatically and does not
+bypass command guards, workspace confinement, sensitive-path blocking, safe
+summary boundaries, or audit artifacts.
+
+### New Tool
+
+- Direct/full: `run_direct_verification_bundle`
+
+### Loop and Lineage
+
+- `run_task_loop` now accepts `direct_verify`, `direct_verify_commands`, and
+  `direct_verify_timeout_seconds`. When enabled, it creates a Direct session,
+  runs only allowlisted verification commands, safe-finalizes, safe-audits, and
+  stores bounded Direct evidence in lineage.
+- Lineage Direct records now include session id, command pass/fail counts,
+  audit decision, changed-file count, and next action. Legacy string-only
+  `direct_sessions` records remain readable.
+- New stop reasons: `direct_profile_disabled`, `direct_verification_failed`,
+  and `direct_audit_failed`.
+
+### Dashboard and HTTP
+
+- Control Center lineage panels show Direct verification status and Direct audit
+  decision.
+- `GET /api/direct-sessions/:id/summary` returns safe Direct summaries without
+  stdout/stderr tails, full diffs, verification logs, or secret-bearing content.
+
+### Tool Count
+
+- full profile: 61 -> 62
+- `chatgpt_core` profile: 24 unchanged
+- `chatgpt_direct` profile: 13 -> 14
+- `chatgpt_search` profile: 5 unchanged
+
+## v1.3.0 (2026-07-04)
+
+### Theme: Project Policy, Release Mode, and Dashboard Status
+
+v1.3 adds repo-scoped project policy summaries, guarded release mode tools, and
+Control Center visibility for task lineage, policy, and release readiness. These
+features do not bypass the Watcher, command allow-list, workspace confinement,
+sensitive path blocking, safe summary boundaries, or audit artifact chain.
+
+### New Tools
+
+- Core/full: `get_project_policy`
+- Full only: `release_check`, `release_prepare`, `release_verify`, `release_cleanup`
+
+### Project Policy and Release Mode
+
+- `.patchwarden/project-policy.json` is optional. Missing policy returns safe
+  defaults; invalid JSON, unsafe path patterns, sensitive paths, high-risk
+  commands, and commands not accepted by existing PatchWarden config become
+  validation issues rather than new permissions.
+- `release_check` wraps the existing release gate. `release_prepare` runs only
+  already allow-listed local commands. `release_verify` performs read-only
+  npm/GitHub/CI checks. `release_cleanup` defaults to dry run and only removes
+  low-risk ignored/untracked artifacts when explicitly requested.
+- Control Center now exposes bounded lineage, project policy, and release status
+  APIs and dashboard panels without full logs, diffs, stdout/stderr tails, or
+  secret-bearing content.
+
+### Tool Count
+
+- full profile: 56 -> 61
+- `chatgpt_core` profile: 23 -> 24
+- `chatgpt_direct` profile: 13 unchanged
+- `chatgpt_search` profile: 5 unchanged
+
+## v1.2.0 (2026-07-04)
+
+### Theme: Loop Orchestrator and Task Lineage
+
+v1.2 adds a guarded orchestration layer for common ChatGPT task loops. The loop composes existing `create_task`, `wait_for_task`, safe summary, and `audit_task` behavior; it does not bypass the Watcher, command allow-list, workspace confinement, local confirmation, or audit artifact chain.
+
+### New Tools
+
+- Core/full: `run_task_loop`, `get_task_lineage`
+
+### Loop and Lineage
+
+- `run_task_loop` performs assess-only risk preflight, creates the main task only after an allow decision, waits for terminal status, reads safe result/test/audit summaries, and optionally creates bounded `fix_tests` follow-up tasks after failed verification.
+- `get_task_lineage` reads `.patchwarden/lineages/<lineage_id>/lineage.json` as a bounded summary without full logs, full diffs, stdout/stderr tails, or long markdown.
+- Loop stop reasons are explicit: `success`, `max_iterations_reached`, `verification_failed`, `high_risk_blocked`, `user_confirmation_required`, `agent_timeout`, `policy_blocked`, and `watcher_blocked`.
+
+### Tool Count
+
+- full profile: 54 -> 56
+- `chatgpt_core` profile: 21 -> 23
+- `chatgpt_direct` profile: 13 unchanged
+- `chatgpt_search` profile: 5 unchanged
+
 ## v1.1.0 (2026-06-27)
 
 ### Theme: Safe Summaries and Low-Noise Audits

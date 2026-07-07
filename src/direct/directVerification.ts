@@ -69,6 +69,13 @@ export async function runDirectVerification(
     exit_code: result.exitCode,
     passed,
     timed_out: result.timedOut,
+    redacted: stdoutRedacted.redacted || stderrRedacted.redacted,
+    redaction_categories: [
+      ...new Set([
+        ...stdoutRedacted.redaction_categories,
+        ...stderrRedacted.redaction_categories,
+      ]),
+    ],
     stdout_tail: stdoutTail,
     stderr_tail: stderrTail,
     started_at: startedAt,

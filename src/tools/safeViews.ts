@@ -208,6 +208,8 @@ function summarizeVerificationRuns(runs: DirectSessionVerificationRun[]) {
     exit_code: run.exit_code,
     passed: run.passed,
     timed_out: run.timed_out,
+    redacted: Boolean(run.redacted),
+    redaction_categories: run.redaction_categories || [],
     started_at: run.started_at,
     finished_at: run.finished_at,
   }));

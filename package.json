@@ -1,7 +1,7 @@
 {
   "name": "patchwarden",
-  "version": "1.1.0",
-  "description": "Secure local MCP bridge for ChatGPT and local agents, with workspace-scoped tasks, safe summaries, audits, and Direct editing.",
+  "version": "1.5.0",
+  "description": "Secure local MCP bridge for ChatGPT and local agents, with workspace-scoped task loops, safe summaries, audits, and Direct editing.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -13,7 +13,7 @@
  */
 
 import { createServer, get as httpGet, type IncomingMessage, type ServerResponse } from "node:http";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -33,6 +33,10 @@ import { readWatcherStatus, type WatcherStatusSnapshot } from "./watcherStatus.j
 import { redactSensitiveContent } from "./security/contentRedaction.js";
 import { guardWorkspacePath } from "./security/pathGuard.js";
 import { auditTask } from "./tools/auditTask.js";
+import { getProjectPolicySummary } from "./policy/projectPolicy.js";
+import { safeDirectSummary } from "./tools/safeViews.js";
+import { toSafeTaskLineage, type TaskLineageRecord } from "./tools/taskLineage.js";
+import { listEvidencePacks, readEvidencePack } from "./tools/evidencePack.js";
 import { PATCHWARDEN_VERSION, TOOL_SCHEMA_EPOCH } from "./version.js";
 
 // ── Paths ─────────────────────────────────────────────────────────
@@ -245,6 +249,25 @@ function readJsonFileSafe<T = unknown>(filePath: string): T | null {
   try {
     const raw = readFileSync(filePath, "utf-8");
     return JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function isPathInside(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function readJsonFileSafeUnder<T = unknown>(root: string, relPath: string): T | null {
+  const base = resolve(root);
+  const target = resolve(base, relPath);
+  if (!isPathInside(base, target) || !existsSync(target)) return null;
+  try {
+    const realBase = realpathSync(base);
+    const realTarget = realpathSync(target);
+    if (!isPathInside(realBase, realTarget)) return null;
+    return readJsonFileSafe<T>(realTarget);
   } catch {
     return null;
   }
@@ -1020,6 +1043,108 @@ function handleStaleTasks(res: ServerResponse): void {
   }
 }
 
+function handleLineages(res: ServerResponse): void {
+  try {
+    const root = join(config.workspaceRoot, ".patchwarden", "lineages");
+    if (!existsSync(root)) {
+      sendJson(res, 200, { lineages: [], total: 0, reason: null });
+      return;
+    }
+    const lineages = readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => readJsonFileSafeUnder<TaskLineageRecord>(root, join(entry.name, "lineage.json")))
+      .filter((entry): entry is TaskLineageRecord => entry !== null)
+      .map((entry) => toSafeTaskLineage(entry, 6))
+      .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+      .slice(0, 50);
+    sendJson(res, 200, { lineages, total: lineages.length, reason: null });
+  } catch (err) {
+    sendJson(res, 200, { lineages: [], total: 0, reason: errorMessage(err) });
+  }
+}
+
+function handleLineageDetail(res: ServerResponse, lineageId: string): void {
+  try {
+    if (!/^[A-Za-z0-9_-]+$/.test(lineageId)) {
+      sendJson(res, 400, { error: "Invalid lineage id" });
+      return;
+    }
+    const data = readJsonFileSafeUnder<TaskLineageRecord>(
+      join(config.workspaceRoot, ".patchwarden", "lineages"),
+      join(lineageId, "lineage.json")
+    );
+    if (!data) {
+      sendJson(res, 404, { error: "Lineage not found" });
+      return;
+    }
+    sendJson(res, 200, toSafeTaskLineage(data, 20));
+  } catch (err) {
+    sendJson(res, 200, { lineage_id: lineageId, error: errorMessage(err) });
+  }
+}
+
+function handleProjectPolicy(res: ServerResponse, repoPath: string): void {
+  try {
+    sendJson(res, 200, getProjectPolicySummary(repoPath || "."));
+  } catch (err) {
+    sendJson(res, 200, {
+      repo_path: repoPath || ".",
+      valid: false,
+      issues: [{ code: "policy_unavailable", severity: "error", field: "repo_path", message: errorMessage(err) }],
+    });
+  }
+}
+
+function handleReleaseStatus(res: ServerResponse, repoPath: string): void {
+  try {
+    const policy = getProjectPolicySummary(repoPath || ".");
+    sendJson(res, 200, {
+      repo_path: repoPath || ".",
+      resolved_repo_path: policy.resolved_repo_path,
+      policy_valid: policy.valid,
+      policy_issue_count: policy.issues.length,
+      policy_issues: policy.issues.slice(0, 10),
+      release_readiness: policy.release_readiness,
+      next_action: policy.valid && policy.release_readiness.version_consistent !== false
+        ? "Run release_check or release_prepare from the full MCP profile when ready."
+        : "Fix project-policy or version consistency issues before release preparation.",
+      remote_write_performed: false,
+    });
+  } catch (err) {
+    sendJson(res, 200, {
+      repo_path: repoPath || ".",
+      policy_valid: false,
+      error: errorMessage(err),
+      remote_write_performed: false,
+    });
+  }
+}
+
+function handleEvidencePacks(res: ServerResponse): void {
+  try {
+    sendJson(res, 200, listEvidencePacks({ max_items: 50 }));
+  } catch (err) {
+    sendJson(res, 200, { evidence_packs: [], total: 0, reason: errorMessage(err) });
+  }
+}
+
+function handleEvidencePackDetail(res: ServerResponse, lineageId: string): void {
+  try {
+    if (!/^[A-Za-z0-9_-]+$/.test(lineageId)) {
+      sendJson(res, 400, { error: "Invalid lineage id" });
+      return;
+    }
+    const pack = readEvidencePack(lineageId);
+    if (!pack) {
+      sendJson(res, 404, { error: "Evidence pack not found" });
+      return;
+    }
+    sendJson(res, 200, pack);
+  } catch (err) {
+    sendJson(res, 200, { lineage_id: lineageId, error: errorMessage(err), bounded: true });
+  }
+}
+
 /**
  * Reconcile a stale task. Does NOT delete the task. Reads the task files,
  * decides whether it is safe to mark the task as stale/archived, writes a
@@ -1655,6 +1780,29 @@ function handleDirectSessionDetail(res: ServerResponse, sessionId: string): void
   }
 }
 
+function handleDirectSessionSafeSummary(res: ServerResponse, sessionId: string): void {
+  try {
+    if (
+      sessionId === "." ||
+      sessionId === ".." ||
+      sessionId.includes("/") ||
+      sessionId.includes("\\") ||
+      sessionId.includes("\0")
+    ) {
+      sendJson(res, 400, { error: "Invalid session id" });
+      return;
+    }
+    sendJson(res, 200, safeDirectSummary(sessionId, { max_items: 12 }));
+  } catch (err) {
+    sendJson(res, 200, {
+      session_id: sessionId,
+      error: errorMessage(err),
+      large_logs_omitted: true,
+      diff_omitted: true,
+    });
+  }
+}
+
 function parseReviewVerdict(content: string): string | null {
   // independent-review.md format: "**Verdict**: PASS" (case-insensitive)
   const m = content.match(/\*\*Verdict\*\*\s*:\s*([A-Za-z]+)/);
@@ -1952,6 +2100,44 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     handleStaleTasks(res);
     return;
   }
+  if (method === "GET" && pathname === "/api/lineages") {
+    handleLineages(res);
+    return;
+  }
+  const lineageMatch = pathname.match(/^\/api\/lineages\/([^/]+)$/);
+  if (method === "GET" && lineageMatch) {
+    let lineageId: string;
+    try {
+      lineageId = decodeURIComponent(lineageMatch[1]);
+    } catch {
+      lineageId = lineageMatch[1];
+    }
+    handleLineageDetail(res, lineageId);
+    return;
+  }
+  if (method === "GET" && pathname === "/api/project-policy") {
+    handleProjectPolicy(res, parsedUrl.searchParams.get("repo_path") || ".");
+    return;
+  }
+  if (method === "GET" && pathname === "/api/release/status") {
+    handleReleaseStatus(res, parsedUrl.searchParams.get("repo_path") || ".");
+    return;
+  }
+  if (method === "GET" && pathname === "/api/evidence-packs") {
+    handleEvidencePacks(res);
+    return;
+  }
+  const evidencePackMatch = pathname.match(/^\/api\/evidence-packs\/([^/]+)$/);
+  if (method === "GET" && evidencePackMatch) {
+    let lineageId: string;
+    try {
+      lineageId = decodeURIComponent(evidencePackMatch[1]);
+    } catch {
+      lineageId = evidencePackMatch[1];
+    }
+    handleEvidencePackDetail(res, lineageId);
+    return;
+  }
   const taskMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/);
   if (method === "GET" && taskMatch) {
     let taskId: string;
@@ -2008,6 +2194,17 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   }
   if (method === "GET" && pathname === "/api/direct-sessions") {
     handleDirectSessions(res);
+    return;
+  }
+  const directSessionSummaryMatch = pathname.match(/^\/api\/direct-sessions\/([^/]+)\/summary$/);
+  if (method === "GET" && directSessionSummaryMatch) {
+    let sessionId: string;
+    try {
+      sessionId = decodeURIComponent(directSessionSummaryMatch[1]);
+    } catch {
+      sessionId = directSessionSummaryMatch[1];
+    }
+    handleDirectSessionSafeSummary(res, sessionId);
     return;
   }
   const directSessionMatch = pathname.match(/^\/api\/direct-sessions\/([^/]+)$/);

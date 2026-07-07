@@ -229,6 +229,7 @@ async function testStaticFiles() {
     if (!rootCt.includes("text/html")) checks.push(`GET / -> Content-Type ${rootCt} (expected text/html)`);
     if (!root.body.includes("setup-checklist-card")) checks.push("dashboard missing setup checklist card");
     if (!root.body.includes("Show Core / Direct log tails")) checks.push("dashboard activity log is not collapsed behind a summary");
+    if (!root.body.includes("evidence-pack-card")) checks.push("dashboard missing v1.5 evidence pack card");
 
     if (vendor.status !== 200) checks.push(`GET /vendor/tailwindcss-browser.js -> status ${vendor.status}`);
     const vendorCt = vendor.headers["content-type"] || "";
@@ -665,6 +666,92 @@ async function testOtherGetApis() {
     }
   } catch (err) {
     problems.push(`/api/audit error: ${err.message}`);
+  }
+
+  // /api/lineages
+  try {
+    const res = await httpGet(`${BASE_URL}/api/lineages`);
+    if (res.status !== 200) problems.push(`/api/lineages -> ${res.status} (expected 200)`);
+    else {
+      const json = tryJson(res.body);
+      if (!json || !Array.isArray(json.lineages) || typeof json.total !== "number") {
+        problems.push(`/api/lineages missing bounded lineage summary fields: ${res.body.slice(0, 120)}`);
+      }
+    }
+  } catch (err) {
+    problems.push(`/api/lineages error: ${err.message}`);
+  }
+
+  // /api/project-policy
+  try {
+    const res = await httpGet(`${BASE_URL}/api/project-policy?repo_path=.`);
+    if (res.status !== 200) problems.push(`/api/project-policy -> ${res.status} (expected 200)`);
+    else {
+      const json = tryJson(res.body);
+      if (!json || !("effective_policy" in json) || !Array.isArray(json.issues)) {
+        problems.push(`/api/project-policy missing policy summary fields: ${res.body.slice(0, 120)}`);
+      }
+      const text = res.body.toLowerCase();
+      if (text.includes("stdout") || text.includes("stderr") || text.includes("diff_patch")) {
+        problems.push("/api/project-policy leaked log/diff-shaped fields");
+      }
+    }
+  } catch (err) {
+    problems.push(`/api/project-policy error: ${err.message}`);
+  }
+
+  // /api/release/status
+  try {
+    const res = await httpGet(`${BASE_URL}/api/release/status?repo_path=.`);
+    if (res.status !== 200) problems.push(`/api/release/status -> ${res.status} (expected 200)`);
+    else {
+      const json = tryJson(res.body);
+      if (!json || !("release_readiness" in json) || json.remote_write_performed !== false) {
+        problems.push(`/api/release/status missing read-only release status fields: ${res.body.slice(0, 120)}`);
+      }
+      const text = res.body.toLowerCase();
+      if (text.includes("stdout") || text.includes("stderr") || text.includes("diff_patch")) {
+        problems.push("/api/release/status leaked log/diff-shaped fields");
+      }
+    }
+  } catch (err) {
+    problems.push(`/api/release/status error: ${err.message}`);
+  }
+
+  // /api/evidence-packs
+  try {
+    const res = await httpGet(`${BASE_URL}/api/evidence-packs`);
+    if (res.status !== 200) problems.push(`/api/evidence-packs -> ${res.status} (expected 200)`);
+    else {
+      const json = tryJson(res.body);
+      if (!json || !Array.isArray(json.evidence_packs) || typeof json.total !== "number") {
+        problems.push(`/api/evidence-packs missing bounded evidence summary fields: ${res.body.slice(0, 120)}`);
+      }
+      const text = res.body.toLowerCase();
+      if (text.includes("stdout_tail") || text.includes("stderr_tail") || text.includes("diff.patch") || text.includes("verification.log")) {
+        problems.push("/api/evidence-packs leaked log/diff-shaped fields");
+      }
+    }
+  } catch (err) {
+    problems.push(`/api/evidence-packs error: ${err.message}`);
+  }
+
+  // /api/direct-sessions/:id/summary (safe, bounded route; missing id is still non-leaky)
+  try {
+    const res = await httpGet(`${BASE_URL}/api/direct-sessions/direct_missing_summary/summary`);
+    if (res.status !== 200) problems.push(`/api/direct-sessions/:id/summary -> ${res.status} (expected 200)`);
+    else {
+      const json = tryJson(res.body);
+      if (!json || json.session_id !== "direct_missing_summary") {
+        problems.push(`/api/direct-sessions/:id/summary missing safe summary envelope: ${res.body.slice(0, 120)}`);
+      }
+      const text = res.body.toLowerCase();
+      if (text.includes("stdout_tail") || text.includes("stderr_tail") || text.includes("diff_patch") || text.includes("verification.log")) {
+        problems.push("/api/direct-sessions/:id/summary leaked log/diff-shaped fields");
+      }
+    }
+  } catch (err) {
+    problems.push(`/api/direct-sessions/:id/summary error: ${err.message}`);
   }
 
   // /api/logs/core
