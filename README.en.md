@@ -46,6 +46,7 @@ independent verification evidence.
 - [HTTP MCP mode](#http-mcp-mode)
 - [Diagnostics and health checks](#diagnostics-and-health-checks)
 - [Lessons learned and troubleshooting](#lessons-learned-and-troubleshooting)
+- [Ecosystem guides](#ecosystem-guides)
 - [Security boundaries and local data](#security-boundaries-and-local-data)
 - [Upgrading and migration](#upgrading-and-migration)
 - [Development and release verification](#development-and-release-verification)
@@ -1041,6 +1042,17 @@ stores runtime state under `%LOCALAPPDATA%\patchwarden\runtime-direct`, skips
 the Watcher, and retains the existing DPAPI credential handling. In a fresh
 ChatGPT conversation, `health_check` should report `chatgpt_direct`, fourteen
 tools, and `direct_profile_enabled=true`.
+
+## Ecosystem guides
+
+- [Why PatchWarden](docs/why-patchwarden.md)
+- [Evidence Pack v2 schema](docs/evidence-pack-schema.md)
+- [Spec Kit integration](docs/spec-kit-integration.md)
+- [AgentSeal integration](docs/agentseal-integration.md)
+- [MCP Inspector testing](docs/mcp-inspector-testing.md)
+- [OpenCode worker integration](docs/opencode-worker.md)
+- [OpenHands worker integration](docs/openhands-worker.md)
+- [Threat model](docs/threat-model.md)
 
 ## Security boundaries and local data
 
