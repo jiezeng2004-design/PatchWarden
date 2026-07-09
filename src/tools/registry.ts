@@ -1363,7 +1363,7 @@ async function handleToolCallInternal(name: string, args: Record<string, unknown
 
     case "create_task": {
       return toResult(
-        createTask({
+        await createTask({
           plan_id: args?.plan_id ? String(args.plan_id) : undefined,
           inline_plan: args?.inline_plan ? String(args.inline_plan) : undefined,
           plan_title: args?.plan_title ? String(args.plan_title) : undefined,
@@ -1508,7 +1508,7 @@ async function handleToolCallInternal(name: string, args: Record<string, unknown
     }
 
     case "retry_task": {
-      return toResult(retryTask(String(args?.task_id ?? "")));
+      return toResult(await retryTask(String(args?.task_id ?? "")));
     }
 
     case "get_task_stdout_tail": {
@@ -1647,7 +1647,7 @@ async function handleToolCallInternal(name: string, args: Record<string, unknown
 
     case "create_direct_session": {
       guardDirectProfileEnabled();
-      return toResult(createDirectSession({
+      return toResult(await createDirectSession({
         repo_path: String(args?.repo_path ?? ""),
         title: args?.title ? String(args.title) : undefined,
       }));
@@ -1695,7 +1695,7 @@ async function handleToolCallInternal(name: string, args: Record<string, unknown
 
     case "finalize_direct_session": {
       guardDirectProfileEnabled();
-      return toResult(finalizeDirectSession({
+      return toResult(await finalizeDirectSession({
         session_id: String(args?.session_id ?? ""),
       }));
     }
@@ -1716,7 +1716,7 @@ async function handleToolCallInternal(name: string, args: Record<string, unknown
 
     case "safe_finalize_direct_session": {
       guardDirectProfileEnabled();
-      return toResult(safeFinalizeDirectSession(String(args?.session_id ?? ""), {
+      return toResult(await safeFinalizeDirectSession(String(args?.session_id ?? ""), {
         max_items: args?.max_items !== undefined ? Number(args.max_items) : undefined,
       }));
     }
@@ -1757,7 +1757,7 @@ async function handleToolCallInternal(name: string, args: Record<string, unknown
     }
 
     case "create_subgoal_task": {
-      return toResult(createSubgoalTask({
+      return toResult(await createSubgoalTask({
         goal_id: String(args?.goal_id ?? ""),
         subgoal_title: String(args?.subgoal_title ?? ""),
         depends_on: Array.isArray(args?.depends_on) ? args.depends_on.map(String) : undefined,

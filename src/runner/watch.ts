@@ -110,7 +110,7 @@ async function tick() {
 
         // Assessment freshness revalidation
         if (statusData.assessment_id) {
-          const preExecSnapshot = captureRepoSnapshot(resolvedRepoPath);
+          const preExecSnapshot = await captureRepoSnapshot(resolvedRepoPath);
           const validation = validateAssessmentFreshness(String(statusData.assessment_id), preExecSnapshot);
           if (!validation.valid) {
             throw new Error(`assessment validation failed: ${validation.failure_reason}`);

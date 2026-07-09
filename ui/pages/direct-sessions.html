@@ -101,6 +101,76 @@ html.dark {
       .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
       .pw-spin { animation: pw-spin 1s linear infinite; }
       @keyframes pw-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+      /* Toast notifications */
+      .pw-toast {
+        pointer-events: auto;
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid var(--pw-border);
+        background-color: var(--pw-bg-surface);
+        box-shadow: var(--pw-shadow-float);
+        font-family: var(--pw-font-sans);
+        font-size: 12px;
+        color: var(--pw-text-primary);
+        animation: pw-toast-in 200ms ease;
+        max-width: 360px;
+      }
+      .pw-toast.pw-toast-success { border-left: 3px solid var(--pw-state-success); }
+      .pw-toast.pw-toast-warning { border-left: 3px solid var(--pw-state-warning); }
+      .pw-toast.pw-toast-error { border-left: 3px solid var(--pw-state-error); }
+      .pw-toast.pw-toast-info { border-left: 3px solid var(--pw-state-info); }
+      .pw-toast .pw-toast-title { font-weight: 600; margin-bottom: 2px; }
+      .pw-toast .pw-toast-msg { color: var(--pw-text-secondary); word-break: break-word; }
+      .pw-toast .pw-toast-close { margin-left: auto; cursor: pointer; color: var(--pw-text-tertiary); font-size: 14px; line-height: 1; padding: 0 2px; }
+      .pw-toast .pw-toast-close:hover { color: var(--pw-text-primary); }
+      @keyframes pw-toast-in {
+        from { opacity: 0; transform: translateX(20px); }
+        to { opacity: 1; transform: translateX(0); }
+      }
+      .pw-toast.pw-toast-leaving { animation: pw-toast-out 200ms ease forwards; }
+      @keyframes pw-toast-out {
+        to { opacity: 0; transform: translateX(20px); }
+      }
+      /* Quick action buttons */
+      .pw-quick-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px 8px;
+        border-radius: 4px;
+        border: 1px solid var(--pw-border-subtle);
+        background-color: var(--pw-bg-hover);
+        color: var(--pw-text-secondary);
+        cursor: pointer;
+        transition: background-color var(--pw-transition-fast), color var(--pw-transition-fast);
+        text-decoration: none;
+        font-size: 11px;
+        font-family: var(--pw-font-sans);
+        white-space: nowrap;
+      }
+      .pw-quick-btn:hover {
+        background-color: var(--pw-bg-active);
+        color: var(--pw-text-primary);
+      }
+      .pw-quick-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .pw-quick-btn.pw-quick-danger:hover {
+        background-color: var(--pw-state-error-bg);
+        color: var(--pw-state-error);
+        border-color: var(--pw-state-error);
+      }
+      .pw-quick-btn.pw-quick-accent {
+        color: var(--pw-accent);
+        border-color: var(--pw-accent-muted);
+      }
+      .pw-quick-btn.pw-quick-accent:hover {
+        background-color: var(--pw-accent-muted);
+      }
     </style>
 </head>
 <body class="flex h-screen overflow-hidden">
@@ -261,6 +331,20 @@ html.dark {
       <!-- ===== Session Detail ===== -->
       <div id="session-detail" class="hidden flex flex-col gap-6"></div>
 
+      <!-- ===== Toast Container ===== -->
+      <div id="toast-container" class="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-sm pointer-events-none"></div>
+
+      <!-- ===== SAFE MODAL ===== -->
+      <div id="safe-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" style="background-color: rgba(0,0,0,0.6);">
+        <div class="rounded-lg w-full max-w-2xl max-h-[80vh] flex flex-col" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border); box-shadow: var(--pw-shadow-modal);">
+          <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
+            <h3 id="safe-modal-title" class="text-sm font-semibold truncate" style="color: var(--pw-text-primary);">—</h3>
+            <button id="safe-modal-close" class="text-lg leading-none" style="color: var(--pw-text-tertiary);" type="button">×</button>
+          </div>
+          <div id="safe-modal-body" class="flex-1 overflow-auto px-4 py-3 text-xs" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono); white-space: pre-wrap; word-break: break-all;"></div>
+        </div>
+      </div>
+
     </main>
   </div>
 
@@ -288,6 +372,7 @@ html.dark {
     'use strict';
 
     var API_URL = '/api/direct-sessions';
+    var controlToken = null;
 
     function $(id) { return document.getElementById(id); }
     function hide(el) { if (el) el.classList.add('hidden'); }
@@ -314,6 +399,13 @@ html.dark {
       if (isNaN(d.getTime())) return String(iso);
       return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate())
            + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+    }
+
+    function shortId(sid) {
+      if (!sid) return '—';
+      var s = String(sid);
+      if (s.length <= 20) return s;
+      return s.slice(0, 12) + '…' + s.slice(-6);
     }
 
     function showError(msg) {
@@ -377,7 +469,8 @@ html.dark {
       success: { fg: 'var(--pw-state-success)', bg: 'var(--pw-state-success-bg)' },
       warning: { fg: 'var(--pw-state-warning)', bg: 'var(--pw-state-warning-bg)' },
       error:   { fg: 'var(--pw-state-error)',   bg: 'var(--pw-state-error-bg)' },
-      muted:   { fg: 'var(--pw-text-tertiary)', bg: 'var(--pw-bg-hover)' }
+      muted:   { fg: 'var(--pw-text-tertiary)', bg: 'var(--pw-bg-hover)' },
+      info:    { fg: 'var(--pw-state-info)',    bg: 'var(--pw-state-info-bg)' }
     };
 
     function badgeHtml(text, color) {
@@ -385,7 +478,131 @@ html.dark {
       return '<span class="text-xs px-2 py-0.5 rounded-md whitespace-nowrap" style="color: ' + c.fg + '; background-color: ' + c.bg + ';">' + escapeHtml(text) + '</span>';
     }
 
-    // ---------- Render: sessions list ----------
+    // ---------- Toast notifications ----------
+    function showToast(kind, title, msg) {
+      var container = $('toast-container');
+      if (!container) return;
+      var el = document.createElement('div');
+      el.className = 'pw-toast pw-toast-' + (kind || 'info');
+      el.innerHTML =
+        '<div class="min-w-0 flex-1">'
+        + '<div class="pw-toast-title">' + escapeHtml(title || '') + '</div>'
+        + (msg ? '<div class="pw-toast-msg">' + escapeHtml(msg) + '</div>' : '')
+        + '</div>'
+        + '<span class="pw-toast-close" title="关闭">×</span>';
+      var closeBtn = el.querySelector('.pw-toast-close');
+      if (closeBtn) closeBtn.addEventListener('click', function () { dismissToast(el); });
+      container.appendChild(el);
+      setTimeout(function () { dismissToast(el); }, 8000);
+    }
+
+    function dismissToast(el) {
+      if (!el || el.classList.contains('pw-toast-leaving')) return;
+      el.classList.add('pw-toast-leaving');
+      setTimeout(function () {
+        if (el.parentNode) el.parentNode.removeChild(el);
+      }, 220);
+    }
+
+    // ---------- Clipboard + Safe Modal ----------
+    function copyToClipboard(text, label) {
+      if (!text) return;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () {
+          showToast('success', '已复制', (label || '内容') + '已复制到剪贴板');
+        }).catch(function () {
+          showToast('error', '复制失败', '请手动复制');
+        });
+      } else {
+        showToast('warning', '复制不支持', '浏览器不支持剪贴板 API');
+      }
+    }
+
+    function showSafeModal(title, data) {
+      var modal = $('safe-modal');
+      var titleEl = $('safe-modal-title');
+      var bodyEl = $('safe-modal-body');
+      if (!modal || !titleEl || !bodyEl) return;
+      titleEl.textContent = title || '—';
+      var content;
+      if (data && typeof data === 'object') {
+        content = JSON.stringify(data, null, 2);
+      } else {
+        content = String(data || '');
+      }
+      bodyEl.textContent = content;
+      modal.classList.remove('hidden');
+    }
+
+    function closeSafeModal() {
+      var modal = $('safe-modal');
+      if (modal) modal.classList.add('hidden');
+    }
+
+    // ---------- Control token + POST actions ----------
+    async function loadToken() {
+      try {
+        const res = await fetch('/control-token.json');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        controlToken = data.token || null;
+      } catch (err) {
+        controlToken = null;
+        console.error('loadToken failed:', err);
+      }
+    }
+
+    async function postAction(url) {
+      if (!controlToken) await loadToken();
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'X-PatchWarden-Control-Token': controlToken || '' }
+      });
+      let data = null;
+      try { data = await res.json(); } catch (_) { /* ignore */ }
+      if (!res.ok) {
+        const msg = (data && (data.error || data.reason || data.message)) || ('HTTP ' + res.status);
+        throw new Error(msg);
+      }
+      return data;
+    }
+
+    // ---------- Session classification ----------
+    function classifySession(s) {
+      var nowMs = Date.now();
+      var expiresMs = s.expires_at ? Date.parse(s.expires_at) : NaN;
+      var expired = Number.isFinite(expiresMs) && expiresMs < nowMs;
+      if (expired) return 'expired';
+      if (s.audited) return 'audited';
+      if (s.finalized) return 'finalized';
+      return 'active';
+    }
+
+    function verificationStatusText(vs) {
+      if (!vs || typeof vs !== 'object') return '—';
+      // verification_summary is the last run object: { command, exit_code, passed, timed_out, ... }
+      if (vs.passed === true) return 'passed';
+      if (vs.timed_out === true) return 'timed_out';
+      if (vs.passed === false) return 'failed';
+      if (vs.exit_code != null) return String(vs.exit_code);
+      return '—';
+    }
+
+    function verificationStatusColor(vs) {
+      if (!vs || typeof vs !== 'object') return 'muted';
+      if (vs.passed === true) return 'success';
+      if (vs.timed_out === true || vs.passed === false) return 'error';
+      return 'muted';
+    }
+
+    // ---------- Render: sessions list (grouped) ----------
+    var GROUP_LABELS = {
+      active:    { zh: '进行中',        en: 'Active',     color: 'info' },
+      finalized: { zh: '已 Finalize',   en: 'Finalized',  color: 'success' },
+      audited:   { zh: '已审计',        en: 'Audited',    color: 'success' },
+      expired:   { zh: '已过期',        en: 'Expired',    color: 'warning' }
+    };
+
     function renderSessions(sessions) {
       var listEl = $('sessions-list');
       listEl.innerHTML = '';
@@ -394,67 +611,290 @@ html.dark {
         return;
       }
 
-      var html = '';
+      var groups = { active: [], finalized: [], audited: [], expired: [] };
       for (var i = 0; i < sessions.length; i++) {
         var s = sessions[i] || {};
-        var sid = s.session_id || '—';
-        var finalized = !!s.finalized;
-        var audited = !!s.audited;
-        var changedTotal = s.changed_files_total != null ? s.changed_files_total : '—';
-        var decision = s.audit_decision || null;
-        var decisionBadge = decision ? badgeHtml(decision, verdictColor(decision)) : '<span class="text-xs px-2 py-0.5 rounded-md" style="color: var(--pw-text-tertiary); background-color: var(--pw-bg-hover);">not audited</span>';
-        var stateBadge = finalized
-          ? badgeHtml('finalized', 'success')
-          : badgeHtml('open', 'warning');
-
-        var titleText = s.title || s.repo_path || sid;
-
-        html +=
-          '<div class="rounded-lg p-4 cursor-pointer transition-colors session-card" data-session-id="' + escapeHtml(sid) + '" '
-          + 'onmouseover="this.style.backgroundColor=\'var(--pw-bg-hover)\'" '
-          + 'onmouseout="this.style.backgroundColor=\'var(--pw-bg-surface)\'" '
-          + 'style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">'
-          + '<div class="flex items-start justify-between gap-3 mb-3">'
-          + '<div class="min-w-0 flex-1">'
-          + '<div class="flex items-center gap-2 mb-1">'
-          + '<h3 class="text-sm font-semibold truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">' + escapeHtml(titleText) + '</h3>'
-          + '</div>'
-          + '<code class="text-xs break-all" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-mono);">' + escapeHtml(sid) + '</code>'
-          + '</div>'
-          + '<div class="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">'
-          + stateBadge + decisionBadge
-          + '</div>'
-          + '</div>'
-          + '<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">'
-          + '<div class="flex flex-col gap-0.5 min-w-0">'
-          + '<span class="text-xs" style="color: var(--pw-text-tertiary);">repo_path</span>'
-          + '<span class="truncate" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);">' + escapeHtml(s.repo_path || '—') + '</span>'
-          + '</div>'
-          + '<div class="flex flex-col gap-0.5 min-w-0">'
-          + '<span class="text-xs" style="color: var(--pw-text-tertiary);">changed_files_total</span>'
-          + '<span class="truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">' + escapeHtml(String(changedTotal)) + '</span>'
-          + '</div>'
-          + '<div class="flex flex-col gap-0.5 min-w-0">'
-          + '<span class="text-xs" style="color: var(--pw-text-tertiary);">created_at</span>'
-          + '<span class="truncate" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);">' + escapeHtml(fmtTimeShort(s.created_at)) + '</span>'
-          + '</div>'
-          + '<div class="flex flex-col gap-0.5 min-w-0">'
-          + '<span class="text-xs" style="color: var(--pw-text-tertiary);">expires_at</span>'
-          + '<span class="truncate" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);">' + escapeHtml(fmtTimeShort(s.expires_at)) + '</span>'
-          + '</div>'
-          + '</div>'
-          + '</div>';
+        var cls = classifySession(s);
+        groups[cls].push(s);
       }
+
+      var html = '';
+      // Active section (expanded)
+      if (groups.active.length > 0) {
+        html += renderGroupHeader('active', groups.active.length, false);
+        html += renderSessionCards(groups.active, false);
+      }
+      // Finalized section (expanded)
+      if (groups.finalized.length > 0) {
+        html += renderGroupHeader('finalized', groups.finalized.length, false);
+        html += renderSessionCards(groups.finalized, false);
+      }
+      // Audited section (expanded)
+      if (groups.audited.length > 0) {
+        html += renderGroupHeader('audited', groups.audited.length, false);
+        html += renderSessionCards(groups.audited, false);
+      }
+      // Expired section (collapsed via <details>)
+      if (groups.expired.length > 0) {
+        html += renderExpiredGroup(groups.expired);
+      }
+
       listEl.innerHTML = html;
       showList();
+      wireActionButtons();
+      wireSessionCards();
+    }
 
-      var cards = listEl.querySelectorAll('.session-card');
+    function renderGroupHeader(key, count, isExpired) {
+      var meta = GROUP_LABELS[key] || GROUP_LABELS.active;
+      var c = COLOR_VARS[meta.color] || COLOR_VARS.muted;
+      return '<div class="flex items-center gap-2 mt-2 mb-1 px-1">'
+        + '<span class="w-2 h-2 rounded-full" style="background-color: ' + c.fg + ';"></span>'
+        + '<h2 class="text-sm font-semibold" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">' + escapeHtml(meta.zh) + '</h2>'
+        + '<span class="text-xs" style="color: var(--pw-text-tertiary);">(' + count + ')</span>'
+        + '</div>';
+    }
+
+    function renderExpiredGroup(sessions) {
+      var meta = GROUP_LABELS.expired;
+      var c = COLOR_VARS[meta.color] || COLOR_VARS.muted;
+      var headerHtml =
+        '<summary class="flex items-center gap-2 cursor-pointer px-3 py-2" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans;">'
+        + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0"><polyline points="6 9 12 15 18 9"/></svg>'
+        + '<span class="w-2 h-2 rounded-full" style="background-color: ' + c.fg + ';"></span>'
+        + '<span class="text-sm font-semibold">' + escapeHtml(meta.zh) + '</span>'
+        + '<span class="text-xs" style="color: var(--pw-text-tertiary);">(' + sessions.length + ')</span>'
+        + '<span class="ml-auto text-xs" style="color: var(--pw-text-tertiary);">点击展开 / 折叠</span>'
+        + '</summary>';
+      return '<details class="rounded-lg mt-2" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">'
+        + headerHtml
+        + '<div class="px-3 pb-3 pt-1 flex flex-col gap-3">'
+        + renderSessionCards(sessions, true)
+        + '</div>'
+        + '</details>';
+    }
+
+    function renderSessionCards(sessions, isExpired) {
+      var html = '';
+      for (var i = 0; i < sessions.length; i++) {
+        html += renderSessionCard(sessions[i] || {}, isExpired);
+      }
+      return html;
+    }
+
+    function renderSessionCard(s, isExpired) {
+      var sid = s.session_id || '—';
+      var finalized = !!s.finalized;
+      var audited = !!s.audited;
+      var changedTotal = s.changed_files_total != null ? s.changed_files_total : '—';
+      var decision = s.audit_decision || null;
+      var decisionBadge = decision
+        ? badgeHtml(decision, verdictColor(decision))
+        : '<span class="text-xs px-2 py-0.5 rounded-md" style="color: var(--pw-text-tertiary); background-color: var(--pw-bg-hover);">not audited</span>';
+      var stateBadge = finalized
+        ? badgeHtml('finalized', 'success')
+        : (isExpired ? badgeHtml('expired', 'warning') : badgeHtml('open', 'warning'));
+      var auditedBadge = audited ? badgeHtml('audited', 'success') : '';
+      var titleText = s.title || s.repo_path || sid;
+
+      // Verification status summary
+      var vs = s.verification_summary || null;
+      var vsText = verificationStatusText(vs);
+      var vsColor = verificationStatusColor(vs);
+      var vsBadge = badgeHtml(vsText, vsColor);
+
+      // Quick action buttons
+      var actions = '';
+      // safe_direct_summary
+      actions += quickBtnHtml('summary', 'safe_direct_summary', sid, '查看安全摘要', false, false);
+      // run_direct_verification_bundle — informational button (links to tasks page)
+      actions += quickBtnHtml('verify-bundle', 'verify', sid, 'run_direct_verification_bundle：通过任务页创建验证任务（该操作需在任务页发起）', false, false);
+      // safe_finalize_direct_session (disabled if already finalized)
+      actions += quickBtnHtml('finalize', 'safe_finalize_direct_session', sid, 'Finalize 会话', finalized, true);
+      // safe_audit_direct_session (disabled if already audited)
+      actions += quickBtnHtml('audit', 'safe_audit_direct_session', sid, '审计会话', audited, true);
+      // copy session_id
+      actions += quickBtnHtml('copy', 'copy session_id', sid, '复制 session_id', false, false);
+      // hide (expired only)
+      if (isExpired) {
+        actions += quickBtnHtml('hide', 'hide', sid, '从列表隐藏', false, false, true);
+      }
+
+      return '<div class="rounded-lg p-4 transition-colors session-card" data-session-id="' + escapeHtml(sid) + '" '
+        + 'onmouseover="this.style.backgroundColor=\'var(--pw-bg-hover)\'" '
+        + 'onmouseout="this.style.backgroundColor=\'var(--pw-bg-surface)\'" '
+        + 'style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border); cursor: pointer;">'
+        + '<div class="flex items-start justify-between gap-3 mb-3">'
+        + '<div class="min-w-0 flex-1">'
+        + '<div class="flex items-center gap-2 mb-1">'
+        + '<h3 class="text-sm font-semibold truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">' + escapeHtml(titleText) + '</h3>'
+        + '</div>'
+        + '<div class="flex items-center gap-2 min-w-0">'
+        + '<code class="text-xs truncate" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-mono);" title="' + escapeHtml(sid) + '">' + escapeHtml(shortId(sid)) + '</code>'
+        + '</div>'
+        + '</div>'
+        + '<div class="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">'
+        + stateBadge + auditedBadge + decisionBadge
+        + '</div>'
+        + '</div>'
+        + '<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs mb-3">'
+        + '<div class="flex flex-col gap-0.5 min-w-0">'
+        + '<span class="text-xs" style="color: var(--pw-text-tertiary);">repo_path</span>'
+        + '<span class="truncate" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);" title="' + escapeHtml(s.repo_path || '') + '">' + escapeHtml(s.repo_path || '—') + '</span>'
+        + '</div>'
+        + '<div class="flex flex-col gap-0.5 min-w-0">'
+        + '<span class="text-xs" style="color: var(--pw-text-tertiary);">changed_files_total</span>'
+        + '<span class="truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">' + escapeHtml(String(changedTotal)) + '</span>'
+        + '</div>'
+        + '<div class="flex flex-col gap-0.5 min-w-0">'
+        + '<span class="text-xs" style="color: var(--pw-text-tertiary);">created_at</span>'
+        + '<span class="truncate" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);">' + escapeHtml(fmtTimeShort(s.created_at)) + '</span>'
+        + '</div>'
+        + '<div class="flex flex-col gap-0.5 min-w-0">'
+        + '<span class="text-xs" style="color: var(--pw-text-tertiary);">expires_at</span>'
+        + '<span class="truncate" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);">' + escapeHtml(fmtTimeShort(s.expires_at)) + '</span>'
+        + '</div>'
+        + '</div>'
+        + '<div class="flex items-center gap-2 mb-3 text-xs">'
+        + '<span class="text-xs" style="color: var(--pw-text-tertiary);">verification:</span>'
+        + vsBadge
+        + '</div>'
+        + '<div class="flex items-center gap-1.5 flex-wrap" onclick="event.stopPropagation();">'
+        + actions
+        + '</div>'
+        + '</div>';
+    }
+
+    function quickBtnHtml(action, label, sid, title, disabled, accent, danger) {
+      var cls = 'pw-quick-btn';
+      if (accent) cls += ' pw-quick-accent';
+      if (danger) cls += ' pw-quick-danger';
+      var disAttr = disabled ? ' disabled' : '';
+      return '<button type="button" class="' + cls + '" data-action="' + escapeHtml(action) + '" data-session-id="' + escapeHtml(sid) + '" title="' + escapeHtml(title + ' (' + label + ')') + '"' + disAttr + '>'
+        + escapeHtml(label)
+        + '</button>';
+    }
+
+    // ---------- Action button wiring ----------
+    function wireActionButtons() {
+      var btns = document.querySelectorAll('#sessions-list .pw-quick-btn[data-action]');
+      for (var i = 0; i < btns.length; i++) {
+        var btn = btns[i];
+        // Avoid double-binding on re-render.
+        if (btn.__pwBound) continue;
+        btn.__pwBound = true;
+        btn.addEventListener('click', function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          handleActionClick(ev.currentTarget);
+        });
+      }
+    }
+
+    function wireSessionCards() {
+      var cards = $('sessions-list').querySelectorAll('.session-card');
       for (var j = 0; j < cards.length; j++) {
-        cards[j].addEventListener('click', function (ev) {
+        var card = cards[j];
+        if (card.__pwBound) continue;
+        card.__pwBound = true;
+        card.addEventListener('click', function (ev) {
+          // Ignore clicks that originated on a button/details summary.
+          if (ev.target.closest('.pw-quick-btn') || ev.target.closest('summary')) return;
           var sid2 = ev.currentTarget.getAttribute('data-session-id');
           if (sid2) loadSessionDetail(sid2);
         });
       }
+    }
+
+    function handleActionClick(btn) {
+      var action = btn.getAttribute('data-action');
+      var sid = btn.getAttribute('data-session-id');
+      if (!action || !sid) return;
+      if (action === 'summary') {
+        loadSafeSummary(sid);
+      } else if (action === 'finalize') {
+        finalizeSession(sid, btn);
+      } else if (action === 'audit') {
+        auditSession(sid, btn);
+      } else if (action === 'copy') {
+        copyToClipboard(sid, 'session_id');
+      } else if (action === 'hide') {
+        hideSession(sid, btn);
+      } else if (action === 'verify-bundle') {
+        // Informational: navigate to tasks page where verification tasks are created.
+        showToast('info', '跳转任务页', 'run_direct_verification_bundle 需在任务页发起');
+        setTimeout(function () { window.location.href = '/pages/tasks.html'; }, 600);
+      }
+    }
+
+    function loadSafeSummary(sessionId) {
+      var url = '/api/direct-sessions/' + encodeURIComponent(sessionId) + '/summary';
+      fetch(url, { method: 'GET', headers: { 'Accept': 'application/json' }, cache: 'no-store' })
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+          showSafeModal('safe_direct_summary · ' + shortId(sessionId), data);
+        })
+        .catch(function (err) {
+          showToast('error', '加载失败', err.message || '未知错误');
+        });
+    }
+
+    function withBusy(btn, fn) {
+      var orig = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="inline-block w-3 h-3 align-middle border-2 border-current border-t-transparent rounded-full pw-spin"></span>';
+      Promise.resolve()
+        .then(fn)
+        .catch(function (err) {
+          showToast('error', '操作失败', err.message || '未知错误');
+        })
+        .finally(function () {
+          btn.disabled = false;
+          btn.innerHTML = orig;
+        });
+    }
+
+    function finalizeSession(sessionId, btn) {
+      withBusy(btn, function () {
+        return postAction('/api/direct-sessions/' + encodeURIComponent(sessionId) + '/finalize')
+          .then(function (data) {
+            if (data && data.error) {
+              showToast('error', 'Finalize 失败', data.error);
+              return;
+            }
+            showToast('success', '已 Finalize', '会话 ' + shortId(sessionId) + ' 已完成 finalize');
+            loadSessions();
+          });
+      });
+    }
+
+    function auditSession(sessionId, btn) {
+      withBusy(btn, function () {
+        return postAction('/api/direct-sessions/' + encodeURIComponent(sessionId) + '/audit')
+          .then(function (data) {
+            if (data && data.error) {
+              showToast('error', '审计失败', data.error);
+              return;
+            }
+            var decision = (data && data.decision) || '完成';
+            showToast('success', '审计完成', '会话 ' + shortId(sessionId) + ' 审计结果: ' + decision);
+            loadSessions();
+          });
+      });
+    }
+
+    function hideSession(sessionId, btn) {
+      withBusy(btn, function () {
+        return postAction('/api/direct-sessions/' + encodeURIComponent(sessionId) + '/hide')
+          .then(function (data) {
+            if (data && data.error) {
+              showToast('error', '隐藏失败', data.error);
+              return;
+            }
+            showToast('success', '已隐藏', '会话 ' + shortId(sessionId) + ' 已从列表隐藏');
+            loadSessions();
+          });
+      });
     }
 
     // ---------- Render: session detail ----------
@@ -473,7 +913,7 @@ html.dark {
       var vs = s.verification_summary || null;
       var vsHtml = '—';
       if (vs && typeof vs === 'object') {
-        var vsStatus = vs.status || vs.verdict || '—';
+        var vsStatus = vs.status || vs.verdict || verificationStatusText(vs) || '—';
         var vsCmds = Array.isArray(vs.commands) ? vs.commands.map(function (c) { return JSON.stringify(c); }).join(' ') : '';
         vsHtml = '<span style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">' + escapeHtml(String(vsStatus)) + '</span>'
           + (vsCmds ? '<div class="mt-1 text-xs break-all" style="color: var(--pw-text-tertiary);">' + escapeHtml(vsCmds) + '</div>' : '');
@@ -643,6 +1083,18 @@ html.dark {
     if (refreshBtn) refreshBtn.addEventListener('click', loadSessions);
     var retryBtn = $('retry-btn');
     if (retryBtn) retryBtn.addEventListener('click', loadSessions);
+
+    var modalClose = $('safe-modal-close');
+    if (modalClose) modalClose.addEventListener('click', closeSafeModal);
+    // Click on modal backdrop closes it.
+    var safeModal = $('safe-modal');
+    if (safeModal) safeModal.addEventListener('click', function (ev) {
+      if (ev.target === safeModal) closeSafeModal();
+    });
+    // ESC closes modal.
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape') closeSafeModal();
+    });
 
     // Initial load
     loadSessions();

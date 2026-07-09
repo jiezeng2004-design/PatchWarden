@@ -255,6 +255,12 @@ html.dark {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
           <span>Refresh</span>
         </button>
+        <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border); font-family: var(--pw-font-sans);">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--pw-text-tertiary);"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2z"/></svg>
+          <select id="repo-selector" class="bg-transparent text-sm outline-none cursor-pointer" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans); min-width: 180px;">
+            <option value=".">workspace root</option>
+          </select>
+        </div>
         <div class="flex-1 min-w-0"></div>
         <button data-action="open-core-tunnel" class="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap" style="background-color: transparent; color: var(--pw-accent); border: 1px solid var(--pw-accent); font-family: var(--pw-font-sans);">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
@@ -272,6 +278,17 @@ html.dark {
 
       <!-- ===== ERROR BANNER ===== -->
       <div id="error-banner" class="hidden mb-4 rounded-lg px-4 py-3 text-sm" style="background-color: var(--pw-state-error-bg); border: 1px solid var(--pw-state-error); color: var(--pw-state-error); font-family: var(--pw-font-sans);"></div>
+
+      <!-- ===== HEALTH SCORE CARD ===== -->
+      <div id="health-score-card" class="rounded-lg mb-4" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
+        <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
+          <h2 class="text-sm font-semibold truncate" data-zh="健康评分" data-en="Health Score" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">健康评分</h2>
+          <span id="health-score-badge" class="text-xs font-semibold px-2.5 py-1 rounded-full whitespace-nowrap" style="color: var(--pw-text-tertiary); background-color: var(--pw-bg-hover);">—</span>
+        </div>
+        <div id="health-score-body" class="px-4 py-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2">
+          <div class="text-xs" style="color: var(--pw-text-tertiary);">loading…</div>
+        </div>
+      </div>
 
       <!-- ===== SETUP CHECKLIST ===== -->
       <div id="setup-checklist-card" class="rounded-lg mb-4" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
@@ -336,6 +353,15 @@ html.dark {
         </div>
       </div>
 
+      <!-- ===== STALE TASKS CARD ===== -->
+      <div id="stale-tasks-card" class="hidden rounded-lg mb-6" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border); border-left: 3px solid var(--pw-state-warning);">
+        <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
+          <h2 class="text-sm font-semibold truncate" data-zh="Stale 任务" data-en="Stale Tasks" style="color: var(--pw-text-primary);">Stale 任务</h2>
+          <span id="stale-tasks-count" class="text-xs whitespace-nowrap" style="color: var(--pw-text-tertiary);">—</span>
+        </div>
+        <div id="stale-tasks-body" class="px-4 py-3 text-sm" style="color: var(--pw-text-tertiary);">Loading</div>
+      </div>
+
       <!-- ===== TWO-COLUMN LAYOUT ===== -->
       <div class="grid grid-cols-1 lg:grid-cols-5 gap-4 mb-6">
 
@@ -352,8 +378,12 @@ html.dark {
 
         <!-- RIGHT COLUMN: 系统状态 (2/5 width) -->
         <div class="lg:col-span-2 rounded-lg" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
-          <div class="px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
+          <div class="flex items-center justify-between gap-2 px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
             <h2 class="text-sm font-semibold truncate" data-zh="系统状态" data-en="System Status" style="color: var(--pw-text-primary);">系统状态</h2>
+            <button id="btn-copy-diagnostics" class="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors whitespace-nowrap" style="background-color: var(--pw-bg-hover); color: var(--pw-text-secondary); border: 1px solid var(--pw-border-subtle); font-family: var(--pw-font-sans);" type="button" title="Copy diagnostics to clipboard">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              <span data-zh="复制诊断" data-en="Copy diagnostics">复制诊断</span>
+            </button>
           </div>
           <div id="system-status-body" class="px-4 py-2">
             <div class="py-3 text-center text-sm" style="color: var(--pw-text-tertiary);">加载中…</div>
@@ -381,6 +411,17 @@ html.dark {
         </div>
         <div id="events-body" class="px-4 py-2">
           <div class="py-3 text-center text-sm" style="color: var(--pw-text-tertiary);">加载中…</div>
+        </div>
+      </div>
+
+      <!-- ===== SAFE MODAL ===== -->
+      <div id="safe-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" style="background-color: rgba(0,0,0,0.6);">
+        <div class="rounded-lg w-full max-w-2xl max-h-[80vh] flex flex-col" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border); box-shadow: var(--pw-shadow-modal);">
+          <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
+            <h3 id="safe-modal-title" class="text-sm font-semibold truncate" style="color: var(--pw-text-primary);">—</h3>
+            <button id="safe-modal-close" class="text-lg leading-none" style="color: var(--pw-text-tertiary);" type="button">×</button>
+          </div>
+          <div id="safe-modal-body" class="flex-1 overflow-auto px-4 py-3 text-xs" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono); white-space: pre-wrap; word-break: break-all;"></div>
         </div>
       </div>
 
@@ -477,6 +518,44 @@ html.dark {
     @keyframes pw-toast-out {
       to { opacity: 0; transform: translateX(20px); }
     }
+    /* Quick action icon buttons */
+    .pw-quick-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      border-radius: 4px;
+      border: 1px solid var(--pw-border-subtle);
+      background-color: var(--pw-bg-hover);
+      color: var(--pw-text-secondary);
+      cursor: pointer;
+      transition: background-color var(--pw-transition-fast), color var(--pw-transition-fast);
+      text-decoration: none;
+    }
+    .pw-quick-btn:hover {
+      background-color: var(--pw-bg-active);
+      color: var(--pw-text-primary);
+      opacity: 1;
+    }
+    /* Acceptance status badge - more prominent than status */
+    .pw-acceptance-badge {
+      font-size: var(--pw-text-sm);
+      font-weight: var(--pw-weight-bold);
+      padding: 2px 8px;
+      border-width: 1px;
+      border-style: solid;
+    }
+    /* Stale task explanation - prominent */
+    .pw-stale-explanation {
+      font-size: var(--pw-text-sm);
+      font-weight: var(--pw-weight-medium);
+      color: var(--pw-text-primary);
+      padding: 6px 10px;
+      border-radius: var(--pw-radius-sm);
+      background-color: var(--pw-state-warning-bg);
+      border-left: 2px solid var(--pw-state-warning);
+    }
   </style>
 
   <script>
@@ -485,6 +564,7 @@ html.dark {
 
     let controlToken = null;
     let statusTimer = null;
+    let currentRepoPath = ".";
 
     // ---------- Utilities ----------
     function $(id) { return document.getElementById(id); }
@@ -878,6 +958,155 @@ html.dark {
       }
     }
 
+    // ---------- Clipboard + Safe Modal ----------
+    function copyToClipboard(text, label) {
+      if (!text) return;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () {
+          showToast('success', '已复制', (label || '内容') + '已复制到剪贴板');
+        }).catch(function () {
+          showToast('error', '复制失败', '请手动复制');
+        });
+      } else {
+        showToast('warning', '复制不支持', '浏览器不支持剪贴板 API');
+      }
+    }
+
+    // Format diagnostics response as plain text for clipboard.
+    function formatDiagnosticsText(d) {
+      if (!d || typeof d !== 'object') return '';
+      const lines = [];
+      lines.push('PatchWarden Diagnostics');
+      lines.push('======================');
+      lines.push('server_version: ' + (d.server_version != null ? d.server_version : '—'));
+      lines.push('schema_epoch: ' + (d.schema_epoch != null ? d.schema_epoch : '—'));
+      lines.push('tool_manifest_sha256: ' + (d.tool_manifest_sha256 != null ? d.tool_manifest_sha256 : '—'));
+      lines.push('watcher_status: ' + (d.watcher_status != null ? d.watcher_status : '—'));
+      lines.push('tunnel_core_ready: ' + (d.tunnel_core_ready === true ? 'true' : 'false'));
+      lines.push('tunnel_direct_ready: ' + (d.tunnel_direct_ready === true ? 'true' : 'false'));
+      lines.push('core_tool_count: ' + (d.core_tool_count != null ? d.core_tool_count : '—'));
+      lines.push('direct_tool_count: ' + (d.direct_tool_count != null ? d.direct_tool_count : '—'));
+      lines.push('direct_profile_enabled: ' + (d.direct_profile_enabled === true ? 'true' : 'false'));
+      lines.push('workspace_root: ' + (d.workspace_root != null ? d.workspace_root : '—'));
+      lines.push('');
+      const agents = Array.isArray(d.agent_status) ? d.agent_status : [];
+      lines.push('Agents:');
+      if (agents.length === 0) {
+        lines.push('  (none)');
+      } else {
+        agents.forEach(function (a) {
+          lines.push('  - ' + (a.name || '?') + ': ' + (a.available ? 'available' : 'unavailable'));
+        });
+      }
+      lines.push('');
+      const failures = Array.isArray(d.recent_failures) ? d.recent_failures : [];
+      lines.push('Recent failures:');
+      if (failures.length === 0) {
+        lines.push('  (none)');
+      } else {
+        failures.forEach(function (f) {
+          lines.push('  - task_id: ' + (f.task_id || '?') + ', status: ' + (f.status || '?'));
+        });
+      }
+      return lines.join('\n');
+    }
+
+    async function copyDiagnostics(btnEl) {
+      const orig = btnEl ? btnEl.innerHTML : null;
+      if (btnEl) {
+        btnEl.disabled = true;
+        btnEl.innerHTML =
+          '<span class="inline-block w-3 h-3 align-middle border-2 border-current border-t-transparent rounded-full pw-spin"></span>'
+          + '<span class="ml-1.5">处理中…</span>';
+      }
+      try {
+        const data = await fetchJson('/api/diagnostics');
+        const text = formatDiagnosticsText(data);
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(text);
+          showToast('success', '诊断信息已复制到剪贴板', 'PatchWarden Diagnostics 已复制到剪贴板');
+        } else {
+          showToast('warning', '复制不支持', '浏览器不支持剪贴板 API');
+        }
+      } catch (err) {
+        showToast('error', '诊断复制失败', err.message);
+      } finally {
+        if (btnEl) {
+          btnEl.disabled = false;
+          btnEl.innerHTML = orig;
+        }
+      }
+    }
+
+    function showSafeModal(title, data) {
+      const modal = $('safe-modal');
+      const titleEl = $('safe-modal-title');
+      const bodyEl = $('safe-modal-body');
+      if (!modal || !titleEl || !bodyEl) return;
+      titleEl.textContent = title || '—';
+      let content;
+      if (data && typeof data === 'object') {
+        content = JSON.stringify(data, null, 2);
+      } else {
+        content = String(data || '');
+      }
+      bodyEl.textContent = content;
+      modal.classList.remove('hidden');
+    }
+
+    function closeSafeModal() {
+      const modal = $('safe-modal');
+      if (modal) modal.classList.add('hidden');
+    }
+
+    async function fetchSafeSummary(taskId, kind, title) {
+      if (!taskId) return;
+      try {
+        const data = await fetchJson('/api/tasks/' + encodeURIComponent(taskId) + '/' + kind);
+        showSafeModal(title, data);
+      } catch (err) {
+        showError('加载 ' + title + ' 失败: ' + err.message);
+      }
+    }
+
+    // ---------- Task status priority ----------
+    function primaryStatus(task) {
+      if (!task) return { key: '', label: '—', kind: 'neutral' };
+      const priority = [
+        'failed_policy_violation',
+        'failed_scope_violation',
+        'failed_verification',
+        'needs_fix',
+        'ready_for_review',
+        'done_by_agent',
+        'running',
+        'pending'
+      ];
+      const status = task.status || '';
+      const acceptance = task.acceptance_status || '';
+      const statusIdx = priority.indexOf(status);
+      const acceptanceIdx = priority.indexOf(acceptance);
+      let chosen = '';
+      if (statusIdx >= 0 && acceptanceIdx >= 0) {
+        chosen = statusIdx <= acceptanceIdx ? status : acceptance;
+      } else if (statusIdx >= 0) {
+        chosen = status;
+      } else if (acceptanceIdx >= 0) {
+        chosen = acceptance;
+      } else {
+        chosen = acceptance || status || '';
+      }
+      return { key: chosen, label: chosen || '—', kind: statusKind(chosen || status) };
+    }
+
+    function verificationHeadline(t) {
+      if (!t) return '—';
+      if (t.verification && t.verification.headline) return t.verification.headline;
+      if (t.safe_result && t.safe_result.verification && t.safe_result.verification.headline) return t.safe_result.verification.headline;
+      if (t.verification_headline) return t.verification_headline;
+      return '—';
+    }
+
     // ---------- Render: Service Card ----------
     function renderServiceCard(prefix, label, status) {
       const cardEl = $('card-' + prefix);
@@ -1000,21 +1229,77 @@ html.dark {
         bodyEl.innerHTML = '<div class="px-4 py-6 text-center text-sm" style="color: var(--pw-text-tertiary);">暂无任务</div>';
         return;
       }
+      const titleMap = {
+        'safe-result': 'Safe Result',
+        'safe-audit': 'Safe Audit',
+        'safe-test-summary': 'Safe Test Summary',
+        'safe-diff-summary': 'Safe Diff Summary'
+      };
       let html = '';
       top.forEach(function (t) {
-        const kind = statusKind(t.status);
-        const c = statusColors(kind);
-        const href = '/pages/task-detail.html?id=' + encodeURIComponent(t.task_id || '');
+        const taskId = t.task_id || '';
+        const href = '/pages/task-detail.html?id=' + encodeURIComponent(taskId);
+        const sKind = statusKind(t.status);
+        const sColor = statusColors(sKind);
+        const aKind = statusKind(t.acceptance_status);
+        const aColor = statusColors(aKind);
+        // Skip status badge when redundant with acceptance (done + done_by_agent)
+        const skipStatusBadge = (t.status === 'done' && t.acceptance_status === 'done_by_agent');
+        const headline = verificationHeadline(t);
+        const updated = t.updated_at || t.created_at || '';
+
         html +=
-          '<a href="' + href + '" data-task-row class="flex items-center gap-3 px-4 py-3 transition-colors cursor-pointer" style="border-bottom: 1px solid var(--pw-border-subtle);">'
-          + '<span class="shrink-0 text-xs font-medium px-2 py-0.5 rounded whitespace-nowrap" style="color: var(--pw-text-secondary); background-color: var(--pw-bg-hover); font-family: var(--pw-font-mono);" title="' + escapeHtml(t.task_id || '') + '">' + escapeHtml(shortId(t.task_id)) + '</span>'
-          + '<span class="flex-1 min-w-0 text-sm truncate" style="color: var(--pw-text-primary);" title="' + escapeHtml(t.title || '') + '">' + escapeHtml(t.title || '—') + '</span>'
-          + '<span class="shrink-0 text-xs whitespace-nowrap" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-mono);" title="phase">' + escapeHtml(t.phase || '—') + '</span>'
-          + '<span class="shrink-0 text-xs font-medium px-2 py-0.5 rounded-full whitespace-nowrap" style="color: ' + c.color + '; background-color: ' + c.bg + ';">' + escapeHtml(t.status || '—') + '</span>'
-          + '<span class="shrink-0 text-xs whitespace-nowrap" style="color: var(--pw-text-tertiary);">' + escapeHtml(fmtTime(t.created_at)) + '</span>'
-          + '</a>';
+          '<div data-task-row class="px-4 py-3 transition-colors" style="border-bottom: 1px solid var(--pw-border-subtle);">'
+          + '<div class="flex items-center gap-2 flex-wrap">'
+          // short task_id + copy button
+          + '<span class="shrink-0 text-xs font-medium px-2 py-0.5 rounded whitespace-nowrap" style="color: var(--pw-text-secondary); background-color: var(--pw-bg-hover); font-family: var(--pw-font-mono);" title="' + escapeHtml(taskId) + '">' + escapeHtml(shortId(taskId)) + '</span>'
+          + '<button class="pw-quick-btn" data-copy-id="' + escapeHtml(taskId) + '" title="复制 task_id" type="button">'
+          + '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'
+          + '</button>'
+          // title (truncated, link to detail)
+          + '<a href="' + href + '" class="flex-1 min-w-0 text-sm truncate hover:underline" style="color: var(--pw-text-primary);" title="' + escapeHtml(t.title || '') + '">' + escapeHtml(t.title || '—') + '</a>'
+          // agent badge
+          + (t.agent ? badgeHtml(t.agent, 'info') : '')
+          // status badge (skip if redundant)
+          + (skipStatusBadge ? '' : '<span class="shrink-0 text-xs font-medium px-2 py-0.5 rounded-full whitespace-nowrap" style="color: ' + sColor.color + '; background-color: ' + sColor.bg + ';">' + escapeHtml(t.status || '—') + '</span>')
+          // acceptance badge (more prominent)
+          + (t.acceptance_status ? '<span class="shrink-0 pw-acceptance-badge rounded-full whitespace-nowrap" style="color: ' + aColor.color + '; background-color: ' + aColor.bg + '; border-color: ' + aColor.color + ';">' + escapeHtml(t.acceptance_status) + '</span>' : '')
+          + '</div>'
+          // second line: repo_path, verification headline, updated_at, next_action
+          + '<div class="flex items-center gap-3 mt-1.5 flex-wrap">'
+          + '<span class="text-xs truncate" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-mono); max-width: 200px;" title="' + escapeHtml(t.repo_path || '') + '">' + escapeHtml(t.repo_path || '—') + '</span>'
+          + '<span class="text-xs truncate" style="color: var(--pw-text-secondary); max-width: 280px;" title="' + escapeHtml(headline) + '">verify: ' + escapeHtml(headline) + '</span>'
+          + '<span class="text-xs whitespace-nowrap" style="color: var(--pw-text-tertiary);">' + escapeHtml(fmtTime(updated)) + '</span>'
+          + (t.next_action ? '<span class="text-xs truncate" style="color: var(--pw-text-tertiary); max-width: 200px;" title="' + escapeHtml(t.next_action) + '">next: ' + escapeHtml(t.next_action) + '</span>' : '')
+          + '</div>'
+          // quick action buttons
+          + '<div class="flex items-center gap-1 mt-1.5">'
+          + '<button class="pw-quick-btn" data-safe-action="safe-result" data-task-id="' + escapeHtml(taskId) + '" title="safe result" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></button>'
+          + '<button class="pw-quick-btn" data-safe-action="safe-audit" data-task-id="' + escapeHtml(taskId) + '" title="safe audit" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></button>'
+          + '<button class="pw-quick-btn" data-safe-action="safe-test-summary" data-task-id="' + escapeHtml(taskId) + '" title="safe test summary" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></button>'
+          + '<button class="pw-quick-btn" data-safe-action="safe-diff-summary" data-task-id="' + escapeHtml(taskId) + '" title="safe diff summary" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg></button>'
+          + '<a href="' + href + '" class="pw-quick-btn" title="打开详情"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></a>'
+          + '</div>'
+          + '</div>';
       });
       bodyEl.innerHTML = html;
+      // Wire quick action buttons
+      bodyEl.querySelectorAll('[data-safe-action]').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          const action = btn.getAttribute('data-safe-action');
+          const tid = btn.getAttribute('data-task-id');
+          fetchSafeSummary(tid, action, titleMap[action] || action);
+        });
+      });
+      bodyEl.querySelectorAll('[data-copy-id]').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          copyToClipboard(btn.getAttribute('data-copy-id'), 'task_id');
+        });
+      });
     }
 
     // ---------- Render: Activity Log ----------
@@ -1069,28 +1354,285 @@ html.dark {
         const lineages = Array.isArray(data.lineages) ? data.lineages : [];
         if (count) count.textContent = String(data.total || lineages.length);
         if (!lineages.length) {
-          body.innerHTML = '<div class="text-xs" style="color: var(--pw-text-tertiary);">No loop lineage yet</div>';
+          body.innerHTML =
+            '<div class="text-xs mb-2" style="color: var(--pw-text-tertiary);">No loop lineage yet</div>'
+            + '<div class="flex items-center gap-2">'
+            + '<a href="/tasks.html" class="text-xs px-2.5 py-1 rounded whitespace-nowrap" style="background-color: var(--pw-accent-muted); color: var(--pw-accent); border: 1px solid var(--pw-accent);">Start guarded loop</a>'
+            + '<a href="/tasks.html" class="text-xs px-2.5 py-1 rounded whitespace-nowrap" style="background-color: var(--pw-bg-hover); color: var(--pw-text-secondary); border: 1px solid var(--pw-border-subtle);">View recent loop runs</a>'
+            + '</div>';
           return;
         }
         const top = lineages[0];
-        const directSessions = top.tasks && Array.isArray(top.tasks.direct_sessions) ? top.tasks.direct_sessions : [];
-        const direct = directSessions.length ? directSessions[0] : null;
-        const worktree = top.worktree || {};
-        const directStatus = direct
-          ? ((direct.status || 'unknown') + ' / audit ' + (direct.audit_decision || 'not_run'))
+        const dv = top.direct_verification || null;
+        const directStatus = dv
+          ? (escapeHtml(dv.status || 'unknown') + ' / audit ' + escapeHtml(dv.audit_decision || 'not_run'))
           : 'not run';
+        const mainCount = top.main_task_count != null ? top.main_task_count : (top.tasks && top.tasks.main ? 1 : 0);
+        const fixCount = top.fix_task_count != null ? top.fix_task_count : (top.tasks && Array.isArray(top.tasks.fix) ? top.tasks.fix.length : 0);
+        const cleanupCount = top.cleanup_task_count != null ? top.cleanup_task_count : (top.tasks && Array.isArray(top.tasks.cleanup) ? top.tasks.cleanup.length : 0);
+        const iterCount = top.iterations != null ? top.iterations : (Array.isArray(top.rounds) ? top.rounds.length : 0);
+        const warnCount = top.warnings_count != null ? top.warnings_count : (Array.isArray(top.warnings) ? top.warnings.length : 0);
         body.innerHTML =
           '<div class="flex items-center justify-between gap-2 mb-2">'
           + '<span class="text-xs truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);" title="' + escapeHtml(top.lineage_id || '') + '">' + escapeHtml(shortId(top.lineage_id)) + '</span>'
-          + badgeHtml(top.stop_reason || 'unknown', statusKind(top.final_status))
+          + badgeHtml(top.final_status || 'unknown', statusKind(top.final_status))
           + '</div>'
           + '<div class="text-xs truncate mb-1" style="color: var(--pw-text-secondary);" title="' + escapeHtml(top.goal || '') + '">' + escapeHtml(top.goal || 'No goal') + '</div>'
-          + '<div class="text-xs truncate mb-1" style="color: var(--pw-text-tertiary);">Isolation: ' + escapeHtml(worktree.isolation_mode || 'current_repo') + '</div>'
-          + '<div class="text-xs truncate mb-1" style="color: var(--pw-text-tertiary);" title="' + escapeHtml(direct && direct.session_id ? direct.session_id : '') + '">Direct: ' + escapeHtml(directStatus) + '</div>'
-          + '<div class="text-xs" style="color: var(--pw-text-tertiary);">Next: ' + escapeHtml(top.next_action || 'none') + '</div>';
+          + '<div class="text-xs truncate mb-1" style="color: var(--pw-text-tertiary);">stop_reason: ' + escapeHtml(top.stop_reason || 'unknown') + '</div>'
+          + '<div class="text-xs truncate mb-1" style="color: var(--pw-text-tertiary);">iterations: ' + escapeHtml(String(iterCount)) + ' · main/fix/cleanup: ' + escapeHtml(String(mainCount)) + '/' + escapeHtml(String(fixCount)) + '/' + escapeHtml(String(cleanupCount)) + '</div>'
+          + '<div class="text-xs truncate mb-1" style="color: var(--pw-text-tertiary);" title="' + escapeHtml(dv && dv.session_id ? dv.session_id : '') + '">direct: ' + directStatus + '</div>'
+          + '<div class="text-xs mb-2" style="color: var(--pw-text-tertiary);">warnings: ' + escapeHtml(String(warnCount)) + '</div>'
+          + '<div class="flex items-center gap-2">'
+          + '<button class="text-xs px-2.5 py-1 rounded whitespace-nowrap" data-lineage-detail="' + escapeHtml(top.lineage_id || '') + '" type="button" style="background-color: var(--pw-bg-hover); color: var(--pw-text-secondary); border: 1px solid var(--pw-border-subtle);">View detail</button>'
+          + '<button class="pw-quick-btn" data-copy-id="' + escapeHtml(top.lineage_id || '') + '" title="复制 lineage_id" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>'
+          + '</div>';
+        // Wire lineage detail button
+        const detailBtn = body.querySelector('[data-lineage-detail]');
+        if (detailBtn) {
+          detailBtn.addEventListener('click', function () {
+            const lid = detailBtn.getAttribute('data-lineage-detail');
+            if (lid) showLineageDetail(lid);
+          });
+        }
+        // Wire copy button
+        const copyBtn = body.querySelector('[data-copy-id]');
+        if (copyBtn) {
+          copyBtn.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            copyToClipboard(copyBtn.getAttribute('data-copy-id'), 'lineage_id');
+          });
+        }
       } catch (err) {
         if (count) count.textContent = 'error';
         body.innerHTML = '<div class="text-xs" style="color: var(--pw-state-error);">' + escapeHtml(err.message) + '</div>';
+      }
+    }
+
+    async function showLineageDetail(lineageId) {
+      if (!lineageId) return;
+      const modal = $('safe-modal');
+      const titleEl = $('safe-modal-title');
+      const bodyEl = $('safe-modal-body');
+      if (!modal || !titleEl || !bodyEl) return;
+      titleEl.textContent = 'Lineage Detail · ' + shortId(lineageId);
+      bodyEl.innerHTML = '<div class="text-xs" style="color: var(--pw-text-tertiary);">Loading…</div>';
+      modal.classList.remove('hidden');
+      try {
+        const data = await fetchJson('/api/lineages/' + encodeURIComponent(lineageId));
+        bodyEl.innerHTML = renderLineageDetail(data);
+      } catch (err) {
+        bodyEl.innerHTML = '<div class="text-xs" style="color: var(--pw-state-error);">' + escapeHtml(err.message) + '</div>';
+      }
+    }
+
+    function renderLineageDetail(d) {
+      if (!d) return '<div class="text-xs" style="color: var(--pw-text-tertiary);">No data</div>';
+      const rounds = Array.isArray(d.rounds) ? d.rounds : [];
+      const mainRounds = rounds.filter(function (r) { return r.role === 'main'; });
+      const fixRounds = rounds.filter(function (r) { return r.role === 'fix_tests'; });
+      const cleanupRounds = rounds.filter(function (r) { return r.role === 'cleanup'; });
+      const directSessions = (d.tasks && Array.isArray(d.tasks.direct_sessions)) ? d.tasks.direct_sessions : [];
+
+      function roundRow(r) {
+        return '<div class="py-1.5" style="border-bottom: 1px solid var(--pw-border-subtle);">'
+          + '<div class="flex items-center gap-2 mb-1 flex-wrap">'
+          + '<span class="text-xs" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);" title="' + escapeHtml(r.task_id || '') + '">' + escapeHtml(shortId(r.task_id)) + '</span>'
+          + badgeHtml(r.status || '—', statusKind(r.status))
+          + '<span class="text-xs" style="color: var(--pw-text-tertiary);">iter ' + escapeHtml(String(r.iteration || 0)) + '</span>'
+          + '</div>'
+          + '<div class="text-xs mb-0.5" style="color: var(--pw-text-secondary);">verification: ' + escapeHtml(r.verification_status || '—') + '</div>'
+          + '<div class="text-xs mb-0.5" style="color: var(--pw-text-secondary);">audit: ' + escapeHtml(r.audit_verdict || '—') + '</div>'
+          + (r.next_action ? '<div class="text-xs" style="color: var(--pw-text-tertiary);">next: ' + escapeHtml(r.next_action) + '</div>' : '')
+          + '</div>';
+      }
+
+      function directRow(s) {
+        return '<div class="py-1.5" style="border-bottom: 1px solid var(--pw-border-subtle);">'
+          + '<div class="flex items-center gap-2 mb-1 flex-wrap">'
+          + '<span class="text-xs" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);" title="' + escapeHtml(s.session_id || '') + '">' + escapeHtml(shortId(s.session_id)) + '</span>'
+          + badgeHtml(s.status || 'unknown', statusKind(s.status))
+          + '</div>'
+          + '<div class="text-xs mb-0.5" style="color: var(--pw-text-secondary);">audit: ' + escapeHtml(s.audit_decision || 'not_run') + '</div>'
+          + '<div class="text-xs mb-0.5" style="color: var(--pw-text-secondary);">commands: ' + escapeHtml(String(s.command_count || 0)) + ' (passed ' + escapeHtml(String(s.passed_commands || 0)) + ' / failed ' + escapeHtml(String(s.failed_commands || 0)) + ')</div>'
+          + (s.next_action ? '<div class="text-xs" style="color: var(--pw-text-tertiary);">next: ' + escapeHtml(s.next_action) + '</div>' : '')
+          + '</div>';
+      }
+
+      function section(title, items, renderFn) {
+        if (!items || items.length === 0) return '';
+        return '<div class="mt-3">'
+          + '<div class="text-xs font-semibold mb-1" style="color: var(--pw-text-primary);">' + escapeHtml(title) + ' (' + items.length + ')</div>'
+          + items.map(renderFn).join('')
+          + '</div>';
+      }
+
+      const header =
+        '<div class="mb-2">'
+        + '<div class="text-xs mb-1" style="color: var(--pw-text-secondary);"><span style="color: var(--pw-text-tertiary);">goal:</span> ' + escapeHtml(d.goal || '—') + '</div>'
+        + '<div class="flex items-center gap-2 mb-1 flex-wrap">'
+        + '<span class="text-xs" style="color: var(--pw-text-tertiary);">final_status:</span>' + badgeHtml(d.final_status || 'unknown', statusKind(d.final_status))
+        + '<span class="text-xs" style="color: var(--pw-text-tertiary);">stop_reason:</span><span class="text-xs" style="color: var(--pw-text-secondary);">' + escapeHtml(d.stop_reason || '—') + '</span>'
+        + '</div>'
+        + '<div class="text-xs mb-1" style="color: var(--pw-text-tertiary);">iterations: ' + escapeHtml(String(d.iterations != null ? d.iterations : rounds.length)) + ' · warnings: ' + escapeHtml(String(d.warnings_count != null ? d.warnings_count : (Array.isArray(d.warnings) ? d.warnings.length : 0))) + '</div>'
+        + '<div class="text-xs mb-1" style="color: var(--pw-text-tertiary);">main: ' + escapeHtml(String(d.main_task_count != null ? d.main_task_count : 0)) + ' · fix: ' + escapeHtml(String(d.fix_task_count != null ? d.fix_task_count : 0)) + ' · cleanup: ' + escapeHtml(String(d.cleanup_task_count != null ? d.cleanup_task_count : 0)) + '</div>'
+        + '<div class="text-xs" style="color: var(--pw-text-tertiary);">final_recommended_next_action: ' + escapeHtml(d.next_action || '—') + '</div>'
+        + '</div>';
+
+      return header
+        + section('Main Tasks', mainRounds, roundRow)
+        + section('Fix Tasks', fixRounds, roundRow)
+        + section('Cleanup Tasks', cleanupRounds, roundRow)
+        + section('Direct Verification', directSessions, directRow);
+    }
+
+    // ---------- Health Score ----------
+    // Computes a health score from the /api/status payload and supplementary data.
+    // Returns: { level: 'healthy'|'warning'|'degraded'|'blocked', dimensions: [{key,label,ok,detail}] }
+    function calculateHealthScore(status, opts) {
+      opts = opts || {};
+      const staleCount = typeof opts.staleTaskCount === 'number' ? opts.staleTaskCount : 0;
+      const failedCount = typeof opts.failedTaskCount === 'number' ? opts.failedTaskCount : 0;
+      const policyValid = opts.policyValid === true;
+      const releaseReady = opts.releaseReady === true;
+      const directProfileEnabled = opts.directProfileEnabled === true;
+
+      const watcher = (status && status.watcher) || {};
+      const tunnel = (status && status.tunnel) || {};
+      const agents = (status && status.agents) || [];
+
+      const watcherHealthy = watcher.status === 'healthy';
+      const coreReady = !!(tunnel.core && tunnel.core.ready);
+      const directReady = !!(tunnel.direct && tunnel.direct.ready);
+      const tunnelReady = coreReady && directReady;
+      const agentsAvailable = Array.isArray(agents) && agents.some(function (a) { return a && a.available; });
+
+      const dimensions = [
+        { key: 'watcher_healthy',    label: 'Watcher healthy',    ok: watcherHealthy,        detail: watcher.status || 'unknown' },
+        { key: 'tunnel_ready',       label: 'Tunnel ready',       ok: tunnelReady,           detail: 'core ' + (coreReady ? '✓' : '✗') + ' / direct ' + (directReady ? '✓' : '✗') },
+        { key: 'agents_available',   label: 'Agents available',   ok: agentsAvailable,       detail: Array.isArray(agents) ? agents.length + ' agent(s)' : '0' },
+        { key: 'stale_tasks',        label: 'Stale tasks',        ok: staleCount === 0,      detail: String(staleCount) },
+        { key: 'failed_tasks',       label: 'Failed tasks',       ok: failedCount === 0,     detail: String(failedCount) },
+        { key: 'policy_valid',       label: 'Policy valid',       ok: policyValid,           detail: policyValid ? 'valid' : 'invalid' },
+        { key: 'release_ready',      label: 'Release ready',      ok: releaseReady,          detail: opts.releaseReadyState || 'unknown' },
+        { key: 'direct_profile',     label: 'Direct profile',     ok: directProfileEnabled,  detail: directProfileEnabled ? 'enabled' : 'disabled' }
+      ];
+
+      // Scoring logic (order: blocked > degraded > warning > healthy)
+      let level = 'healthy';
+      const watcherDownAndFailed = (!watcherHealthy && failedCount > 0);
+      const tunnelDownNoAgents = (!tunnelReady && !agentsAvailable);
+      if (watcherDownAndFailed || tunnelDownNoAgents) {
+        level = 'blocked';
+      } else if (failedCount > 2 || staleCount > 3 || !watcherHealthy) {
+        level = 'degraded';
+      } else if (staleCount > 0 || failedCount > 0 || !directProfileEnabled || !releaseReady) {
+        level = 'warning';
+      }
+
+      return { level: level, dimensions: dimensions };
+    }
+
+    function healthScoreColor(level) {
+      if (level === 'healthy')  return { color: 'var(--pw-state-success)', bg: 'var(--pw-state-success-bg)' };
+      if (level === 'warning')  return { color: 'var(--pw-state-warning)', bg: 'var(--pw-state-warning-bg)' };
+      if (level === 'degraded') return { color: '#f97316', bg: 'rgba(249, 115, 22, 0.1)' };
+      if (level === 'blocked')  return { color: 'var(--pw-state-error)', bg: 'var(--pw-state-error-bg)' };
+      return { color: 'var(--pw-text-secondary)', bg: 'var(--pw-bg-hover)' };
+    }
+
+    function renderHealthScore(score) {
+      const card = $('health-score-card');
+      const badge = $('health-score-badge');
+      const body = $('health-score-body');
+      if (!card || !badge || !body || !score) return;
+
+      const c = healthScoreColor(score.level);
+      badge.textContent = score.level;
+      badge.style.color = c.color;
+      badge.style.backgroundColor = c.bg;
+
+      let html = '';
+      score.dimensions.forEach(function (d) {
+        const okColor = d.ok ? 'var(--pw-state-success)' : 'var(--pw-state-error)';
+        const icon = d.ok ? '✓' : '✗';
+        html +=
+          '<div class="flex items-center gap-2 px-2 py-1.5 rounded" style="background-color: var(--pw-bg-hover); border: 1px solid var(--pw-border-subtle);">'
+          + '<span class="shrink-0 text-xs font-semibold" style="color: ' + okColor + '; font-family: var(--pw-font-mono);">' + icon + '</span>'
+          + '<div class="min-w-0 flex-1">'
+          + '<div class="text-xs truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">' + escapeHtml(d.label) + '</div>'
+          + '<div class="text-xs truncate" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-mono);" title="' + escapeHtml(d.detail) + '">' + escapeHtml(d.detail) + '</div>'
+          + '</div>'
+          + '</div>';
+      });
+      body.innerHTML = html;
+    }
+
+    async function refreshHealthScore() {
+      const card = $('health-score-card');
+      if (!card) return;
+      try {
+        // Fetch all required data in parallel
+        const [statusRes, staleRes, policyRes, releaseRes, diagRes] = await Promise.allSettled([
+          fetchJson('/api/status'),
+          fetchJson('/api/tasks/stale'),
+          fetchJson('/api/project-policy?repo_path=' + encodeURIComponent(currentRepoPath)),
+          fetchJson('/api/release/status?repo_path=' + encodeURIComponent(currentRepoPath)),
+          fetchJson('/api/diagnostics')
+        ]);
+
+        const status = statusRes.status === 'fulfilled' ? statusRes.value : null;
+        const staleData = staleRes.status === 'fulfilled' ? staleRes.value : null;
+        const policyData = policyRes.status === 'fulfilled' ? policyRes.value : null;
+        const releaseData = releaseRes.status === 'fulfilled' ? releaseRes.value : null;
+        const diagData = diagRes.status === 'fulfilled' ? diagRes.value : null;
+
+        // stale task count
+        let staleTaskCount = 0;
+        if (staleData) {
+          const arr = Array.isArray(staleData.stale_tasks) ? staleData.stale_tasks
+                    : (Array.isArray(staleData.tasks) ? staleData.tasks : []);
+          staleTaskCount = arr.length;
+        }
+
+        // failed task count - derive from status.tasks
+        let failedTaskCount = 0;
+        if (status && status.tasks && Array.isArray(status.tasks.tasks)) {
+          failedTaskCount = status.tasks.tasks.filter(function (t) {
+            const s = String(t && t.status || '').toLowerCase();
+            return s.indexOf('fail') >= 0;
+          }).length;
+        }
+
+        // policy valid
+        const policyValid = !!(policyData && policyData.valid !== false);
+
+        // release ready
+        const readyState = releaseData ? (releaseData.ready_state || 'unknown') : 'unknown';
+        const releaseReady = readyState === 'ready';
+
+        // direct profile enabled - from diagnostics or status
+        let directProfileEnabled = false;
+        if (diagData && typeof diagData.direct_profile_enabled === 'boolean') {
+          directProfileEnabled = diagData.direct_profile_enabled;
+        } else if (status && status.config && typeof status.config.enableDirectProfile === 'boolean') {
+          directProfileEnabled = status.config.enableDirectProfile;
+        }
+
+        const score = calculateHealthScore(status, {
+          staleTaskCount: staleTaskCount,
+          failedTaskCount: failedTaskCount,
+          policyValid: policyValid,
+          releaseReady: releaseReady,
+          releaseReadyState: readyState,
+          directProfileEnabled: directProfileEnabled
+        });
+        renderHealthScore(score);
+      } catch (err) {
+        const body = $('health-score-body');
+        const badge = $('health-score-badge');
+        if (body) body.innerHTML = '<div class="text-xs" style="color: var(--pw-state-error);">健康评分加载失败: ' + escapeHtml(err.message) + '</div>';
+        if (badge) { badge.textContent = 'error'; badge.style.color = 'var(--pw-state-error)'; badge.style.backgroundColor = 'var(--pw-state-error-bg)'; }
       }
     }
 
@@ -1099,19 +1641,54 @@ html.dark {
       const status = $('policy-status');
       if (!body) return;
       try {
-        const data = await fetchJson('/api/project-policy?repo_path=.');
+        const data = await fetchJson('/api/project-policy?repo_path=' + encodeURIComponent(currentRepoPath));
         const valid = data && data.valid !== false;
-        if (status) status.textContent = valid ? 'valid' : 'issues';
+        if (status) {
+          status.textContent = valid ? 'valid' : 'issues';
+          status.style.color = valid ? 'var(--pw-state-success)' : 'var(--pw-state-error)';
+        }
         const issueCount = Array.isArray(data.issues) ? data.issues.length : 0;
         const policy = data.effective_policy || {};
         const release = (policy.release_mode || {});
+
+        // auto_cleanup: boolean or object with enabled field
+        const autoCleanupRaw = policy.auto_cleanup;
+        let autoCleanupEnabled = false;
+        if (autoCleanupRaw === true) autoCleanupEnabled = true;
+        else if (autoCleanupRaw && autoCleanupRaw.enabled === true) autoCleanupEnabled = true;
+
+        // protected_paths / high_risk_commands counts
+        const protectedPathsCount = Array.isArray(policy.protected_paths) ? policy.protected_paths.length : 0;
+        const highRiskCmdCount = Array.isArray(policy.high_risk_commands) ? policy.high_risk_commands.length : 0;
+
+        // release_mode summary
+        const versionSource = release.version_source || 'package.json';
+        const readyState = release.ready_state || '';
+
+        function row(label, valueHtml) {
+          return '<div class="flex items-center justify-between gap-2 py-1" style="border-bottom: 1px solid var(--pw-border-subtle);">'
+            + '<span class="text-xs whitespace-nowrap" style="color: var(--pw-text-secondary);">' + label + '</span>'
+            + '<span class="text-xs text-right min-w-0 truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">' + valueHtml + '</span>'
+            + '</div>';
+        }
+
         body.innerHTML =
-          '<div class="flex items-center justify-between gap-2 mb-2">'
+          '<div class="flex items-center justify-between gap-2 mb-1">'
           + '<span class="text-xs" style="color: var(--pw-text-secondary);">policy file</span>'
           + badgeHtml(data.exists ? 'present' : 'defaults', data.exists ? 'success' : 'warning')
           + '</div>'
-          + '<div class="text-xs mb-1" style="color: var(--pw-text-tertiary);">issues: ' + issueCount + '</div>'
-          + '<div class="text-xs truncate" style="color: var(--pw-text-tertiary);" title="' + escapeHtml(release.version_source || '') + '">version: ' + escapeHtml(release.version_source || 'package.json') + '</div>';
+          + '<div class="flex items-center justify-between gap-2 mb-1">'
+          + '<span class="text-xs" style="color: var(--pw-text-secondary);">validity</span>'
+          + badgeHtml(valid ? 'valid' : 'invalid', valid ? 'success' : 'error')
+          + '</div>'
+          + row('issues', String(issueCount))
+          + row('auto_cleanup', autoCleanupEnabled
+            ? '<span style="color: var(--pw-state-success);">enabled</span>'
+            : '<span style="color: var(--pw-text-tertiary);">disabled</span>')
+          + row('protected_paths', String(protectedPathsCount))
+          + row('high_risk_commands', String(highRiskCmdCount))
+          + row('version_source', escapeHtml(versionSource))
+          + (readyState ? row('ready_state', escapeHtml(readyState)) : '');
       } catch (err) {
         if (status) status.textContent = 'error';
         body.innerHTML = '<div class="text-xs" style="color: var(--pw-state-error);">' + escapeHtml(err.message) + '</div>';
@@ -1123,19 +1700,89 @@ html.dark {
       const status = $('release-status');
       if (!body) return;
       try {
-        const data = await fetchJson('/api/release/status?repo_path=.');
-        const ready = data && data.policy_valid && data.release_readiness && data.release_readiness.version_consistent !== false;
-        if (status) status.textContent = ready ? 'ready' : 'blocked';
-        const readiness = data.release_readiness || {};
-        const commands = Array.isArray(readiness.required_commands) ? readiness.required_commands : [];
-        const blocked = commands.filter(function (entry) { return !entry.allowed; }).length;
+        const data = await fetchJson('/api/release/status?repo_path=' + encodeURIComponent(currentRepoPath));
+        const vs = data.version_source || '';
+        const ver = data.version || '';
+        const consistent = data.version_consistent;
+        const commands = Array.isArray(data.required_commands) ? data.required_commands : [];
+        const blockedCount = data.commands_blocked_count != null ? data.commands_blocked_count : commands.filter(function (e) { return !e.allowed; }).length;
+        const readyState = data.ready_state || 'unknown';
+        const nextAction = data.next_action || '';
+
+        // Version display logic
+        let versionDisplay;
+        if (vs === 'workspace_root' || !ver) {
+          versionDisplay = '选择具体 repo 以读取 version';
+        } else {
+          versionDisplay = ver;
+        }
+
+        // ready_state badge
+        let readyKind = 'warning';
+        if (readyState === 'ready') readyKind = 'success';
+        else if (readyState === 'blocked') readyKind = 'error';
+
+        // version_consistent badge
+        const consistentKind = consistent === true ? 'success' : (consistent === false ? 'error' : 'neutral');
+        const consistentText = consistent === true ? '✓' : (consistent === false ? '✗' : '—');
+
+        // commands list
+        let cmdHtml = '';
+        if (commands.length > 0) {
+          cmdHtml = '<div class="mt-2 space-y-1">';
+          commands.forEach(function (cmd) {
+            const allowedIcon = cmd.allowed ? '✓' : '✗';
+            const cmdKind = cmd.allowed ? 'success' : 'error';
+            const c = statusColors(cmdKind);
+            cmdHtml += '<div class="flex items-center gap-2 text-xs">'
+              + '<span style="color: ' + c.color + ';">' + allowedIcon + '</span>'
+              + '<span style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">' + escapeHtml(cmd.command) + '</span>'
+              + (cmd.blocked_reason ? '<span style="color: var(--pw-state-warning); font-family: var(--pw-font-sans);">(' + escapeHtml(cmd.blocked_reason) + ')</span>' : '')
+              + '</div>';
+          });
+          cmdHtml += '</div>';
+        }
+
+        // blocked reason text
+        let blockedReasonHtml = '';
+        if (readyState === 'blocked' && data.blocked_reason) {
+          blockedReasonHtml = '<div class="text-xs mt-2" style="color: var(--pw-state-error);">' + escapeHtml(data.blocked_reason) + '</div>';
+        }
+
+        if (status) {
+          status.textContent = readyState;
+          const sc = statusColors(readyKind);
+          status.style.color = sc.color;
+        }
+
         body.innerHTML =
-          '<div class="flex items-center justify-between gap-2 mb-2">'
-          + '<span class="text-xs" style="color: var(--pw-text-secondary);">version</span>'
-          + '<span class="text-xs" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">' + escapeHtml(readiness.version || 'unknown') + '</span>'
+          '<div class="flex items-center justify-between gap-2 mb-1">'
+          + '<span class="text-xs" style="color: var(--pw-text-secondary);">package</span>'
+          + '<span class="text-xs" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">' + escapeHtml(data.package_name || '—') + '</span>'
           + '</div>'
-          + '<div class="text-xs mb-1" style="color: var(--pw-text-tertiary);">commands blocked: ' + blocked + ' / ' + commands.length + '</div>'
-          + '<div class="text-xs" style="color: var(--pw-text-tertiary);">' + escapeHtml(data.next_action || '') + '</div>';
+          + '<div class="flex items-center justify-between gap-2 mb-1">'
+          + '<span class="text-xs" style="color: var(--pw-text-secondary);">version_source</span>'
+          + '<span class="text-xs" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">' + escapeHtml(vs || 'unknown') + '</span>'
+          + '</div>'
+          + '<div class="flex items-center justify-between gap-2 mb-1">'
+          + '<span class="text-xs" style="color: var(--pw-text-secondary);">version</span>'
+          + '<span class="text-xs" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">' + escapeHtml(versionDisplay) + '</span>'
+          + '</div>'
+          + '<div class="flex items-center justify-between gap-2 mb-1">'
+          + '<span class="text-xs" style="color: var(--pw-text-secondary);">consistent</span>'
+          + '<span class="text-xs" style="color: ' + statusColors(consistentKind).color + ';">' + consistentText + '</span>'
+          + '</div>'
+          + '<div class="flex items-center justify-between gap-2 mb-1">'
+          + '<span class="text-xs" style="color: var(--pw-text-secondary);">commands</span>'
+          + '<span class="text-xs" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">' + blockedCount + ' / ' + commands.length + ' blocked</span>'
+          + '</div>'
+          + '<div class="flex items-center justify-between gap-2 mb-1">'
+          + '<span class="text-xs" style="color: var(--pw-text-secondary);">ready</span>'
+          + badgeHtml(readyState, readyKind)
+          + '</div>'
+          + cmdHtml
+          + blockedReasonHtml
+          + (nextAction ? '<div class="text-xs mt-1" style="color: var(--pw-text-tertiary);">next: ' + escapeHtml(nextAction) + '</div>' : '');
       } catch (err) {
         if (status) status.textContent = 'error';
         body.innerHTML = '<div class="text-xs" style="color: var(--pw-state-error);">' + escapeHtml(err.message) + '</div>';
@@ -1150,21 +1797,258 @@ html.dark {
         const data = await fetchJson('/api/evidence-packs');
         const packs = Array.isArray(data.evidence_packs) ? data.evidence_packs : [];
         if (status) status.textContent = String(data.total || packs.length);
+        const hasLineages = data.has_lineages === true;
+        const pendingIds = Array.isArray(data.pending_lineage_ids) ? data.pending_lineage_ids : [];
+
         if (!packs.length) {
-          body.innerHTML = '<div class="text-xs" style="color: var(--pw-text-tertiary);">No exported evidence pack yet</div>';
+          if (!hasLineages) {
+            body.innerHTML = '<div class="text-xs" style="color: var(--pw-text-tertiary);">Evidence pack is available after run_task_loop.</div>';
+            return;
+          }
+          // Lineage exists but no evidence pack yet — offer export for the most recent pending lineage.
+          const exportId = pendingIds.length > 0 ? pendingIds[0] : null;
+          if (exportId) {
+            body.innerHTML =
+              '<div class="text-xs mb-2" style="color: var(--pw-text-tertiary);">Lineage exists but no evidence pack yet.</div>'
+              + '<div class="flex items-center gap-2">'
+              + '<button class="text-xs px-2.5 py-1 rounded whitespace-nowrap" data-export-pack="' + escapeHtml(exportId) + '" type="button" style="background-color: var(--pw-accent-muted); color: var(--pw-accent); border: 1px solid var(--pw-accent);">Export evidence pack</button>'
+              + '<button class="pw-quick-btn" data-copy-id="' + escapeHtml(exportId) + '" title="复制 lineage_id" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>'
+              + '</div>';
+            const exportBtn = body.querySelector('[data-export-pack]');
+            if (exportBtn) {
+              exportBtn.addEventListener('click', function () {
+                const lid = exportBtn.getAttribute('data-export-pack');
+                if (!lid) return;
+                postAction('/api/evidence-packs/' + encodeURIComponent(lid) + '/export', exportBtn).then(function () {
+                  showToast('success', '导出成功', 'Evidence pack 已导出');
+                  refreshEvidencePacks();
+                }).catch(function (err) {
+                  showToast('error', '导出失败', err.message);
+                });
+              });
+            }
+            const copyBtn = body.querySelector('[data-copy-id]');
+            if (copyBtn) {
+              copyBtn.addEventListener('click', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                copyToClipboard(copyBtn.getAttribute('data-copy-id'), 'lineage_id');
+              });
+            }
+          } else {
+            body.innerHTML = '<div class="text-xs" style="color: var(--pw-text-tertiary);">No exported evidence pack yet</div>';
+          }
           return;
         }
+
         const top = packs[0];
+        const exportStatus = top.export_status || 'exported';
+        const jsonExists = top.evidence_json_exists === true;
+        const mdExists = top.evidence_md_exists === true;
+        const exportedAt = top.exported_at || (top.generated_at || '—');
+        const lineageId = top.lineage_id || '';
         body.innerHTML =
           '<div class="flex items-center justify-between gap-2 mb-2">'
-          + '<span class="text-xs truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);" title="' + escapeHtml(top.lineage_id || '') + '">' + escapeHtml(shortId(top.lineage_id)) + '</span>'
-          + badgeHtml(top.lineage && top.lineage.stop_reason ? top.lineage.stop_reason : 'unknown', statusKind(top.lineage && top.lineage.final_status))
+          + '<span class="text-xs truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);" title="' + escapeHtml(lineageId) + '">' + escapeHtml(shortId(lineageId)) + '</span>'
+          + badgeHtml(exportStatus, exportStatus === 'exported' ? 'success' : 'warning')
           + '</div>'
-          + '<div class="text-xs mb-1" style="color: var(--pw-text-tertiary);">policy issues: ' + escapeHtml(String(top.policy ? top.policy.issue_count : 0)) + '</div>'
-          + '<div class="text-xs truncate" style="color: var(--pw-text-tertiary);" title="' + escapeHtml(top.next_action || '') + '">Next: ' + escapeHtml(top.next_action || 'review') + '</div>';
+          + '<div class="text-xs mb-1" style="color: var(--pw-text-tertiary);">evidence.json: ' + (jsonExists ? '✓' : '✗') + ' · EVIDENCE.md: ' + (mdExists ? '✓' : '✗') + '</div>'
+          + '<div class="text-xs mb-1" style="color: var(--pw-text-tertiary);" title="' + escapeHtml(exportedAt) + '">exported_at: ' + escapeHtml(fmtTime(exportedAt)) + '</div>'
+          + '<div class="text-xs mb-2" style="color: var(--pw-text-tertiary);">policy issues: ' + escapeHtml(String(top.policy ? top.policy.issue_count : 0)) + '</div>'
+          + '<div class="flex items-center gap-2 flex-wrap">'
+          + (exportStatus !== 'exported' ? '<button class="text-xs px-2.5 py-1 rounded whitespace-nowrap" data-export-pack="' + escapeHtml(lineageId) + '" type="button" style="background-color: var(--pw-accent-muted); color: var(--pw-accent); border: 1px solid var(--pw-accent);">Export evidence pack</button>' : '')
+          + '<button class="text-xs px-2.5 py-1 rounded whitespace-nowrap" data-view-evidence="' + escapeHtml(lineageId) + '" type="button" style="background-color: var(--pw-bg-hover); color: var(--pw-text-secondary); border: 1px solid var(--pw-border-subtle);">View detail</button>'
+          + '<button class="pw-quick-btn" data-copy-id="' + escapeHtml(lineageId) + '" title="复制 lineage_id" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>'
+          + '</div>';
+        // Wire export button (if present)
+        const exportBtn2 = body.querySelector('[data-export-pack]');
+        if (exportBtn2) {
+          exportBtn2.addEventListener('click', function () {
+            const lid = exportBtn2.getAttribute('data-export-pack');
+            if (!lid) return;
+            postAction('/api/evidence-packs/' + encodeURIComponent(lid) + '/export', exportBtn2).then(function () {
+              showToast('success', '导出成功', 'Evidence pack 已导出');
+              refreshEvidencePacks();
+            }).catch(function (err) {
+              showToast('error', '导出失败', err.message);
+            });
+          });
+        }
+        // Wire view detail button
+        const viewBtn = body.querySelector('[data-view-evidence]');
+        if (viewBtn) {
+          viewBtn.addEventListener('click', function () {
+            const lid = viewBtn.getAttribute('data-view-evidence');
+            if (lid) showEvidencePackDetail(lid);
+          });
+        }
+        // Wire copy button
+        const copyBtn2 = body.querySelector('[data-copy-id]');
+        if (copyBtn2) {
+          copyBtn2.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            copyToClipboard(copyBtn2.getAttribute('data-copy-id'), 'lineage_id');
+          });
+        }
       } catch (err) {
         if (status) status.textContent = 'error';
         body.innerHTML = '<div class="text-xs" style="color: var(--pw-state-error);">' + escapeHtml(err.message) + '</div>';
+      }
+    }
+
+    async function showEvidencePackDetail(lineageId) {
+      if (!lineageId) return;
+      const modal = $('safe-modal');
+      const titleEl = $('safe-modal-title');
+      const bodyEl = $('safe-modal-body');
+      if (!modal || !titleEl || !bodyEl) return;
+      titleEl.textContent = 'Evidence Pack · ' + shortId(lineageId);
+      bodyEl.innerHTML = '<div class="text-xs" style="color: var(--pw-text-tertiary);">Loading…</div>';
+      modal.classList.remove('hidden');
+      try {
+        const data = await fetchJson('/api/evidence-packs/' + encodeURIComponent(lineageId));
+        const jsonPath = data.files && data.files.json ? data.files.json : '';
+        const mdPath = data.files && data.files.markdown ? data.files.markdown : '';
+        const lineage = data.lineage || {};
+        bodyEl.innerHTML =
+          '<div class="mb-3">'
+          + '<div class="text-xs mb-1" style="color: var(--pw-text-secondary);"><span style="color: var(--pw-text-tertiary);">lineage_id:</span> ' + escapeHtml(data.lineage_id || lineageId) + '</div>'
+          + '<div class="text-xs mb-1" style="color: var(--pw-text-secondary);"><span style="color: var(--pw-text-tertiary);">generated_at:</span> ' + escapeHtml(fmtTime(data.generated_at || '—')) + '</div>'
+          + '<div class="flex items-center gap-2 mb-1 flex-wrap">'
+          + '<span class="text-xs" style="color: var(--pw-text-tertiary);">final_status:</span>' + badgeHtml(lineage.final_status || 'unknown', statusKind(lineage.final_status))
+          + '<span class="text-xs" style="color: var(--pw-text-tertiary);">stop_reason:</span><span class="text-xs" style="color: var(--pw-text-secondary);">' + escapeHtml(lineage.stop_reason || '—') + '</span>'
+          + '</div>'
+          + '<div class="text-xs mb-1" style="color: var(--pw-text-tertiary);">policy valid: ' + (data.policy && data.policy.valid ? '✓' : '✗') + ' · issues: ' + escapeHtml(String(data.policy ? data.policy.issue_count : 0)) + '</div>'
+          + (data.next_action ? '<div class="text-xs mb-1" style="color: var(--pw-text-tertiary);">next: ' + escapeHtml(data.next_action) + '</div>' : '')
+          + '</div>'
+          + '<div class="mt-2">'
+          + '<div class="text-xs font-semibold mb-1" style="color: var(--pw-text-primary);">Files</div>'
+          + '<div class="text-xs mb-1" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono); word-break: break-all;" title="' + escapeHtml(jsonPath) + '">evidence.json: ' + (jsonPath ? escapeHtml(jsonPath) : '—') + '</div>'
+          + '<div class="text-xs mb-1" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono); word-break: break-all;" title="' + escapeHtml(mdPath) + '">EVIDENCE.md: ' + (mdPath ? escapeHtml(mdPath) : '—') + '</div>'
+          + '<div class="flex items-center gap-2 mt-2">'
+          + (jsonPath ? '<button class="text-xs px-2.5 py-1 rounded whitespace-nowrap" data-copy-path="' + escapeHtml(jsonPath) + '" type="button" style="background-color: var(--pw-bg-hover); color: var(--pw-text-secondary); border: 1px solid var(--pw-border-subtle);">Copy evidence.json path</button>' : '')
+          + (mdPath ? '<button class="text-xs px-2.5 py-1 rounded whitespace-nowrap" data-copy-path="' + escapeHtml(mdPath) + '" type="button" style="background-color: var(--pw-bg-hover); color: var(--pw-text-secondary); border: 1px solid var(--pw-border-subtle);">Copy EVIDENCE.md path</button>' : '')
+          + '</div>'
+          + '</div>';
+        // Wire copy path buttons
+        bodyEl.querySelectorAll('[data-copy-path]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            copyToClipboard(btn.getAttribute('data-copy-path'), 'file path');
+          });
+        });
+      } catch (err) {
+        bodyEl.innerHTML = '<div class="text-xs" style="color: var(--pw-state-error);">' + escapeHtml(err.message) + '</div>';
+      }
+    }
+
+    // ---------- Repo selector ----------
+    async function loadRepos() {
+      const select = $('repo-selector');
+      if (!select) return;
+      try {
+        const data = await fetchJson('/api/workspace/repos');
+        const repos = Array.isArray(data.repos) ? data.repos : [];
+        let html = '<option value=".">workspace root</option>';
+        repos.forEach(function (r) {
+          const label = r.name + (r.has_package_json && r.version ? ' (v' + r.version + ')' : '');
+          const val = r.path || r.name;
+          html += '<option value="' + escapeHtml(val) + '">' + escapeHtml(label) + '</option>';
+        });
+        select.innerHTML = html;
+      } catch (err) {
+        // keep default option
+        console.error('loadRepos failed:', err);
+      }
+    }
+
+    function onRepoChange(selectedRepoPath) {
+      currentRepoPath = selectedRepoPath || '.';
+      Promise.all([
+        refreshProjectPolicy(),
+        refreshReleaseStatus(),
+        refreshTasks(),
+        refreshLineages(),
+        refreshEvidencePacks(),
+        refreshStaleTasks(),
+        refreshHealthScore()
+      ]).catch(function (err) {
+        showError('切换 repo 刷新失败: ' + err.message);
+      });
+    }
+
+    // ---------- Stale tasks ----------
+    async function refreshStaleTasks() {
+      const body = $('stale-tasks-body');
+      const countEl = $('stale-tasks-count');
+      const card = $('stale-tasks-card');
+      if (!body) return;
+      try {
+        const data = await fetchJson('/api/tasks/stale');
+        const staleTasks = Array.isArray(data.stale_tasks) ? data.stale_tasks : [];
+        const total = (typeof data.total === 'number') ? data.total : staleTasks.length;
+        if (countEl) countEl.textContent = String(total);
+        if (!staleTasks.length) {
+          if (card) card.classList.add('hidden');
+          return;
+        }
+        if (card) card.classList.remove('hidden');
+        let html = '';
+        staleTasks.forEach(function (st) {
+          const taskId = st.task_id || '';
+          const href = '/pages/task-detail.html?id=' + encodeURIComponent(taskId);
+          const statusBadge = badgeHtml(st.status || '—', statusKind(st.status));
+          const errorText = st.error ? escapeHtml(st.error.length > 100 ? st.error.slice(0, 100) + '…' : st.error) : '';
+          const explanation = st.explanation || '';
+          const nextAction = st.next_action || '';
+          html +=
+            '<div class="py-3" style="border-bottom: 1px solid var(--pw-border-subtle);" data-stale-task="' + escapeHtml(taskId) + '">'
+            + '<div class="flex items-center gap-2 mb-1.5 flex-wrap">'
+            + '<span class="text-xs font-medium px-2 py-0.5 rounded whitespace-nowrap" style="color: var(--pw-text-secondary); background-color: var(--pw-bg-hover); font-family: var(--pw-font-mono);" title="' + escapeHtml(taskId) + '">' + escapeHtml(shortId(taskId)) + '</span>'
+            + statusBadge
+            + '<span class="text-xs truncate" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-mono); max-width: 200px;" title="' + escapeHtml(st.repo_path || '') + '">' + escapeHtml(st.repo_path || '—') + '</span>'
+            + '<div class="flex-1"></div>'
+            + '<button class="pw-quick-btn" data-copy-id="' + escapeHtml(taskId) + '" title="复制 task_id" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>'
+            + '</div>'
+            + (explanation ? '<div class="pw-stale-explanation mb-1.5">' + escapeHtml(explanation) + '</div>' : '')
+            + (errorText ? '<div class="text-xs mb-1" style="color: var(--pw-state-error); font-family: var(--pw-font-mono);" title="' + escapeHtml(st.error || '') + '">' + errorText + '</div>' : '')
+            + (nextAction ? '<div class="text-xs mb-1.5" style="color: var(--pw-text-secondary);">next: ' + escapeHtml(nextAction) + '</div>' : '')
+            + '<div class="flex items-center gap-2">'
+            + '<a href="' + href + '" class="text-xs px-2.5 py-1 rounded whitespace-nowrap" style="background-color: var(--pw-bg-hover); color: var(--pw-text-secondary); border: 1px solid var(--pw-border-subtle);">查看详情</a>'
+            + '<button class="text-xs px-2.5 py-1 rounded whitespace-nowrap" data-hide-stale="' + escapeHtml(taskId) + '" type="button" style="background-color: var(--pw-state-error-bg); color: var(--pw-state-error); border: 1px solid var(--pw-state-error);">隐藏</button>'
+            + '<button class="text-xs px-2.5 py-1 rounded whitespace-nowrap" disabled style="background-color: var(--pw-bg-hover); color: var(--pw-text-tertiary); border: 1px solid var(--pw-border-subtle);">重建任务</button>'
+            + '</div>'
+            + '</div>';
+        });
+        body.innerHTML = html;
+        // Wire copy buttons
+        body.querySelectorAll('[data-copy-id]').forEach(function (btn) {
+          btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            copyToClipboard(btn.getAttribute('data-copy-id'), 'task_id');
+          });
+        });
+        // Wire hide-stale buttons
+        body.querySelectorAll('[data-hide-stale]').forEach(function (btn) {
+          btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const tid = btn.getAttribute('data-hide-stale');
+            postAction('/api/tasks/' + encodeURIComponent(tid) + '/hide-stale', btn).then(function () {
+              showToast('success', '已隐藏', 'Stale 任务已隐藏');
+              const row = btn.closest('[data-stale-task]');
+              if (row && row.parentNode) row.parentNode.removeChild(row);
+              const remaining = body.querySelectorAll('[data-stale-task]').length;
+              if (countEl) countEl.textContent = String(remaining);
+              if (remaining === 0 && card) card.classList.add('hidden');
+            }).catch(function (err) {
+              showToast('error', '隐藏失败', err.message);
+            });
+          });
+        });
+      } catch (err) {
+        if (card) card.classList.add('hidden');
       }
     }
 
@@ -1197,7 +2081,7 @@ html.dark {
 
     async function refreshTasks() {
       try {
-        const data = await fetchJson('/api/tasks');
+        const data = await fetchJson('/api/tasks?repo_path=' + encodeURIComponent(currentRepoPath));
         renderTasks(data);
       } catch (err) {
         const bodyEl = $('recent-tasks-body');
@@ -1208,14 +2092,14 @@ html.dark {
     }
 
     async function refreshAll() {
-      await Promise.all([refreshStatus(), refreshTasks(), refreshLogs(), refreshEvents(), refreshLineages(), refreshProjectPolicy(), refreshReleaseStatus(), refreshEvidencePacks()]);
+      await Promise.all([refreshStatus(), refreshTasks(), refreshLogs(), refreshEvents(), refreshLineages(), refreshProjectPolicy(), refreshReleaseStatus(), refreshEvidencePacks(), refreshStaleTasks(), refreshHealthScore()]);
     }
 
     // ---------- Actions ----------
     async function handleAction(action, btnEl) {
       try {
         if (action === 'refresh') {
-          await Promise.all([refreshStatus(), refreshTasks(), refreshLineages(), refreshProjectPolicy(), refreshReleaseStatus(), refreshEvidencePacks()]);
+          await Promise.all([refreshStatus(), refreshTasks(), refreshLineages(), refreshProjectPolicy(), refreshReleaseStatus(), refreshEvidencePacks(), refreshStaleTasks(), refreshHealthScore()]);
           return;
         }
 
@@ -1269,6 +2153,35 @@ html.dark {
         });
       });
 
+      // Copy diagnostics button (system status card header)
+      const copyDiagBtn = $('btn-copy-diagnostics');
+      if (copyDiagBtn) {
+        copyDiagBtn.addEventListener('click', function () {
+          copyDiagnostics(copyDiagBtn);
+        });
+      }
+
+      // Repo selector change handler
+      const repoSelector = $('repo-selector');
+      if (repoSelector) {
+        repoSelector.addEventListener('change', function () {
+          onRepoChange(repoSelector.value);
+        });
+      }
+
+      // Safe modal close handlers
+      const modalClose = $('safe-modal-close');
+      if (modalClose) {
+        modalClose.addEventListener('click', function () { closeSafeModal(); });
+      }
+      const safeModal = $('safe-modal');
+      if (safeModal) {
+        safeModal.addEventListener('click', function (e) {
+          if (e.target === safeModal) closeSafeModal();
+        });
+      }
+
+      loadRepos();
       loadToken().then(function () {
         auditSeeded = false;
         seenAuditKeys = new Set();
@@ -1282,6 +2195,8 @@ html.dark {
 
       // Auto-refresh /api/status every 30s (no logs to avoid performance issues)
       statusTimer = setInterval(function () { refreshStatus(); }, 30000);
+      // Health score refresh (lightweight, reuses some endpoints) every 60s
+      setInterval(function () { refreshHealthScore(); }, 60000);
       // Refresh activity timeline every 60s
       setInterval(function () { refreshEvents(); }, 60000);
       // Audit toast polling: every 90s, best-effort

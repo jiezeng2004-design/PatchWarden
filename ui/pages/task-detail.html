@@ -372,176 +372,192 @@ html.dark {
           </div>
         </section>
 
-        <!-- Two-Column Layout -->
-        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <!-- ===== Safe Summary Section (DEFAULT visible, loaded from 4 safe endpoints) ===== -->
+        <section class="rounded-lg p-5" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
+          <div class="flex items-center gap-2 mb-1">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--pw-accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            <h2 class="text-base font-semibold" data-zh="安全摘要" data-en="Safe Summary" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">安全摘要</h2>
+            <span class="text-xs px-2 py-0.5 rounded-md whitespace-nowrap" style="color: var(--pw-accent); background-color: var(--pw-accent-subtle); font-family: var(--pw-font-mono);">safe-first</span>
+          </div>
+          <p class="text-xs mb-5" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="默认仅展示脱敏后的安全摘要。完整结果、diff、测试日志请见下方「高级」区域。" data-en="Shows redacted safe summaries by default. Full result/diff/test log are in the Advanced section below.">默认仅展示脱敏后的安全摘要。完整结果、diff、测试日志请见下方「高级」区域。</p>
 
-          <!-- Left Column (~58%) -->
-          <div class="lg:col-span-7 flex flex-col gap-6">
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
 
-            <!-- Execution Status Card -->
-            <section class="rounded-lg p-5" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
-              <h2 class="text-base font-semibold mb-4" data-zh="执行状态" data-en="Execution Status" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">执行状态</h2>
-              <div class="grid grid-cols-1 sm:grid-cols-3 gap-x-6 gap-y-3 text-sm">
-                <div class="flex flex-col gap-0.5 min-w-0">
-                  <span class="text-xs whitespace-nowrap" style="color: var(--pw-text-tertiary);" data-zh="运行阶段" data-en="Runtime Phase">运行阶段</span>
-                  <span id="rtPhase" class="truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">—</span>
-                </div>
-                <div class="flex flex-col gap-0.5 min-w-0">
-                  <span class="text-xs whitespace-nowrap" style="color: var(--pw-text-tertiary);" data-zh="最近心跳" data-en="Last Heartbeat">最近心跳</span>
-                  <span id="rtHeartbeat" class="truncate" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);">—</span>
-                </div>
-                <div class="flex flex-col gap-0.5 min-w-0">
-                  <span class="text-xs whitespace-nowrap" style="color: var(--pw-text-tertiary);" data-zh="当前命令" data-en="Current Command">当前命令</span>
-                  <span id="rtCurrentCmd" class="truncate" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);">—</span>
-                </div>
+            <!-- Safe Result Overview -->
+            <div class="rounded-lg p-4 flex flex-col gap-3" style="background-color: var(--pw-bg); border: 1px solid var(--pw-border-subtle);">
+              <div class="flex items-center justify-between">
+                <h3 class="text-sm font-semibold" data-zh="结果概览" data-en="Safe Result" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">结果概览 (safe_result)</h3>
+                <span id="srStatusBadge" class="text-xs px-2 py-0.5 rounded-md whitespace-nowrap" style="color: var(--pw-text-tertiary); background-color: var(--pw-bg-hover); font-family: var(--pw-font-mono);">—</span>
               </div>
-            </section>
+              <dl class="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+                <div class="flex flex-col gap-0.5 min-w-0"><dt style="color: var(--pw-text-tertiary);">terminal</dt><dd id="srTerminal" class="truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">—</dd></div>
+                <div class="flex flex-col gap-0.5 min-w-0"><dt style="color: var(--pw-text-tertiary);">acceptance_status</dt><dd id="srAcceptance" class="truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">—</dd></div>
+                <div class="flex flex-col gap-0.5 min-w-0"><dt style="color: var(--pw-text-tertiary);">changed_files_total</dt><dd id="srChangedTotal" class="truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">—</dd></div>
+                <div class="flex flex-col gap-0.5 min-w-0"><dt style="color: var(--pw-text-tertiary);">out_of_scope_changes_total</dt><dd id="srOosTotal" class="truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">—</dd></div>
+              </dl>
+              <div class="flex flex-col gap-0.5 min-w-0">
+                <span class="text-xs" style="color: var(--pw-text-tertiary);">verification.headline</span>
+                <span id="srVerifyHeadline" class="text-xs break-words" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);">—</span>
+              </div>
+              <div id="srFailureBlock" class="hidden flex flex-col gap-1">
+                <div class="flex flex-col gap-0.5 min-w-0"><span class="text-xs" style="color: var(--pw-state-error);">failure_reason</span><span id="srFailureReason" class="text-xs break-words" style="color: var(--pw-state-error); font-family: var(--pw-font-mono);">—</span></div>
+                <div class="flex flex-col gap-0.5 min-w-0"><span class="text-xs" style="color: var(--pw-state-error);">failed_command</span><span id="srFailedCommand" class="text-xs break-all" style="color: var(--pw-state-error); font-family: var(--pw-font-mono);">—</span></div>
+              </div>
+              <div class="flex flex-col gap-0.5 min-w-0">
+                <span class="text-xs" style="color: var(--pw-text-tertiary);">next_action</span>
+                <span id="srNextAction" class="text-xs break-words" style="color: var(--pw-accent); font-family: var(--pw-font-mono);">—</span>
+              </div>
+              <div id="srBlockedBlock" class="hidden flex flex-col gap-0.5 min-w-0">
+                <span class="text-xs" style="color: var(--pw-state-warning);">execution_blocked / pending_reason</span>
+                <span id="srPendingReason" class="text-xs break-words" style="color: var(--pw-state-warning); font-family: var(--pw-font-mono);">—</span>
+              </div>
+              <div id="srWarningsBlock" class="hidden flex flex-col gap-1 min-w-0">
+                <span class="text-xs font-medium" style="color: var(--pw-state-warning);">warnings</span>
+                <pre id="srWarnings" class="rounded-md p-2 text-xs leading-relaxed whitespace-pre-wrap break-all" style="background-color: var(--pw-state-warning-bg); color: var(--pw-state-warning); font-family: var(--pw-font-mono); max-height: 160px; overflow-y: auto;"></pre>
+              </div>
+            </div>
 
-            <!-- Diff Preview Card -->
-            <section class="rounded-lg overflow-hidden" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
-              <div class="flex items-center gap-2 px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--pw-text-secondary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
-                <h2 class="text-base font-semibold" data-zh="变更预览" data-en="Diff Preview" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">变更预览</h2>
+            <!-- Safe Test Summary -->
+            <div class="rounded-lg p-4 flex flex-col gap-3" style="background-color: var(--pw-bg); border: 1px solid var(--pw-border-subtle);">
+              <div class="flex items-center justify-between">
+                <h3 class="text-sm font-semibold" data-zh="测试摘要" data-en="Safe Test Summary" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">测试摘要 (safe_test_summary)</h3>
+                <span id="stStatusBadge" class="text-xs px-2 py-0.5 rounded-md whitespace-nowrap" style="color: var(--pw-text-tertiary); background-color: var(--pw-bg-hover); font-family: var(--pw-font-mono);">—</span>
               </div>
-              <div id="diffEmpty" class="px-4 py-8 text-center text-sm" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="暂无 diff 内容" data-en="No diff available">暂无 diff 内容</div>
-              <pre id="diffContent" class="hidden px-4 py-3 text-xs leading-relaxed overflow-x-auto whitespace-pre-wrap break-all" style="background-color: #0d1117; color: var(--pw-text-secondary); font-family: var(--pw-font-mono); max-height: 480px; overflow-y: auto;"></pre>
-            </section>
+              <dl class="grid grid-cols-4 gap-x-3 gap-y-2 text-xs">
+                <div class="flex flex-col gap-0.5"><dt style="color: var(--pw-text-tertiary);">commands</dt><dd id="stCmdCount" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">—</dd></div>
+                <div class="flex flex-col gap-0.5"><dt style="color: var(--pw-text-tertiary);">passed</dt><dd id="stPassed" style="color: var(--pw-state-success); font-family: var(--pw-font-mono);">—</dd></div>
+                <div class="flex flex-col gap-0.5"><dt style="color: var(--pw-text-tertiary);">failed</dt><dd id="stFailed" style="color: var(--pw-state-error); font-family: var(--pw-font-mono);">—</dd></div>
+                <div class="flex flex-col gap-0.5"><dt style="color: var(--pw-text-tertiary);">skipped</dt><dd id="stSkipped" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);">—</dd></div>
+              </dl>
+              <div class="flex flex-col gap-0.5 min-w-0">
+                <span class="text-xs" style="color: var(--pw-text-tertiary);">headline</span>
+                <span id="stHeadline" class="text-xs break-words" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);">—</span>
+              </div>
+              <div class="flex flex-col gap-1 min-w-0">
+                <span class="text-xs" style="color: var(--pw-text-tertiary);">commands</span>
+                <div id="stCommandsBody" class="rounded-md p-2 text-xs leading-relaxed overflow-auto" style="background-color: #0d1117; color: var(--pw-text-secondary); font-family: var(--pw-font-mono); max-height: 220px;"></div>
+              </div>
+            </div>
 
-            <!-- Changed Files Card -->
-            <section class="rounded-lg overflow-hidden" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
-              <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
-                <div class="flex items-center gap-2">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--pw-text-secondary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                  <h2 class="text-base font-semibold" data-zh="变更文件" data-en="Changed Files" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">变更文件</h2>
-                </div>
-                <span id="cfCountBadge" class="hidden text-xs px-2 py-0.5 rounded-md whitespace-nowrap" style="color: var(--pw-text-tertiary); background-color: var(--pw-bg-hover); font-family: var(--pw-font-mono);">—</span>
+            <!-- Safe Diff Summary -->
+            <div class="rounded-lg p-4 flex flex-col gap-3" style="background-color: var(--pw-bg); border: 1px solid var(--pw-border-subtle);">
+              <div class="flex items-center justify-between">
+                <h3 class="text-sm font-semibold" data-zh="变更摘要" data-en="Safe Diff Summary" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">变更摘要 (safe_diff_summary)</h3>
+                <span id="sdPatchMode" class="text-xs px-2 py-0.5 rounded-md whitespace-nowrap" style="color: var(--pw-text-tertiary); background-color: var(--pw-bg-hover); font-family: var(--pw-font-mono);">—</span>
               </div>
-              <div id="cfEmpty" class="px-4 py-8 text-center text-sm" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="暂无变更文件记录" data-en="No changed-files record">暂无变更文件记录</div>
-              <div id="cfBody" class="hidden px-4 py-3 flex flex-col gap-3">
-                <!-- file_stats summary row -->
-                <div id="cfStatsRow" class="hidden grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs"></div>
-                <!-- changed files list (truncated) -->
-                <div id="cfList" class="rounded-md p-2 text-xs leading-relaxed overflow-auto" style="background-color: #0d1117; color: var(--pw-text-secondary); font-family: var(--pw-font-mono); max-height: 320px;"></div>
+              <dl class="grid grid-cols-4 gap-x-3 gap-y-2 text-xs">
+                <div class="flex flex-col gap-0.5"><dt style="color: var(--pw-text-tertiary);">files</dt><dd id="sdChangedTotal" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">—</dd></div>
+                <div class="flex flex-col gap-0.5"><dt style="color: var(--pw-text-tertiary);">additions</dt><dd id="sdAdditions" style="color: var(--pw-state-success); font-family: var(--pw-font-mono);">—</dd></div>
+                <div class="flex flex-col gap-0.5"><dt style="color: var(--pw-text-tertiary);">deletions</dt><dd id="sdDeletions" style="color: var(--pw-state-error); font-family: var(--pw-font-mono);">—</dd></div>
+                <div class="flex flex-col gap-0.5"><dt style="color: var(--pw-text-tertiary);">diff_available</dt><dd id="sdDiffAvailable" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);">—</dd></div>
+              </dl>
+              <div id="sdTruncatedBlock" class="hidden text-xs" style="color: var(--pw-state-warning); font-family: var(--pw-font-mono);">⚠ diff_truncated / large_diff_omitted</div>
+              <div class="flex flex-col gap-1 min-w-0">
+                <span class="text-xs" style="color: var(--pw-text-tertiary);">files (path · change · kind)</span>
+                <div id="sdFilesBody" class="rounded-md p-2 text-xs leading-relaxed overflow-auto" style="background-color: #0d1117; color: var(--pw-text-secondary); font-family: var(--pw-font-mono); max-height: 220px;"></div>
               </div>
-            </section>
+              <div id="sdHygieneBlock" class="hidden flex flex-col gap-0.5 min-w-0">
+                <span class="text-xs" style="color: var(--pw-text-tertiary);">artifact_hygiene_counts</span>
+                <pre id="sdHygiene" class="text-xs whitespace-pre-wrap break-all" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);"></pre>
+              </div>
+            </div>
 
-            <!-- Verify Log Card -->
-            <section class="rounded-lg overflow-hidden" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
-              <div class="flex items-center gap-2 px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--pw-text-secondary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-                <h2 class="text-base font-semibold" data-zh="验证日志" data-en="Verify Log" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">验证日志</h2>
+            <!-- Safe Audit -->
+            <div class="rounded-lg p-4 flex flex-col gap-3" style="background-color: var(--pw-bg); border: 1px solid var(--pw-border-subtle);">
+              <div class="flex items-center justify-between">
+                <h3 class="text-sm font-semibold" data-zh="审计结论" data-en="Safe Audit" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">审计结论 (safe_audit)</h3>
+                <span id="saVerdictBadge" class="text-xs px-2 py-0.5 rounded-md whitespace-nowrap" style="color: var(--pw-text-tertiary); background-color: var(--pw-bg-hover); font-family: var(--pw-font-mono);">—</span>
               </div>
-              <div id="verifyLogEmpty" class="px-4 py-8 text-center text-sm" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="暂无验证日志" data-en="No verify log">暂无验证日志</div>
-              <pre id="verifyLogContent" class="hidden px-4 py-3 text-xs leading-relaxed overflow-x-auto whitespace-pre-wrap break-all" style="background-color: #0d1117; color: var(--pw-text-secondary); font-family: var(--pw-font-mono); max-height: 320px; overflow-y: auto;"></pre>
-            </section>
+              <dl class="grid grid-cols-3 gap-x-3 gap-y-2 text-xs">
+                <div class="flex flex-col gap-0.5"><dt style="color: var(--pw-text-tertiary);">pass</dt><dd id="saCountsPass" style="color: var(--pw-state-success); font-family: var(--pw-font-mono);">—</dd></div>
+                <div class="flex flex-col gap-0.5"><dt style="color: var(--pw-text-tertiary);">warn</dt><dd id="saCountsWarn" style="color: var(--pw-state-warning); font-family: var(--pw-font-mono);">—</dd></div>
+                <div class="flex flex-col gap-0.5"><dt style="color: var(--pw-text-tertiary);">fail</dt><dd id="saCountsFail" style="color: var(--pw-state-error); font-family: var(--pw-font-mono);">—</dd></div>
+              </dl>
+              <div class="flex flex-col gap-0.5 min-w-0">
+                <span class="text-xs" style="color: var(--pw-text-tertiary);">acceptance.verdict / status</span>
+                <span id="saAccVerdict" class="text-xs break-words" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);">—</span>
+              </div>
+              <div class="flex flex-col gap-0.5 min-w-0">
+                <span class="text-xs" style="color: var(--pw-text-tertiary);">acceptance.reason</span>
+                <span id="saAccReason" class="text-xs break-words" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);">—</span>
+              </div>
+              <div class="flex flex-col gap-0.5 min-w-0">
+                <span class="text-xs" style="color: var(--pw-text-tertiary);">next_suggested_task</span>
+                <span id="saAccNextTask" class="text-xs break-words" style="color: var(--pw-accent); font-family: var(--pw-font-mono);">—</span>
+              </div>
+              <div id="saFailChecksBlock" class="hidden flex flex-col gap-0.5 min-w-0">
+                <span class="text-xs" style="color: var(--pw-state-error);">fail_checks</span>
+                <pre id="saFailChecks" class="rounded-md p-2 text-xs whitespace-pre-wrap break-all" style="background-color: var(--pw-state-error-bg); color: var(--pw-state-error); font-family: var(--pw-font-mono); max-height: 120px; overflow-y: auto;"></pre>
+              </div>
+              <div id="saManualBlock" class="hidden text-xs" style="color: var(--pw-state-warning); font-family: var(--pw-font-mono);">⚠ manual_verification_required</div>
+              <div id="saActionsBlock" class="hidden flex flex-col gap-0.5 min-w-0">
+                <span class="text-xs" style="color: var(--pw-text-tertiary);">recommended_next_actions</span>
+                <pre id="saActions" class="text-xs whitespace-pre-wrap break-all" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);"></pre>
+              </div>
+            </div>
 
           </div>
+        </section>
 
-          <!-- Right Column (~42%) -->
-          <div class="lg:col-span-5 flex flex-col gap-6">
+        <!-- ===== Advanced Section (collapsed by default; full content loaded ON DEMAND) ===== -->
+        <details class="rounded-lg overflow-hidden" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
+          <summary class="flex items-center gap-2 px-5 py-4 cursor-pointer select-none" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--pw-text-secondary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            <span class="text-base font-semibold" data-zh="高级" data-en="Advanced">高级</span>
+            <span class="text-xs px-2 py-0.5 rounded-md whitespace-nowrap" style="color: var(--pw-state-warning); background-color: var(--pw-state-warning-bg); font-family: var(--pw-font-mono);">⚠️ may contain large output</span>
+          </summary>
+          <div class="flex flex-col gap-4 px-5 pb-5">
+            <p class="text-xs" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="以下内容仅在点击时按需加载，可能包含完整 stdout/stderr/diff 等较大输出。" data-en="The following content is loaded on demand only and may contain full stdout/stderr/diff.">以下内容仅在点击时按需加载，可能包含完整 stdout/stderr/diff 等较大输出。</p>
 
-            <!-- Result Summary Card -->
-            <section class="rounded-lg p-5" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
-              <h2 class="text-base font-semibold mb-4" data-zh="结果摘要" data-en="Result Summary" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">结果摘要</h2>
-              <div class="flex flex-col gap-3">
-                <div class="flex items-center justify-between text-sm">
-                  <span style="color: var(--pw-text-secondary);" data-zh="任务状态" data-en="Status">任务状态</span>
-                  <span id="rsStatus" class="font-semibold" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">—</span>
-                </div>
-                <div class="flex items-center justify-between text-sm">
-                  <span style="color: var(--pw-text-secondary);" data-zh="验证状态" data-en="Verify Status">验证状态</span>
-                  <span id="rsVerifyStatus" class="font-semibold" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">—</span>
-                </div>
-                <div id="rsSummaryBlock" class="hidden rounded-md p-3 text-xs leading-relaxed" style="background-color: var(--pw-bg); border: 1px solid var(--pw-border-subtle); color: var(--pw-text-secondary); font-family: var(--pw-font-sans);">
-                  <span id="rsSummary" class="break-all whitespace-pre-wrap"></span>
-                </div>
+            <!-- Advanced: full result -->
+            <div class="flex flex-col gap-2">
+              <div class="flex items-center gap-2 flex-wrap">
+                <button id="advBtnResult" class="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors" style="background-color: var(--pw-bg-hover); color: var(--pw-text-primary); border: 1px solid var(--pw-border-subtle); font-family: var(--pw-font-sans);">
+                  <svg id="advSpinnerResult" class="hidden pw-spin" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></svg>
+                  <span data-zh="加载完整结果 (get_result)" data-en="Load full result (get_result)">加载完整结果 (get_result)</span>
+                </button>
+                <span class="text-xs" style="color: var(--pw-state-warning); font-family: var(--pw-font-mono);">⚠️ Advanced view: may contain large output</span>
               </div>
-            </section>
+              <pre id="advPreResult" class="hidden px-4 py-3 text-xs leading-relaxed overflow-x-auto whitespace-pre-wrap break-all" style="background-color: #0d1117; color: var(--pw-text-secondary); font-family: var(--pw-font-mono); max-height: 520px; overflow-y: auto;"></pre>
+            </div>
 
-            <!-- Audit Results Card -->
-            <section class="rounded-lg p-5" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
-              <div class="flex items-center justify-between mb-4">
-                <h2 class="text-base font-semibold" data-zh="审计结果" data-en="Audit Result" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">审计结果</h2>
-                <span id="auditVerdictBadge" class="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium whitespace-nowrap" style="background-color: var(--pw-bg-hover); color: var(--pw-text-tertiary); border: 1px solid var(--pw-border-subtle);">—</span>
+            <!-- Advanced: full test log -->
+            <div class="flex flex-col gap-2">
+              <div class="flex items-center gap-2 flex-wrap">
+                <button id="advBtnTestLog" class="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors" style="background-color: var(--pw-bg-hover); color: var(--pw-text-primary); border: 1px solid var(--pw-border-subtle); font-family: var(--pw-font-sans);">
+                  <svg id="advSpinnerTestLog" class="hidden pw-spin" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></svg>
+                  <span data-zh="加载完整测试日志 (get_test_log)" data-en="Load full test log (get_test_log)">加载完整测试日志 (get_test_log)</span>
+                </button>
+                <span class="text-xs" style="color: var(--pw-state-warning); font-family: var(--pw-font-mono);">⚠️ Advanced view: may contain large output</span>
               </div>
-              <div class="flex flex-col gap-3">
-                <div class="flex items-center justify-between text-sm">
-                  <span style="color: var(--pw-text-secondary);" data-zh="范围变更" data-en="Scope Changes">范围变更</span>
-                  <span id="auditScope" class="font-semibold" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">—</span>
-                </div>
-                <div class="flex items-center justify-between text-sm">
-                  <span style="color: var(--pw-text-secondary);" data-zh="检查时间" data-en="Checked At">检查时间</span>
-                  <span id="auditCheckedAt" class="truncate" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);">—</span>
-                </div>
-                <div id="auditEmptyHint" class="text-xs" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="暂无审计记录" data-en="No audit record yet">暂无审计记录</div>
-              </div>
-            </section>
+              <pre id="advPreTestLog" class="hidden px-4 py-3 text-xs leading-relaxed overflow-x-auto whitespace-pre-wrap break-all" style="background-color: #0d1117; color: var(--pw-text-secondary); font-family: var(--pw-font-mono); max-height: 520px; overflow-y: auto;"></pre>
+            </div>
 
-            <!-- Independent Review Card (audit_task artifact) -->
-            <section class="rounded-lg overflow-hidden" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
-              <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
-                <div class="flex items-center gap-2">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--pw-text-secondary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-                  <h2 class="text-base font-semibold" data-zh="独立审计报告" data-en="Independent Review" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">独立审计报告</h2>
-                </div>
-                <span id="reviewVerdictBadge" class="text-xs px-2 py-0.5 rounded-md whitespace-nowrap" style="color: var(--pw-text-tertiary); background-color: var(--pw-bg-hover); font-family: var(--pw-font-mono);">—</span>
+            <!-- Advanced: full diff -->
+            <div class="flex flex-col gap-2">
+              <div class="flex items-center gap-2 flex-wrap">
+                <button id="advBtnDiff" class="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors" style="background-color: var(--pw-bg-hover); color: var(--pw-text-primary); border: 1px solid var(--pw-border-subtle); font-family: var(--pw-font-sans);">
+                  <svg id="advSpinnerDiff" class="hidden pw-spin" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></svg>
+                  <span data-zh="加载完整 diff (get_diff)" data-en="Load full diff (get_diff)">加载完整 diff (get_diff)</span>
+                </button>
+                <span class="text-xs" style="color: var(--pw-state-warning); font-family: var(--pw-font-mono);">⚠️ Advanced view: may contain large output</span>
               </div>
-              <div id="reviewEmpty" class="px-4 py-8 text-center text-sm" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="尚未运行 audit_task" data-en="audit_task not run yet">尚未运行 audit_task</div>
-              <pre id="reviewContent" class="hidden px-4 py-3 text-xs leading-relaxed overflow-x-auto whitespace-pre-wrap break-all" style="background-color: #0d1117; color: var(--pw-text-secondary); font-family: var(--pw-font-mono); max-height: 320px; overflow-y: auto;"></pre>
-            </section>
+              <pre id="advPreDiff" class="hidden px-4 py-3 text-xs leading-relaxed overflow-x-auto whitespace-pre-wrap break-all" style="background-color: #0d1117; color: var(--pw-text-secondary); font-family: var(--pw-font-mono); max-height: 520px; overflow-y: auto;"></pre>
+            </div>
 
-            <!-- Verification Summary Card -->
-            <section class="rounded-lg p-5" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
-              <h2 class="text-base font-semibold mb-4" data-zh="验证摘要" data-en="Verification Summary" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">验证摘要</h2>
-              <div class="flex flex-col gap-3">
-                <div class="flex items-center justify-between text-sm">
-                  <span style="color: var(--pw-text-secondary);" data-zh="验证状态" data-en="Status">验证状态</span>
-                  <span id="vsStatus" class="font-semibold" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">—</span>
-                </div>
-                <div class="flex items-center justify-between text-sm">
-                  <span style="color: var(--pw-text-secondary);" data-zh="检查时间" data-en="Checked At">检查时间</span>
-                  <span id="vsCheckedAt" class="truncate" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);">—</span>
-                </div>
-                <div id="vsCommandsBlock" class="hidden rounded-md p-2 text-xs leading-relaxed" style="background-color: var(--pw-bg); border: 1px solid var(--pw-border-subtle); color: var(--pw-text-secondary); font-family: var(--pw-font-mono);">
-                  <div class="text-xs mb-1" style="color: var(--pw-text-tertiary);" data-zh="验证命令" data-en="Commands">验证命令</div>
-                  <pre id="vsCommands" class="whitespace-pre-wrap break-all"></pre>
-                </div>
-                <div id="vsEmptyHint" class="text-xs" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="暂无验证摘要" data-en="No verification summary">暂无验证摘要</div>
+            <!-- Advanced: full audit_task review -->
+            <div class="flex flex-col gap-2">
+              <div class="flex items-center gap-2 flex-wrap">
+                <button id="advBtnAudit" class="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors" style="background-color: var(--pw-accent-muted); color: var(--pw-accent); border: 1px solid rgba(45, 212, 168, 0.3); font-family: var(--pw-font-sans);">
+                  <svg id="advSpinnerAudit" class="hidden pw-spin" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></svg>
+                  <span data-zh="运行 audit_task 完整审计" data-en="Run audit_task full review">运行 audit_task 完整审计</span>
+                </button>
+                <span class="text-xs" style="color: var(--pw-state-warning); font-family: var(--pw-font-mono);">⚠️ Advanced view: may contain large output</span>
               </div>
-            </section>
-
-            <!-- Warnings / Errors Card -->
-            <section class="rounded-lg overflow-hidden" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
-              <div class="flex items-center gap-2 px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--pw-text-secondary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                <h2 class="text-base font-semibold" data-zh="警告 / 错误" data-en="Warnings / Errors" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">警告 / 错误</h2>
-              </div>
-              <div id="weEmpty" class="px-4 py-6 text-center text-sm" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="无警告或错误" data-en="No warnings or errors">无警告或错误</div>
-              <div id="weBody" class="hidden px-4 py-3 flex flex-col gap-3">
-                <div id="weWarningsBlock" class="hidden">
-                  <div class="text-xs mb-1.5 font-medium" style="color: var(--pw-state-warning);" data-zh="警告" data-en="Warnings">警告</div>
-                  <div id="weWarnings" class="rounded-md p-2 text-xs leading-relaxed" style="background-color: var(--pw-state-warning-bg); color: var(--pw-state-warning); font-family: var(--pw-font-mono);"></div>
-                </div>
-                <div id="weErrorsBlock" class="hidden">
-                  <div class="text-xs mb-1.5 font-medium" style="color: var(--pw-state-error);" data-zh="错误" data-en="Errors">错误</div>
-                  <div id="weErrors" class="rounded-md p-2 text-xs leading-relaxed" style="background-color: var(--pw-state-error-bg); color: var(--pw-state-error); font-family: var(--pw-font-mono);"></div>
-                </div>
-              </div>
-            </section>
-
-            <!-- Test Log Card -->
-            <section class="rounded-lg overflow-hidden" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
-              <div class="flex items-center gap-2 px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--pw-text-secondary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-                <h2 class="text-base font-semibold" data-zh="测试日志" data-en="Test Log" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">测试日志</h2>
-              </div>
-              <div id="logEmpty" class="px-4 py-8 text-center text-sm" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="暂无测试日志" data-en="No test log available">暂无测试日志</div>
-              <pre id="logContent" class="hidden px-4 py-3 text-xs leading-relaxed overflow-x-auto whitespace-pre-wrap break-all" style="background-color: #0d1117; color: var(--pw-text-secondary); font-family: var(--pw-font-mono); max-height: 480px; overflow-y: auto;"></pre>
-            </section>
-
+              <pre id="advPreAudit" class="hidden px-4 py-3 text-xs leading-relaxed overflow-x-auto whitespace-pre-wrap break-all" style="background-color: #0d1117; color: var(--pw-text-secondary); font-family: var(--pw-font-mono); max-height: 520px; overflow-y: auto;"></pre>
+            </div>
           </div>
-
-        </div>
+        </details>
 
       </div>
 
@@ -705,311 +721,171 @@ html.dark {
         show($('detailContent'));
       }
 
-      // ---- Render task detail ----
-      function renderDetail(data) {
-        var taskId = data.task_id || '—';
+      // ---- Render Safe Summary (from 4 safe endpoints) ----
+      // renderHeader populates the Task Header Card from safe_result
+      function renderHeader(taskId, safeResult) {
         text($('breadcrumbId'), taskId);
         text($('hdrTaskId'), taskId);
 
-        // Status
-        var status = (data.status && data.status.status) || data.status_status || null;
+        var status = safeResult.status || null;
         var statusMeta = getStatusMeta(status);
         text($('hdrStatusText'), statusMeta.text);
         applyBadgeColors($('hdrStatusBadge'), statusMeta.color);
 
-        // Phase
-        var phase = (data.status && data.status.phase) || null;
-        text($('hdrPhase'), getPhaseLabel(phase));
+        text($('hdrPhase'), getPhaseLabel(safeResult.phase));
 
-        // Agent
-        var agent = (data.status && data.status.agent) || null;
-        text($('hdrAgent'), agent || '—');
+        // repo_path from safe_result
+        text($('hdrRepoPath'), safeResult.repo_path || '—');
 
-        // Times
-        var createdAt = (data.status && data.status.created_at) || null;
-        var updatedAt = (data.status && data.status.updated_at) || null;
-        text($('hdrCreatedAt'), formatTime(createdAt));
-        text($('hdrUpdatedAt'), formatTime(updatedAt));
+        // created_at/updated_at not available from safe endpoints; keep placeholder
+        text($('hdrCreatedAt'), '—');
+        text($('hdrUpdatedAt'), '—');
 
-        // Test command + timeout
-        var testCommand = (data.status && data.status.test_command) || null;
-        text($('hdrTestCommand'), testCommand || '—');
-        var timeoutSeconds = (data.status && data.status.timeout_seconds);
-        text($('hdrTimeout'), (timeoutSeconds === null || timeoutSeconds === undefined) ? '—' : String(timeoutSeconds));
+        text($('hdrTestCommand'), '—');
+        text($('hdrTimeout'), '—');
+        text($('hdrAgent'), '—');
+        text($('hdrVerifyCommands'), '—');
+        text($('hdrPlanId'), '—');
 
-        // Code metadata
-        var repoPath = (data.status && data.status.repo_path) || null;
-        text($('hdrRepoPath'), repoPath || '—');
-
-        var verifyCommands = (data.status && data.status.verify_commands) || null;
-        text($('hdrVerifyCommands'), renderListOrJoin(verifyCommands));
-
-        var planId = (data.status && data.status.plan_id) || null;
-        text($('hdrPlanId'), planId || '—');
-
-        // Error block
-        var statusError = (data.status && data.status.error) || null;
-        if (statusError) {
-          text($('hdrErrorText'), escapeText(statusError));
+        if (safeResult.errors && safeResult.errors.length > 0) {
+          text($('hdrErrorText'), safeResult.errors.join('\n'));
+          show($('hdrErrorBlock'));
+        } else if (safeResult.failure_reason) {
+          text($('hdrErrorText'), safeResult.failure_reason);
           show($('hdrErrorBlock'));
         } else {
           hide($('hdrErrorBlock'));
         }
-
-        // ---- Execution status (runtime) ----
-        var runtime = data.runtime || null;
-        var rtPhase = runtime ? (runtime.phase || null) : null;
-        text($('rtPhase'), getPhaseLabel(rtPhase));
-        var rtHeartbeat = runtime ? (runtime.last_heartbeat_at || null) : null;
-        text($('rtHeartbeat'), formatTime(rtHeartbeat));
-        var rtCmd = runtime ? (runtime.current_command || null) : null;
-        text($('rtCurrentCmd'), rtCmd || '—');
-
-        // ---- Result summary ----
-        var result = data.result || null;
-        var rsStatus = result ? (result.status || null) : null;
-        text($('rsStatus'), rsStatus || '—');
-        var rsVerify = result ? (result.verify_status || null) : null;
-        text($('rsVerifyStatus'), rsVerify || '—');
-        var rsSummary = result ? (result.summary || null) : null;
-        if (rsSummary) {
-          text($('rsSummary'), escapeText(rsSummary));
-          show($('rsSummaryBlock'));
-        } else {
-          hide($('rsSummaryBlock'));
-        }
-
-        // ---- Audit ----
-        var audit = data.audit || null;
-        var verdict = audit ? (audit.verdict || audit.decision || null) : null;
-        applyVerdictBadge($('auditVerdictBadge'), verdict);
-        var scopeChanges = audit ? (audit.scope_changes || null) : null;
-        text($('auditScope'), scopeChanges || '—');
-        var checkedAt = audit ? (audit.checked_at || null) : null;
-        text($('auditCheckedAt'), formatTime(checkedAt));
-        if (audit) {
-          hide($('auditEmptyHint'));
-        } else {
-          show($('auditEmptyHint'));
-        }
-
-        // ---- Diff preview ----
-        // API returns diff_patch (snake_case); also accept diff/testLog/test_log defensively.
-        var diff = data.diff_patch || data.diff || data.diffPatch || null;
-        var diffEl = $('diffContent');
-        var diffEmpty = $('diffEmpty');
-        if (diff) {
-          text(diffEl, escapeText(diff));
-          show(diffEl);
-          hide(diffEmpty);
-        } else {
-          hide(diffEl);
-          show(diffEmpty);
-        }
-
-        // ---- Test log ----
-        var testLog = data.test_log || data.testLog || null;
-        var logEl = $('logContent');
-        var logEmpty = $('logEmpty');
-        if (testLog) {
-          text(logEl, escapeText(testLog));
-          show(logEl);
-          hide(logEmpty);
-        } else {
-          hide(logEl);
-          show(logEmpty);
-        }
-
-        // ---- Changed files ----
-        renderChangedFiles(data.changed_files, data.file_stats);
-
-        // ---- Verify log ----
-        var verifyLog = data.verify_log || null;
-        var vlEl = $('verifyLogContent');
-        var vlEmpty = $('verifyLogEmpty');
-        if (verifyLog) {
-          text(vlEl, escapeText(verifyLog));
-          show(vlEl);
-          hide(vlEmpty);
-        } else {
-          hide(vlEl);
-          show(vlEmpty);
-        }
-
-        // ---- Independent review (audit_task artifact) ----
-        var review = data.independent_review || null;
-        var rvContent = review ? (review.content || null) : null;
-        var rvVerdict = review ? (review.verdict || null) : null;
-        var rvEl = $('reviewContent');
-        var rvEmpty = $('reviewEmpty');
-        var rvBadge = $('reviewVerdictBadge');
-        if (rvContent) {
-          text(rvEl, escapeText(rvContent));
-          show(rvEl);
-          hide(rvEmpty);
-        } else {
-          hide(rvEl);
-          show(rvEmpty);
-        }
-        applyVerdictBadge(rvBadge, rvVerdict);
-
-        // ---- Verification summary ----
-        renderVerificationSummary(data.verification_summary);
-
-        // ---- Warnings / Errors ----
-        renderWarningsErrors(data.warnings, data.errors);
-
-        // ---- Stale / Reconcile banner ----
-        renderStaleBanner(data.stale, data.reconcile);
-
-        showDetail();
       }
 
-      // ---- Render: changed files ----
-      function renderChangedFiles(changedFiles, fileStats) {
-        var emptyEl = $('cfEmpty');
-        var bodyEl = $('cfBody');
-        var listEl = $('cfList');
-        var statsEl = $('cfStatsRow');
-        var badgeEl = $('cfCountBadge');
+      // Render safe_result card
+      function renderSafeResult(sr) {
+        text($('srStatusBadge'), sr.status || '—');
+        applyBadgeColors($('srStatusBadge'), getStatusMeta(sr.status).color);
 
-        if (!changedFiles) {
-          hide(bodyEl);
-          hide(badgeEl);
-          show(emptyEl);
-          return;
-        }
+        text($('srTerminal'), sr.terminal ? 'true' : 'false');
+        text($('srAcceptance'), sr.acceptance_status || '—');
+        text($('srChangedTotal'), sr.changed_files_total != null ? String(sr.changed_files_total) : '—');
+        text($('srOosTotal'), sr.out_of_scope_changes_total != null ? String(sr.out_of_scope_changes_total) : '—');
 
-        // Build a list of paths to display.
-        var paths = [];
-        if (Array.isArray(changedFiles.files)) {
-          for (var i = 0; i < changedFiles.files.length; i++) {
-            var f = changedFiles.files[i];
-            if (typeof f === 'string') paths.push(f);
-            else if (f && typeof f === 'object' && typeof f.path === 'string') paths.push(f.path);
-          }
-        }
-        if (paths.length === 0 && Array.isArray(changedFiles.changed_files)) {
-          for (var j = 0; j < changedFiles.changed_files.length; j++) {
-            var cf = changedFiles.changed_files[j];
-            if (typeof cf === 'string') paths.push(cf);
-            else if (cf && typeof cf === 'object' && typeof cf.path === 'string') paths.push(cf.path);
-          }
-        }
+        var verifyHeadline = (sr.verification && sr.verification.headline) || null;
+        text($('srVerifyHeadline'), verifyHeadline || '—');
 
-        // file_stats summary
-        var statsHtml = '';
-        if (fileStats && typeof fileStats === 'object') {
-          var counts = fileStats.counts || fileStats;
-          var statItems = [
-            { label: 'modified', value: counts.modified != null ? counts.modified : null },
-            { label: 'added', value: counts.added != null ? counts.added : null },
-            { label: 'deleted', value: counts.deleted != null ? counts.deleted : null },
-            { label: 'untracked', value: counts.untracked != null ? counts.untracked : null }
-          ];
-          var hasAny = false;
-          statsHtml = statItems.map(function (it) {
-            if (it.value === null || it.value === undefined) return '';
-            hasAny = true;
-            return '<div class="rounded-md px-2 py-1.5" style="background-color: var(--pw-bg); border: 1px solid var(--pw-border-subtle);">'
-              + '<div class="text-xs" style="color: var(--pw-text-tertiary);">' + escapeHtml(it.label) + '</div>'
-              + '<div class="text-sm font-semibold" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">' + escapeHtml(String(it.value)) + '</div>'
-              + '</div>';
-          }).join('');
-          if (hasAny) {
-            show(statsEl);
-            statsEl.innerHTML = statsHtml;
-          } else {
-            hide(statsEl);
-          }
+        if (sr.failure_reason || sr.failed_command) {
+          text($('srFailureReason'), sr.failure_reason || '—');
+          text($('srFailedCommand'), sr.failed_command || '—');
+          show($('srFailureBlock'));
         } else {
-          hide(statsEl);
+          hide($('srFailureBlock'));
         }
 
-        if (paths.length === 0) {
-          hide(bodyEl);
-          hide(badgeEl);
-          show(emptyEl);
-          return;
-        }
+        text($('srNextAction'), sr.next_action || '—');
 
-        // Render path list (cap at 500 to avoid rendering huge DOM).
-        var displayCount = Math.min(paths.length, 500);
-        var listHtml = '';
-        for (var k = 0; k < displayCount; k++) {
-          listHtml += escapeHtml(paths[k]) + '\n';
-        }
-        if (paths.length > displayCount) {
-          listHtml += '\n... (' + (paths.length - displayCount) + ' more truncated)';
-        }
-        listEl.textContent = listHtml;
-
-        // Badge
-        text(badgeEl, paths.length + ' 个文件');
-        show(badgeEl);
-
-        hide(emptyEl);
-        show(bodyEl);
-      }
-
-      // ---- Render: verification summary ----
-      function renderVerificationSummary(vs) {
-        var statusEl = $('vsStatus');
-        var checkedEl = $('vsCheckedAt');
-        var cmdsBlock = $('vsCommandsBlock');
-        var cmdsEl = $('vsCommands');
-        var emptyHint = $('vsEmptyHint');
-
-        if (!vs) {
-          text(statusEl, '—');
-          text(checkedEl, '—');
-          hide(cmdsBlock);
-          show(emptyHint);
-          return;
-        }
-        hide(emptyHint);
-        text(statusEl, vs.status || '—');
-        text(checkedEl, formatTime(vs.checked_at));
-        if (Array.isArray(vs.commands) && vs.commands.length > 0) {
-          text(cmdsEl, vs.commands.map(function (c) { return JSON.stringify(c); }).join('\n'));
-          show(cmdsBlock);
+        if (sr.execution_blocked || sr.pending_reason) {
+          text($('srPendingReason'), sr.pending_reason || (sr.execution_blocked ? 'blocked' : '—'));
+          show($('srBlockedBlock'));
         } else {
-          hide(cmdsBlock);
+          hide($('srBlockedBlock'));
+        }
+
+        if (Array.isArray(sr.warnings) && sr.warnings.length > 0) {
+          $('srWarnings').textContent = sr.warnings.join('\n');
+          show($('srWarningsBlock'));
+        } else {
+          hide($('srWarningsBlock'));
         }
       }
 
-      // ---- Render: warnings / errors ----
-      function renderWarningsErrors(warnings, errors) {
-        var emptyEl = $('weEmpty');
-        var bodyEl = $('weBody');
-        var warnBlock = $('weWarningsBlock');
-        var errBlock = $('weErrorsBlock');
-        var warnEl = $('weWarnings');
-        var errEl = $('weErrors');
+      // Render safe_test_summary card
+      function renderSafeTestSummary(sts) {
+        text($('stStatusBadge'), sts.status || '—');
+        applyBadgeColors($('stStatusBadge'), getStatusMeta(sts.status).color);
 
-        var wList = Array.isArray(warnings) ? warnings : [];
-        var eList = Array.isArray(errors) ? errors : [];
+        text($('stCmdCount'), String(sts.command_count || 0));
+        text($('stPassed'), String(sts.passed_commands || 0));
+        text($('stFailed'), String(sts.failed_commands || 0));
+        text($('stSkipped'), String(sts.skipped_commands || 0));
 
-        if (wList.length === 0 && eList.length === 0) {
-          show(emptyEl);
-          hide(bodyEl);
-          return;
+        text($('stHeadline'), sts.headline || '—');
+
+        var cmds = Array.isArray(sts.commands) ? sts.commands : [];
+        var cmdsHtml = '';
+        for (var i = 0; i < cmds.length; i++) {
+          var cmd = cmds[i];
+          var statusColor = cmd.status === 'passed' ? 'var(--pw-state-success)' : (cmd.status === 'failed' || cmd.status === 'timed_out') ? 'var(--pw-state-error)' : 'var(--pw-text-secondary)';
+          cmdsHtml += '<div style="margin-bottom:4px;"><span style="color:' + statusColor + ';">' + escapeHtml(cmd.status || 'unknown') + '</span> <span style="color:var(--pw-text-tertiary);">exit=' + (cmd.exit_code !== null ? cmd.exit_code : '—') + '</span> <span style="color:var(--pw-text-primary);">' + escapeHtml(cmd.command || '') + '</span></div>';
         }
-        hide(emptyEl);
-        show(bodyEl);
+        if (!cmdsHtml) cmdsHtml = '<div style="color:var(--pw-text-tertiary);">—</div>';
+        $('stCommandsBody').innerHTML = cmdsHtml;
+      }
 
-        if (wList.length > 0) {
-          warnEl.textContent = wList.map(function (w) { return String(w); }).join('\n---\n');
-          show(warnBlock);
+      // Render safe_diff_summary card
+      function renderSafeDiffSummary(sds) {
+        text($('sdPatchMode'), sds.patch_mode || '—');
+        text($('sdChangedTotal'), String(sds.changed_files_total || 0));
+        text($('sdAdditions'), String(sds.additions || 0));
+        text($('sdDeletions'), String(sds.deletions || 0));
+        text($('sdDiffAvailable'), sds.diff_available ? 'true' : 'false');
+
+        if (sds.diff_truncated || sds.large_diff_omitted) {
+          show($('sdTruncatedBlock'));
         } else {
-          hide(warnBlock);
+          hide($('sdTruncatedBlock'));
         }
 
-        if (eList.length > 0) {
-          errEl.textContent = eList.map(function (e) { return String(e); }).join('\n---\n');
-          show(errBlock);
+        var files = Array.isArray(sds.files) ? sds.files : [];
+        var filesHtml = '';
+        for (var j = 0; j < files.length; j++) {
+          var f = files[j];
+          var changeColor = (f.change === 'added' || f.change === 'A') ? 'var(--pw-state-success)' : (f.change === 'deleted' || f.change === 'D') ? 'var(--pw-state-error)' : 'var(--pw-accent)';
+          filesHtml += '<div style="margin-bottom:2px;"><span style="color:' + changeColor + ';">' + escapeHtml(f.change || '?') + '</span> <span style="color:var(--pw-text-tertiary);">' + escapeHtml(f.kind || 'file') + '</span> <span style="color:var(--pw-text-primary);">' + escapeHtml(f.path || '') + '</span></div>';
+        }
+        if (!filesHtml) filesHtml = '<div style="color:var(--pw-text-tertiary);">—</div>';
+        $('sdFilesBody').innerHTML = filesHtml;
+
+        if (sds.artifact_hygiene_counts && Object.keys(sds.artifact_hygiene_counts).length > 0) {
+          $('sdHygiene').textContent = JSON.stringify(sds.artifact_hygiene_counts, null, 2);
+          show($('sdHygieneBlock'));
         } else {
-          hide(errBlock);
+          hide($('sdHygieneBlock'));
+        }
+      }
+
+      // Render safe_audit card
+      function renderSafeAudit(sa) {
+        text($('saVerdictBadge'), sa.verdict || '—');
+        applyVerdictBadge($('saVerdictBadge'), sa.verdict);
+
+        var cc = sa.check_counts || {};
+        text($('saCountsPass'), String(cc.pass || 0));
+        text($('saCountsWarn'), String(cc.warn || 0));
+        text($('saCountsFail'), String(cc.fail || 0));
+
+        var acc = sa.acceptance || {};
+        text($('saAccVerdict'), (acc.verdict || '—') + ' / ' + (acc.status || '—'));
+        text($('saAccReason'), acc.reason || '—');
+        text($('saAccNextTask'), acc.next_suggested_task || '—');
+
+        var failChecks = Array.isArray(sa.fail_checks) ? sa.fail_checks : [];
+        if (failChecks.length > 0) {
+          $('saFailChecks').textContent = failChecks.map(function (c) { return c.name || String(c); }).join('\n');
+          show($('saFailChecksBlock'));
+        } else {
+          hide($('saFailChecksBlock'));
+        }
+
+        if (sa.manual_verification_required) {
+          show($('saManualBlock'));
+        } else {
+          hide($('saManualBlock'));
+        }
+
+        var actions = Array.isArray(sa.recommended_next_actions) ? sa.recommended_next_actions : [];
+        if (actions.length > 0) {
+          $('saActions').textContent = actions.join('\n');
+          show($('saActionsBlock'));
+        } else {
+          hide($('saActionsBlock'));
         }
       }
 
@@ -1055,7 +931,7 @@ html.dark {
               alert('运行审计失败: ' + msg);
             } else {
               alert('审计完成。verdict=' + ((r.data && r.data.audit && r.data.audit.verdict) || '—'));
-              loadTask(taskId);
+              loadSafeSummary(taskId);
             }
           })
           .catch(function (err) {
@@ -1089,7 +965,7 @@ html.dark {
             } else {
               var decision = (r.data && r.data.decision) || '—';
               alert('Reconcile 完成: ' + decision);
-              loadTask(taskId);
+              loadSafeSummary(taskId);
             }
           })
           .catch(function (err) {
@@ -1146,45 +1022,167 @@ html.dark {
         } catch (e) { /* ignore */ }
       }
 
-      // ---- API fetch ----
-      function loadTask(taskId) {
-        showLoading();
-        var url = '/api/tasks/' + encodeURIComponent(taskId);
-        fetch(url, {
-          method: 'GET',
-          headers: { 'Accept': 'application/json' },
-          cache: 'no-store'
-        })
+      // ---- Safe summary fetch (4 safe endpoints, parallel; default on init) ----
+      function safeGet(url) {
+        return fetch(url, { method: 'GET', headers: { 'Accept': 'application/json' }, cache: 'no-store' })
           .then(function (res) {
-            if (res.status === 404) {
-              // Task not found
-              return res.text().then(function () {
-                throw new Error('NOT_FOUND');
-              });
-            }
-            if (!res.ok) {
-              return res.text().then(function (body) {
-                throw new Error('HTTP ' + res.status + (body ? (': ' + body.slice(0, 200)) : ''));
-              });
-            }
+            return res.json().then(function (data) {
+              return { ok: res.ok, status: res.status, data: data };
+            });
+          });
+      }
+
+      function loadSafeSummary(taskId) {
+        showLoading();
+        var base = '/api/tasks/' + encodeURIComponent(taskId);
+        Promise.all([
+          safeGet(base + '/safe-result'),
+          safeGet(base + '/safe-test-summary'),
+          safeGet(base + '/safe-diff-summary'),
+          safeGet(base + '/safe-audit')
+        ]).then(function (results) {
+          var safeResult = results[0].data || {};
+          var safeTest = results[1].data || {};
+          var safeDiff = results[2].data || {};
+          var safeAudit = results[3].data || {};
+
+          // If safe-result returned an explicit error and no status, treat as not found.
+          if (safeResult.error && safeResult.status === undefined) {
+            showError('任务不存在', safeResult.error || ('未找到任务 ID: ' + taskId));
+            return;
+          }
+
+          renderHeader(taskId, safeResult);
+          renderSafeResult(safeResult);
+          renderSafeTestSummary(safeTest);
+          renderSafeDiffSummary(safeDiff);
+          renderSafeAudit(safeAudit);
+          showDetail();
+        }).catch(function (err) {
+          var msg = (err && err.message) ? err.message : '未知错误';
+          if (err && err.name === 'TypeError' && /fetch/i.test(msg)) {
+            showError('无法连接服务', '请确认 PatchWarden Control Center 正在运行 (127.0.0.1:8090)');
+          } else {
+            showError('加载失败', msg);
+          }
+        });
+      }
+
+      // ---- Advanced on-demand loaders (full content; only fetched when clicked) ----
+      // HTML id pattern: advBtn<Suffix>, advSpinner<Suffix>, advPre<Suffix>
+      function setAdvLoading(suffix, loading) {
+        var spinner = $('advSpinner' + suffix);
+        var btn = $('advBtn' + suffix);
+        if (spinner) { if (loading) show(spinner); else hide(spinner); }
+        if (btn) { btn.disabled = loading; btn.style.opacity = loading ? '0.6' : ''; }
+      }
+
+      function showAdvPre(suffix, content) {
+        var pre = $('advPre' + suffix);
+        if (!pre) return;
+        pre.textContent = content;
+        show(pre);
+      }
+
+      // Load full result (GET /api/tasks/:taskId) — NOT auto-loaded
+      function loadFullResult(taskId) {
+        setAdvLoading('Result', true);
+        fetch('/api/tasks/' + encodeURIComponent(taskId), { method: 'GET', headers: { 'Accept': 'application/json' }, cache: 'no-store' })
+          .then(function (res) {
+            if (res.status === 404) throw new Error('NOT_FOUND');
+            if (!res.ok) throw new Error('HTTP ' + res.status);
             return res.json();
           })
           .then(function (data) {
-            if (!data || data.error) {
-              throw new Error((data && data.error) ? data.error : '响应缺少任务数据');
+            // Refresh header metadata that is only available from the full endpoint.
+            if (data && data.status) {
+              var s = data.status;
+              text($('hdrAgent'), s.agent || '—');
+              text($('hdrCreatedAt'), formatTime(s.created_at));
+              text($('hdrUpdatedAt'), formatTime(s.updated_at));
+              text($('hdrTestCommand'), s.test_command || '—');
+              text($('hdrTimeout'), (s.timeout_seconds === null || s.timeout_seconds === undefined) ? '—' : String(s.timeout_seconds));
+              text($('hdrVerifyCommands'), renderListOrJoin(s.verify_commands));
+              text($('hdrPlanId'), s.plan_id || '—');
+              if (s.error) {
+                text($('hdrErrorText'), escapeText(s.error));
+                show($('hdrErrorBlock'));
+              }
             }
-            renderDetail(data);
+            if (data && (data.stale || data.reconcile)) {
+              renderStaleBanner(data.stale, data.reconcile);
+            }
+            showAdvPre('Result', JSON.stringify(data, null, 2));
           })
           .catch(function (err) {
-            var msg = (err && err.message) ? err.message : '未知错误';
-            if (msg === 'NOT_FOUND') {
-              showError('任务不存在', '未找到任务 ID: ' + taskId);
-            } else if (err && err.name === 'TypeError' && /fetch/i.test(msg)) {
-              showError('无法连接服务', '请确认 PatchWarden Control Center 正在运行 (127.0.0.1:8090)');
+            var msg = (err && err.message) === 'NOT_FOUND' ? '任务不存在' : ((err && err.message) || '未知错误');
+            showAdvPre('Result', '⚠ ' + msg);
+          })
+          .finally(function () { setAdvLoading('Result', false); });
+      }
+
+      // Load full test log portion (GET /api/tasks/:taskId, extract test_log)
+      function loadFullTestLog(taskId) {
+        setAdvLoading('TestLog', true);
+        fetch('/api/tasks/' + encodeURIComponent(taskId), { method: 'GET', headers: { 'Accept': 'application/json' }, cache: 'no-store' })
+          .then(function (res) {
+            if (res.status === 404) throw new Error('NOT_FOUND');
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+          })
+          .then(function (data) {
+            var testLog = (data && (data.test_log || data.testLog)) || null;
+            showAdvPre('TestLog', testLog ? escapeText(testLog) : '⚠ No test_log available for this task.');
+          })
+          .catch(function (err) {
+            var msg = (err && err.message) === 'NOT_FOUND' ? '任务不存在' : ((err && err.message) || '未知错误');
+            showAdvPre('TestLog', '⚠ ' + msg);
+          })
+          .finally(function () { setAdvLoading('TestLog', false); });
+      }
+
+      // Load full diff portion (GET /api/tasks/:taskId, extract diff_patch/diff)
+      function loadFullDiff(taskId) {
+        setAdvLoading('Diff', true);
+        fetch('/api/tasks/' + encodeURIComponent(taskId), { method: 'GET', headers: { 'Accept': 'application/json' }, cache: 'no-store' })
+          .then(function (res) {
+            if (res.status === 404) throw new Error('NOT_FOUND');
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+          })
+          .then(function (data) {
+            var diff = (data && (data.diff_patch || data.diff || data.diffPatch)) || null;
+            showAdvPre('Diff', diff ? escapeText(diff) : '⚠ No diff available for this task.');
+          })
+          .catch(function (err) {
+            var msg = (err && err.message) === 'NOT_FOUND' ? '任务不存在' : ((err && err.message) || '未知错误');
+            showAdvPre('Diff', '⚠ ' + msg);
+          })
+          .finally(function () { setAdvLoading('Diff', false); });
+      }
+
+      // Run audit_task full review (POST /api/tasks/:taskId/audit with control token)
+      function runFullAuditReview(taskId) {
+        setAdvLoading('Audit', true);
+        postAction('/api/tasks/' + encodeURIComponent(taskId) + '/audit')
+          .then(function (res) {
+            return res.json().then(function (data) { return { ok: res.ok, status: res.status, data: data }; });
+          })
+          .then(function (r) {
+            if (!r.ok) {
+              var msg = (r.data && r.data.error) || ('HTTP ' + r.status);
+              showAdvPre('Audit', '⚠ ' + msg);
             } else {
-              showError('加载失败', msg);
+              showAdvPre('Audit', JSON.stringify(r.data, null, 2));
+              // Refresh the safe-audit card so conclusions stay in sync.
+              safeGet('/api/tasks/' + encodeURIComponent(taskId) + '/safe-audit')
+                .then(function (res2) { if (res2.data && !res2.data.error) renderSafeAudit(res2.data); });
             }
-          });
+          })
+          .catch(function (err) {
+            showAdvPre('Audit', '⚠ ' + ((err && err.message) || '未知错误'));
+          })
+          .finally(function () { setAdvLoading('Audit', false); });
       }
 
       // ---- Entry point ----
@@ -1193,13 +1191,13 @@ html.dark {
       if (!taskId) {
         showError('缺少 task id', '请在 URL 中提供 ?id=<task_id>');
       } else {
-        loadTask(taskId);
+        loadSafeSummary(taskId);
       }
 
       // ---- Action button wiring ----
       var btnRefresh = $('btnRefresh');
       if (btnRefresh) btnRefresh.addEventListener('click', function () {
-        if (taskId) loadTask(taskId);
+        if (taskId) loadSafeSummary(taskId);
       });
       var btnCopyId = $('btnCopyId');
       if (btnCopyId) btnCopyId.addEventListener('click', function () {
@@ -1220,6 +1218,26 @@ html.dark {
         if (!taskId) return;
         if (!confirm('确认 reconcile 该任务？将写入 reconcile 记录（不会删除任务）。')) return;
         runReconcile(taskId);
+      });
+
+      // ---- Advanced section on-demand button wiring ----
+      var advBtnResult = $('advBtnResult');
+      if (advBtnResult) advBtnResult.addEventListener('click', function () {
+        if (taskId) loadFullResult(taskId);
+      });
+      var advBtnTestLog = $('advBtnTestLog');
+      if (advBtnTestLog) advBtnTestLog.addEventListener('click', function () {
+        if (taskId) loadFullTestLog(taskId);
+      });
+      var advBtnDiff = $('advBtnDiff');
+      if (advBtnDiff) advBtnDiff.addEventListener('click', function () {
+        if (taskId) loadFullDiff(taskId);
+      });
+      var advBtnAudit = $('advBtnAudit');
+      if (advBtnAudit) advBtnAudit.addEventListener('click', function () {
+        if (!taskId) return;
+        if (!confirm('确认运行 audit_task 完整审计？')) return;
+        runFullAuditReview(taskId);
       });
     })();
   </script>

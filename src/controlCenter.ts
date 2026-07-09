@@ -30,13 +30,13 @@ import { listTasks, type TaskEntry } from "./tools/listTasks.js";
 import type { AcceptanceStatus } from "./tools/createTask.js";
 import { listAgents, type AgentAvailability } from "./tools/listAgents.js";
 import { readWatcherStatus, type WatcherStatusSnapshot } from "./watcherStatus.js";
-import { redactSensitiveContent } from "./security/contentRedaction.js";
+import { redactSensitiveContent, redactSensitiveValue } from "./security/contentRedaction.js";
 import { guardWorkspacePath } from "./security/pathGuard.js";
 import { auditTask } from "./tools/auditTask.js";
 import { getProjectPolicySummary } from "./policy/projectPolicy.js";
-import { safeDirectSummary } from "./tools/safeViews.js";
-import { toSafeTaskLineage, type TaskLineageRecord } from "./tools/taskLineage.js";
-import { listEvidencePacks, readEvidencePack } from "./tools/evidencePack.js";
+import { safeAudit, safeAuditDirectSession, safeDiffSummary, safeDirectSummary, safeFinalizeDirectSession, safeResult, safeTestSummary } from "./tools/safeViews.js";
+import { toSafeTaskLineage, type SafeTaskLineage, type TaskLineageRecord } from "./tools/taskLineage.js";
+import { exportTaskEvidencePack, listEvidencePacks, readEvidencePack, type SafeEvidencePack } from "./tools/evidencePack.js";
 import { PATCHWARDEN_VERSION, TOOL_SCHEMA_EPOCH } from "./version.js";
 
 // ── Paths ─────────────────────────────────────────────────────────
@@ -799,6 +799,43 @@ function readEvents(limit: number): ControlCenterEvent[] {
   }
 }
 
+// ── Hidden stale task IDs (local UI state) ────────────────────────
+
+function readHiddenStaleIds(): string[] {
+  const p = join(getControlCenterLogDir(), "hidden-stale-ids.json");
+  if (!existsSync(p)) return [];
+  return readJsonFileSafe<string[]>(p) || [];
+}
+
+function writeHiddenStaleIds(ids: string[]): void {
+  const dir = getControlCenterLogDir();
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "hidden-stale-ids.json"), JSON.stringify(ids, null, 2));
+}
+
+// ── Hidden direct session IDs (local UI state) ────────────────────
+
+function readHiddenDirectSessionIds(): string[] {
+  const p = join(getControlCenterLogDir(), "hidden-direct-session-ids.json");
+  if (!existsSync(p)) return [];
+  return readJsonFileSafe<string[]>(p) || [];
+}
+
+function writeHiddenDirectSessionIds(ids: string[]): void {
+  const dir = getControlCenterLogDir();
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "hidden-direct-session-ids.json"), JSON.stringify(ids, null, 2));
+}
+
+function isValidDirectSessionId(sessionId: string): boolean {
+  // Allow alphanumeric, dash, underscore only — reject path traversal and NUL.
+  return (
+    sessionId.length > 0 &&
+    /^[A-Za-z0-9_-]+$/.test(sessionId) &&
+    !sessionId.includes("\0")
+  );
+}
+
 // ── Health suggestions ────────────────────────────────────────────
 
 interface Suggestion {
@@ -997,16 +1034,60 @@ async function handleStatus(res: ServerResponse): Promise<void> {
   }
 }
 
-function handleTasks(res: ServerResponse): void {
+interface TaskFilters {
+  repo_path?: string;
+  status?: string;
+  acceptance_status?: string;
+  agent?: string;
+  warning_type?: string;
+}
+
+function handleTasks(res: ServerResponse, filters?: TaskFilters): void {
   try {
     const result = listTasks({ limit: 100 });
     const watcher = result.watcher;
     const now = Date.now();
-    const augmented = result.tasks.map((t) => augmentTaskWithStale(t, watcher, now));
+    let augmented = result.tasks.map((t) => augmentTaskWithStale(t, watcher, now));
+    // Apply optional filters from query params.
+    if (filters) {
+      if (filters.repo_path) {
+        const filterRepo = filters.repo_path.trim().replace(/\\/g, "/");
+        augmented = augmented.filter((t) => {
+          const taskRepo = String(t.repo_path || ".").replace(/\\/g, "/");
+          const taskResolved = String(t.resolved_repo_path || "").replace(/\\/g, "/");
+          return taskRepo === filterRepo || taskResolved === filterRepo;
+        });
+      }
+      if (filters.status) {
+        augmented = augmented.filter((t) => t.status === filters.status);
+      }
+      if (filters.acceptance_status) {
+        augmented = augmented.filter((t) => {
+          // Tasks without acceptance status only match the "pending" filter when
+          // status is done_by_agent; null acceptance never matches other values.
+          return t.acceptance_status === filters.acceptance_status;
+        });
+      }
+      if (filters.agent) {
+        const filterAgent = filters.agent.toLowerCase();
+        augmented = augmented.filter((t) => String(t.agent || "").toLowerCase() === filterAgent);
+      }
+      if (filters.warning_type) {
+        const wt = filters.warning_type;
+        if (wt === "stale") {
+          augmented = augmented.filter((t) => t.is_stale);
+        } else if (wt === "error") {
+          augmented = augmented.filter((t) => t.error !== null && t.error !== "");
+        } else {
+          // Treat as a specific stale_reason token to match against.
+          augmented = augmented.filter((t) => Array.isArray(t.stale_reasons) && t.stale_reasons.includes(wt));
+        }
+      }
+    }
     const staleCount = augmented.filter((t) => t.is_stale).length;
     sendJson(res, 200, {
       tasks: augmented,
-      total: result.total,
+      total: augmented.length,
       returned: augmented.length,
       watcher,
       stale_count: staleCount,
@@ -1023,6 +1104,39 @@ function handleTasks(res: ServerResponse): void {
   }
 }
 
+function deriveStaleReasonCode(staleReasons: string[]): string {
+  if (staleReasons.length === 0) return "unknown";
+  if (staleReasons.some((r) => r.includes("heartbeat_stale"))) return "heartbeat_stale";
+  if (staleReasons.some((r) => r.includes("config") || r.includes("assessment"))) return "assessment_stale_config";
+  if (staleReasons.some((r) => r.includes("runtime") || r.includes("missing"))) return "runtime_missing";
+  return staleReasons[0];
+}
+
+function staleExplanationFor(reasonCode: string): { explanation: string; next_action: string } {
+  switch (reasonCode) {
+    case "assessment_stale_config":
+      return {
+        explanation: "配置或 tool manifest 已变化，旧 assessment 已过期，需要重新评估或重新创建任务。",
+        next_action: "reconcile or recreate task",
+      };
+    case "heartbeat_stale":
+      return {
+        explanation: "任务心跳已过期，watcher 可能未运行或任务已僵死，建议 reconcile 或 kill。",
+        next_action: "reconcile or kill task",
+      };
+    case "runtime_missing":
+      return {
+        explanation: "任务运行时文件缺失，可能被外部清理，建议重新创建任务。",
+        next_action: "recreate task",
+      };
+    default:
+      return {
+        explanation: "任务状态异常",
+        next_action: "review task",
+      };
+  }
+}
+
 function handleStaleTasks(res: ServerResponse): void {
   try {
     const result = listTasks({ limit: 100 });
@@ -1030,7 +1144,12 @@ function handleStaleTasks(res: ServerResponse): void {
     const now = Date.now();
     const staleTasks = result.tasks
       .map((t) => augmentTaskWithStale(t, watcher, now))
-      .filter((t) => t.is_stale);
+      .filter((t) => t.is_stale)
+      .map((t) => {
+        const reasonCode = deriveStaleReasonCode(t.stale_reasons);
+        const { explanation, next_action } = staleExplanationFor(reasonCode);
+        return { ...t, reason_code: reasonCode, explanation, next_action };
+      });
     sendJson(res, 200, {
       stale_tasks: staleTasks,
       total: staleTasks.length,
@@ -1041,6 +1160,46 @@ function handleStaleTasks(res: ServerResponse): void {
   } catch (err) {
     sendJson(res, 200, { stale_tasks: [], total: 0, reason: errorMessage(err) });
   }
+}
+
+interface LineageSummary {
+  iterations: number;
+  main_task_count: number;
+  fix_task_count: number;
+  cleanup_task_count: number;
+  direct_verification: {
+    session_id: string;
+    status: string;
+    audit_decision: string;
+    command_count: number;
+    passed_commands: number;
+    failed_commands: number;
+  } | null;
+  warnings_count: number;
+}
+
+function augmentLineageSummary(safe: SafeTaskLineage, record: TaskLineageRecord): SafeTaskLineage & LineageSummary {
+  const directSessions = safe.tasks.direct_sessions;
+  const firstDirect = directSessions.length > 0 ? directSessions[0] : null;
+  const directVerification = firstDirect
+    ? {
+        session_id: firstDirect.session_id,
+        status: firstDirect.status || "unknown",
+        audit_decision: firstDirect.audit_decision || "not_run",
+        command_count: firstDirect.command_count ?? 0,
+        passed_commands: firstDirect.passed_commands ?? 0,
+        failed_commands: firstDirect.failed_commands ?? 0,
+      }
+    : null;
+  return {
+    ...safe,
+    iterations: record.rounds.length,
+    main_task_count: record.main_task ? 1 : 0,
+    fix_task_count: record.fix_tasks.length,
+    cleanup_task_count: record.cleanup_tasks.length,
+    direct_verification: directVerification,
+    warnings_count: record.warnings.length,
+  };
 }
 
 function handleLineages(res: ServerResponse): void {
@@ -1054,7 +1213,7 @@ function handleLineages(res: ServerResponse): void {
       .filter((entry) => entry.isDirectory())
       .map((entry) => readJsonFileSafeUnder<TaskLineageRecord>(root, join(entry.name, "lineage.json")))
       .filter((entry): entry is TaskLineageRecord => entry !== null)
-      .map((entry) => toSafeTaskLineage(entry, 6))
+      .map((entry) => augmentLineageSummary(toSafeTaskLineage(entry, 6), entry))
       .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
       .slice(0, 50);
     sendJson(res, 200, { lineages, total: lineages.length, reason: null });
@@ -1077,7 +1236,7 @@ function handleLineageDetail(res: ServerResponse, lineageId: string): void {
       sendJson(res, 404, { error: "Lineage not found" });
       return;
     }
-    sendJson(res, 200, toSafeTaskLineage(data, 20));
+    sendJson(res, 200, augmentLineageSummary(toSafeTaskLineage(data, 20), data));
   } catch (err) {
     sendJson(res, 200, { lineage_id: lineageId, error: errorMessage(err) });
   }
@@ -1098,15 +1257,46 @@ function handleProjectPolicy(res: ServerResponse, repoPath: string): void {
 function handleReleaseStatus(res: ServerResponse, repoPath: string): void {
   try {
     const policy = getProjectPolicySummary(repoPath || ".");
+    const readiness = policy.release_readiness;
+    const requiredCommands = readiness.required_commands.map((c) => ({
+      command: c.command,
+      allowed: c.allowed,
+      blocked_reason: c.allowed ? null : (c.reason || "not_allowed"),
+    }));
+    const commandsBlockedCount = requiredCommands.filter((c) => !c.allowed).length;
+    const hasPackageJson = existsSync(join(policy.resolved_repo_path, "package.json"));
+    const versionSource = hasPackageJson
+      ? "package.json"
+      : (repoPath || ".") === "."
+        ? "workspace_root"
+        : "unknown";
+
+    let readyState: string;
+    if (!policy.valid || commandsBlockedCount > 0) {
+      readyState = "blocked";
+    } else if (readiness.version === null) {
+      readyState = "unknown";
+    } else if (readiness.version_consistent === true) {
+      readyState = "ready";
+    } else {
+      readyState = "blocked";
+    }
+
     sendJson(res, 200, {
       repo_path: repoPath || ".",
       resolved_repo_path: policy.resolved_repo_path,
       policy_valid: policy.valid,
       policy_issue_count: policy.issues.length,
       policy_issues: policy.issues.slice(0, 10),
-      release_readiness: policy.release_readiness,
-      next_action: policy.valid && policy.release_readiness.version_consistent !== false
-        ? "Run release_check or release_prepare from the full MCP profile when ready."
+      release_readiness: readiness,
+      package_name: readiness.package_name,
+      version_source: versionSource,
+      version_consistent: readiness.version_consistent,
+      required_commands: requiredCommands,
+      commands_blocked_count: commandsBlockedCount,
+      ready_state: readyState,
+      next_action: policy.valid && readiness.version_consistent !== false
+        ? "Run release_check via create_task template, or run_task_loop with template=release_check."
         : "Fix project-policy or version consistency issues before release preparation.",
       remote_write_performed: false,
     });
@@ -1122,10 +1312,50 @@ function handleReleaseStatus(res: ServerResponse, repoPath: string): void {
 
 function handleEvidencePacks(res: ServerResponse): void {
   try {
-    sendJson(res, 200, listEvidencePacks({ max_items: 50 }));
+    const list = listEvidencePacks({ max_items: 50 });
+    const packs = list.evidence_packs.map((pack) => augmentEvidencePackSummary(pack));
+    // Detect lineages that exist but have no exported evidence pack yet, so the
+    // dashboard can show an "Export evidence pack" action for the most recent one.
+    const lineagesRoot = join(config.workspaceRoot, ".patchwarden", "lineages");
+    let lineageCount = 0;
+    const exportedIds = new Set(packs.map((p) => p.lineage_id));
+    const pendingLineageIds: string[] = [];
+    if (existsSync(lineagesRoot)) {
+      const dirs = readdirSync(lineagesRoot, { withFileTypes: true }).filter((e) => e.isDirectory());
+      lineageCount = dirs.length;
+      for (const dir of dirs) {
+        if (!exportedIds.has(dir.name)) pendingLineageIds.push(dir.name);
+      }
+    }
+    sendJson(res, 200, {
+      evidence_packs: packs,
+      total: packs.length,
+      truncated: list.truncated,
+      has_lineages: lineageCount > 0,
+      lineage_count: lineageCount,
+      pending_lineage_ids: pendingLineageIds.slice(0, 20),
+      reason: null,
+    });
   } catch (err) {
     sendJson(res, 200, { evidence_packs: [], total: 0, reason: errorMessage(err) });
   }
+}
+
+function augmentEvidencePackSummary(pack: SafeEvidencePack): SafeEvidencePack & {
+  export_status: "exported" | "pending";
+  evidence_json_exists: boolean;
+  evidence_md_exists: boolean;
+  exported_at: string;
+} {
+  const jsonExists = existsSync(pack.files.json);
+  const mdExists = existsSync(pack.files.markdown);
+  return {
+    ...pack,
+    export_status: jsonExists ? "exported" : "pending",
+    evidence_json_exists: jsonExists,
+    evidence_md_exists: mdExists,
+    exported_at: pack.generated_at,
+  };
 }
 
 function handleEvidencePackDetail(res: ServerResponse, lineageId: string): void {
@@ -1139,9 +1369,34 @@ function handleEvidencePackDetail(res: ServerResponse, lineageId: string): void 
       sendJson(res, 404, { error: "Evidence pack not found" });
       return;
     }
-    sendJson(res, 200, pack);
+    sendJson(res, 200, augmentEvidencePackSummary(pack));
   } catch (err) {
     sendJson(res, 200, { lineage_id: lineageId, error: errorMessage(err), bounded: true });
+  }
+}
+
+function handleEvidencePackExport(res: ServerResponse, lineageId: string): void {
+  try {
+    if (!/^[A-Za-z0-9_-]+$/.test(lineageId)) {
+      sendJson(res, 400, { error: "Invalid lineage id" });
+      return;
+    }
+    // Check lineage exists.
+    const lineageFile = join(config.workspaceRoot, ".patchwarden", "lineages", lineageId, "lineage.json");
+    if (!existsSync(lineageFile)) {
+      sendJson(res, 404, { error: "Lineage not found" });
+      return;
+    }
+    // Check if already exported.
+    const evidenceJsonPath = join(config.workspaceRoot, ".patchwarden", "evidence-packs", lineageId, "evidence.json");
+    if (existsSync(evidenceJsonPath)) {
+      sendJson(res, 200, { ok: true, already_exported: true, lineage_id: lineageId });
+      return;
+    }
+    const pack = exportTaskEvidencePack({ lineage_id: lineageId });
+    sendJson(res, 200, { ok: true, exported: true, lineage_id: lineageId, evidence_pack_id: pack.evidence_pack_id });
+  } catch (err) {
+    sendJson(res, 200, { ok: false, lineage_id: lineageId, error: errorMessage(err) });
   }
 }
 
@@ -1465,6 +1720,29 @@ function handleOpenTaskFolder(res: ServerResponse, taskId: string): void {
   }
 }
 
+/**
+ * Hide a stale task from the dashboard's stale-task view. The task itself is
+ * NOT deleted or modified — only the control-center's local hidden-stale-ids
+ * state file is updated. Requires control token (enforced by the POST router).
+ */
+function handleHideStale(res: ServerResponse, taskId: string): void {
+  try {
+    if (!isValidTaskId(taskId)) {
+      sendJson(res, 400, { error: "Invalid task id" });
+      return;
+    }
+    const ids = readHiddenStaleIds();
+    if (!ids.includes(taskId)) {
+      ids.push(taskId);
+      writeHiddenStaleIds(ids);
+    }
+    recordEvent("task.hide_stale", { task_id: taskId });
+    sendJson(res, 200, { ok: true, hidden: taskId });
+  } catch (err) {
+    sendJson(res, 500, { error: errorMessage(err) });
+  }
+}
+
 type LogCategory = "core" | "direct" | "watcher" | "control-center";
 
 function handleLogs(res: ServerResponse, category: LogCategory, tailLines: number): void {
@@ -1555,6 +1833,67 @@ function handleWorkspace(res: ServerResponse): void {
     configSummary = null;
   }
   sendJson(res, 200, { workspace_root: workspaceRoot, directories, agents, config: configSummary });
+}
+
+interface WorkspaceRepoEntry {
+  name: string;
+  path: string;
+  has_package_json: boolean;
+  package_name: string | null;
+  version: string | null;
+}
+
+/**
+ * Lists first-level subdirectories of the workspace root and, for each one,
+ * reads package.json (if present) to expose name/version. Read-only and
+ * path-bounded: only direct children of workspaceRoot are inspected.
+ */
+function handleWorkspaceRepos(res: ServerResponse): void {
+  let workspaceRoot: string | null = null;
+  try {
+    workspaceRoot = resolveWorkspaceRoot(config);
+  } catch (err) {
+    sendJson(res, 200, { repos: [], workspace_root: null, error: errorMessage(err) });
+    return;
+  }
+  if (!workspaceRoot) {
+    sendJson(res, 200, { repos: [], workspace_root: null });
+    return;
+  }
+  let entries: import("node:fs").Dirent[] = [];
+  try {
+    entries = readdirSync(workspaceRoot, { withFileTypes: true }).filter((e) => e.isDirectory());
+  } catch (err) {
+    sendJson(res, 200, { repos: [], workspace_root: workspaceRoot, error: errorMessage(err) });
+    return;
+  }
+  const repos: WorkspaceRepoEntry[] = entries.map((entry) => {
+    const dirPath = join(workspaceRoot as string, entry.name);
+    const packageJsonPath = join(dirPath, "package.json");
+    let packageName: string | null = null;
+    let version: string | null = null;
+    let hasPackageJson = false;
+    if (existsSync(packageJsonPath)) {
+      hasPackageJson = true;
+      try {
+        const raw = readFileSync(packageJsonPath, "utf-8").replace(/^\uFEFF/, "");
+        const data = JSON.parse(raw);
+        packageName = typeof data.name === "string" ? data.name : null;
+        version = typeof data.version === "string" ? data.version : null;
+      } catch {
+        // package.json exists but is unreadable/invalid; keep nulls.
+      }
+    }
+    return {
+      name: entry.name,
+      path: dirPath,
+      has_package_json: hasPackageJson,
+      package_name: packageName,
+      version,
+    };
+  });
+  repos.sort((a, b) => a.name.localeCompare(b.name));
+  sendJson(res, 200, { repos, workspace_root: workspaceRoot });
 }
 
 /**
@@ -1733,8 +2072,11 @@ function handleDirectSessions(res: ServerResponse): void {
       sendJson(res, 200, { sessions: [], total: 0, reason: errorMessage(err) });
       return;
     }
+    // Filter out sessions hidden from the dashboard via POST .../hide.
+    const hiddenIds = new Set(readHiddenDirectSessionIds());
     const summaries: DirectSessionSummary[] = [];
     for (const entry of entries) {
+      if (hiddenIds.has(entry.name)) continue;
       const summary = readDirectSessionSummary(join(sessionsDir, entry.name), entry.name);
       if (summary) summaries.push(summary);
     }
@@ -1800,6 +2142,151 @@ function handleDirectSessionSafeSummary(res: ServerResponse, sessionId: string):
       large_logs_omitted: true,
       diff_omitted: true,
     });
+  }
+}
+
+/**
+ * Finalize a direct session via safeFinalizeDirectSession. Returns the safe
+ * summary on success, or { error } on failure with HTTP 200 (fault tolerance:
+ * the UI always gets a JSON body it can render).
+ */
+async function handleDirectSessionFinalize(res: ServerResponse, sessionId: string): Promise<void> {
+  try {
+    if (!isValidDirectSessionId(sessionId)) {
+      sendJson(res, 400, { error: "Invalid session id" });
+      return;
+    }
+    const result = await safeFinalizeDirectSession(sessionId, { max_items: 12 });
+    recordEvent("direct_session.finalized", { session_id: sessionId });
+    sendJson(res, 200, result);
+  } catch (err) {
+    sendJson(res, 200, {
+      session_id: sessionId,
+      error: errorMessage(err),
+      large_logs_omitted: true,
+      diff_omitted: true,
+    });
+  }
+}
+
+/**
+ * Audit a direct session via safeAuditDirectSession. Returns the safe audit
+ * result on success, or { error } on failure (HTTP 200 for fault tolerance).
+ */
+function handleDirectSessionAudit(res: ServerResponse, sessionId: string): void {
+  try {
+    if (!isValidDirectSessionId(sessionId)) {
+      sendJson(res, 400, { error: "Invalid session id" });
+      return;
+    }
+    const result = safeAuditDirectSession(sessionId, { max_items: 12 });
+    recordEvent("direct_session.audited", { session_id: sessionId });
+    sendJson(res, 200, result);
+  } catch (err) {
+    sendJson(res, 200, {
+      session_id: sessionId,
+      error: errorMessage(err),
+      large_logs_omitted: true,
+      diff_omitted: true,
+    });
+  }
+}
+
+/**
+ * Hide a direct session from the dashboard list. The session itself is NOT
+ * deleted or modified — only the control-center's local
+ * hidden-direct-session-ids.json state file is updated. Requires control token
+ * (enforced by the POST router).
+ */
+function handleDirectSessionHide(res: ServerResponse, sessionId: string): void {
+  try {
+    if (!isValidDirectSessionId(sessionId)) {
+      sendJson(res, 400, { error: "Invalid session id" });
+      return;
+    }
+    const ids = readHiddenDirectSessionIds();
+    if (!ids.includes(sessionId)) {
+      ids.push(sessionId);
+      writeHiddenDirectSessionIds(ids);
+    }
+    recordEvent("direct_session.hidden", { session_id: sessionId });
+    sendJson(res, 200, { ok: true, hidden: sessionId });
+  } catch (err) {
+    sendJson(res, 500, { error: errorMessage(err) });
+  }
+}
+
+function isValidTaskId(taskId: string): boolean {
+  return !(
+    taskId === "." ||
+    taskId === ".." ||
+    taskId.includes("/") ||
+    taskId.includes("\\") ||
+    taskId.includes("\0")
+  );
+}
+
+function handleTaskSafeResult(res: ServerResponse, taskId: string): void {
+  try {
+    if (!isValidTaskId(taskId)) {
+      sendJson(res, 400, { error: "Invalid task id" });
+      return;
+    }
+    try {
+      sendJson(res, 200, safeResult(taskId, { max_items: 12 }));
+    } catch (err) {
+      sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
+    }
+  } catch (err) {
+    sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
+  }
+}
+
+function handleTaskSafeAudit(res: ServerResponse, taskId: string): void {
+  try {
+    if (!isValidTaskId(taskId)) {
+      sendJson(res, 400, { error: "Invalid task id" });
+      return;
+    }
+    try {
+      sendJson(res, 200, safeAudit(taskId, { max_items: 12 }));
+    } catch (err) {
+      sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
+    }
+  } catch (err) {
+    sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
+  }
+}
+
+function handleTaskSafeTestSummary(res: ServerResponse, taskId: string): void {
+  try {
+    if (!isValidTaskId(taskId)) {
+      sendJson(res, 400, { error: "Invalid task id" });
+      return;
+    }
+    try {
+      sendJson(res, 200, safeTestSummary(taskId));
+    } catch (err) {
+      sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
+    }
+  } catch (err) {
+    sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
+  }
+}
+
+function handleTaskSafeDiffSummary(res: ServerResponse, taskId: string): void {
+  try {
+    if (!isValidTaskId(taskId)) {
+      sendJson(res, 400, { error: "Invalid task id" });
+      return;
+    }
+    try {
+      sendJson(res, 200, safeDiffSummary(taskId, { max_items: 12 }));
+    } catch (err) {
+      sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
+    }
+  } catch (err) {
+    sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
   }
 }
 
@@ -1898,6 +2385,220 @@ function handleAudit(res: ServerResponse): void {
     sendJson(res, 200, { audits: limited, total: limited.length });
   } catch (err) {
     sendJson(res, 200, { audits: [], reason: errorMessage(err) });
+  }
+}
+
+// ── Warnings aggregation ─────────────────────────────────────────
+
+interface WarningEntry {
+  type: string;
+  severity: "error" | "warning" | "info";
+  affected_tasks_count: number;
+  affected_tasks: string[];
+  likely_false_positive: boolean;
+  needs_fix: boolean;
+  blocked: boolean;
+  recommended_action: string;
+}
+
+/**
+ * Aggregate warnings from multiple sources:
+ *  - audit.json warnings/fail_checks/possible_false_positives/manual_verification_required
+ *  - stale task classification (heartbeat stale, collecting_artifacts stale, etc.)
+ *  - task status=failed_verification
+ *
+ * Each warning type is grouped into a bucket with affected task IDs. The
+ * handler is fault-tolerant: any per-task read failure is skipped, and a
+ * top-level failure returns an empty warnings array (never 500).
+ */
+function handleWarnings(res: ServerResponse): void {
+  try {
+    const buckets: Record<string, Set<string>> = {
+      unrecorded_command_execution: new Set(),
+      artifact_hygiene: new Set(),
+      scope_changes: new Set(),
+      release_publish_claim: new Set(),
+      manual_verification_required: new Set(),
+      stale_task: new Set(),
+      failed_verification: new Set(),
+    };
+
+    const tasksDir = getTasksDir(config);
+    let taskList: TaskEntry[] = [];
+    let watcher: WatcherStatusSnapshot;
+    try {
+      const result = listTasks({ limit: 100 });
+      taskList = result.tasks;
+      watcher = result.watcher;
+    } catch (err) {
+      watcher = readWatcherStatusSafe();
+    }
+
+    const now = Date.now();
+
+    for (const task of taskList) {
+      const taskId = task.task_id;
+
+      // 1. Read audit.json for warning strings
+      const auditFile = join(tasksDir, taskId, "audit.json");
+      const audit = readJsonFileSafe<Record<string, unknown>>(auditFile);
+      if (audit) {
+        const warningTexts: string[] = [];
+        const collectStrings = (field: unknown) => {
+          if (Array.isArray(field)) {
+            for (const w of field) {
+              if (typeof w === "string") {
+                warningTexts.push(w);
+              } else if (w && typeof w === "object") {
+                const obj = w as Record<string, unknown>;
+                if (typeof obj.message === "string") warningTexts.push(obj.message);
+                else if (typeof obj.description === "string") warningTexts.push(obj.description);
+                else if (typeof obj.warning === "string") warningTexts.push(obj.warning);
+                else warningTexts.push(JSON.stringify(obj));
+              }
+            }
+          } else if (typeof field === "string") {
+            warningTexts.push(field);
+          }
+        };
+        collectStrings(audit.warnings);
+        collectStrings(audit.fail_checks);
+        collectStrings(audit.possible_false_positives);
+
+        for (const text of warningTexts) {
+          const lower = text.toLowerCase();
+          if (lower.includes("unrecorded") || lower.includes("command execution")) {
+            buckets.unrecorded_command_execution.add(taskId);
+          }
+          if (lower.includes("artifact") || lower.includes("hygiene")) {
+            buckets.artifact_hygiene.add(taskId);
+          }
+          if (lower.includes("scope") || lower.includes("out_of_scope")) {
+            buckets.scope_changes.add(taskId);
+          }
+          if (lower.includes("release") || lower.includes("publish")) {
+            buckets.release_publish_claim.add(taskId);
+          }
+        }
+
+        // manual_verification_required flag
+        if (audit.manual_verification_required === true) {
+          buckets.manual_verification_required.add(taskId);
+        }
+      }
+
+      // 2. Stale tasks
+      try {
+        const cls = classifyStaleTask(task, watcher, now);
+        if (cls.is_stale) {
+          buckets.stale_task.add(taskId);
+        }
+      } catch {
+        // skip stale classification failure
+      }
+
+      // 3. Failed verification
+      if (task.status === "failed_verification") {
+        buckets.failed_verification.add(taskId);
+      }
+    }
+
+    const warnings: WarningEntry[] = [];
+    const addWarning = (
+      type: string,
+      severity: "error" | "warning" | "info",
+      likelyFalsePositive: boolean,
+      needsFix: boolean,
+      blocked: boolean,
+      recommendedAction: string
+    ) => {
+      const tasks = buckets[type];
+      if (tasks.size === 0) return;
+      warnings.push({
+        type,
+        severity,
+        affected_tasks_count: tasks.size,
+        affected_tasks: Array.from(tasks),
+        likely_false_positive: likelyFalsePositive,
+        needs_fix: needsFix,
+        blocked,
+        recommended_action: recommendedAction,
+      });
+    };
+
+    addWarning("failed_verification", "error", false, true, false, "Re-run verification or fix the failing checks before retrying.");
+    addWarning("stale_task", "warning", false, false, false, "Reconcile or recreate stale tasks.");
+    addWarning("manual_verification_required", "warning", false, false, false, "Review the audit findings and manually verify the changes.");
+    addWarning("unrecorded_command_execution", "info", false, true, false, "Investigate unrecorded command executions; ensure watcher captures all commands.");
+    addWarning("release_publish_claim", "info", false, false, true, "Verify the release/publish claim against actual release artifacts before proceeding.");
+    addWarning("artifact_hygiene", "info", true, false, false, "Review artifact hygiene warnings; many are likely false positives.");
+    addWarning("scope_changes", "info", true, false, false, "Review scope changes; verify they are intentional before accepting.");
+
+    sendJson(res, 200, { warnings, total: warnings.length });
+  } catch (err) {
+    sendJson(res, 200, { warnings: [], total: 0, error: errorMessage(err) });
+  }
+}
+
+// ── Diagnostics aggregation ──────────────────────────────────────
+
+/**
+ * Aggregate runtime diagnostics for the "Copy diagnostics" button. Each field
+ * is fault-tolerant: a sub-check failure yields a structured error for that
+ * field rather than a 500. The entire payload is run through
+ * redactSensitiveValue to strip tokens/keys/credentials before returning.
+ */
+function handleDiagnostics(res: ServerResponse): void {
+  try {
+    const watcher = readWatcherStatusSafe();
+    const tunnelCore = readTunnelStatus(false);
+    const tunnelDirect = readTunnelStatus(true);
+    const toolsCore = readToolManifest(false);
+    const toolsDirect = readToolManifest(true);
+    const agents = listAgentsSafe();
+
+    let workspaceRoot: string | null = null;
+    try {
+      workspaceRoot = resolveWorkspaceRoot(config);
+    } catch {
+      workspaceRoot = null;
+    }
+
+    // Recent failures: last 5 failed tasks (status contains "failed")
+    let recentFailures: Array<{ task_id: string; status: string }> = [];
+    try {
+      const result = listTasks({ limit: 100 });
+      recentFailures = result.tasks
+        .filter((t) => typeof t.status === "string" && t.status.includes("failed"))
+        .slice(0, 5)
+        .map((t) => ({ task_id: t.task_id, status: t.status }));
+    } catch {
+      recentFailures = [];
+    }
+
+    const coreReady = !!(tunnelCore && tunnelCore.ready);
+    const directReady = !!(tunnelDirect && tunnelDirect.ready);
+
+    const diagnostics = {
+      server_version: PATCHWARDEN_VERSION,
+      schema_epoch: TOOL_SCHEMA_EPOCH,
+      tool_manifest_sha256: toolsCore.tool_manifest_sha256,
+      watcher_status: watcher.status,
+      tunnel_core_ready: coreReady,
+      tunnel_direct_ready: directReady,
+      core_tool_count: toolsCore.tool_count,
+      direct_tool_count: toolsDirect.tool_count,
+      agent_status: agents.map((a) => ({ name: a.name, available: a.available })),
+      workspace_root: workspaceRoot,
+      recent_failures: recentFailures,
+      direct_profile_enabled: config.enableDirectProfile ?? false,
+    };
+
+    // Redact any sensitive content that may have leaked into string fields.
+    const redacted = redactSensitiveValue(diagnostics);
+    sendJson(res, 200, redacted.value);
+  } catch (err) {
+    sendJson(res, 200, { error: errorMessage(err) });
   }
 }
 
@@ -2093,7 +2794,13 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     return;
   }
   if (method === "GET" && pathname === "/api/tasks") {
-    handleTasks(res);
+    handleTasks(res, {
+      repo_path: parsedUrl.searchParams.get("repo_path") || undefined,
+      status: parsedUrl.searchParams.get("status") || undefined,
+      acceptance_status: parsedUrl.searchParams.get("acceptance_status") || undefined,
+      agent: parsedUrl.searchParams.get("agent") || undefined,
+      warning_type: parsedUrl.searchParams.get("warning_type") || undefined,
+    });
     return;
   }
   if (method === "GET" && pathname === "/api/tasks/stale") {
@@ -2159,6 +2866,51 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     handleTaskDetail(res, taskId);
     return;
   }
+  // Safe, bounded views for task artifacts (no full stdout/stderr/diff).
+  const taskSafeResultMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/safe-result$/);
+  if (method === "GET" && taskSafeResultMatch) {
+    let taskId: string;
+    try {
+      taskId = decodeURIComponent(taskSafeResultMatch[1]);
+    } catch {
+      taskId = taskSafeResultMatch[1];
+    }
+    handleTaskSafeResult(res, taskId);
+    return;
+  }
+  const taskSafeAuditMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/safe-audit$/);
+  if (method === "GET" && taskSafeAuditMatch) {
+    let taskId: string;
+    try {
+      taskId = decodeURIComponent(taskSafeAuditMatch[1]);
+    } catch {
+      taskId = taskSafeAuditMatch[1];
+    }
+    handleTaskSafeAudit(res, taskId);
+    return;
+  }
+  const taskSafeTestSummaryMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/safe-test-summary$/);
+  if (method === "GET" && taskSafeTestSummaryMatch) {
+    let taskId: string;
+    try {
+      taskId = decodeURIComponent(taskSafeTestSummaryMatch[1]);
+    } catch {
+      taskId = taskSafeTestSummaryMatch[1];
+    }
+    handleTaskSafeTestSummary(res, taskId);
+    return;
+  }
+  const taskSafeDiffSummaryMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/safe-diff-summary$/);
+  if (method === "GET" && taskSafeDiffSummaryMatch) {
+    let taskId: string;
+    try {
+      taskId = decodeURIComponent(taskSafeDiffSummaryMatch[1]);
+    } catch {
+      taskId = taskSafeDiffSummaryMatch[1];
+    }
+    handleTaskSafeDiffSummary(res, taskId);
+    return;
+  }
   // Logs: /api/logs/<category>?tail=<100|300|1000>
   const logsMatch = pathname.match(/^\/api\/logs\/([a-z-]+)$/);
   if (method === "GET" && logsMatch) {
@@ -2176,6 +2928,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   }
   if (method === "GET" && pathname === "/api/workspace") {
     handleWorkspace(res);
+    return;
+  }
+  if (method === "GET" && pathname === "/api/workspace/repos") {
+    handleWorkspaceRepos(res);
     return;
   }
   // On-demand git status for a single repo (path-traversal safe).
@@ -2220,6 +2976,14 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   }
   if (method === "GET" && pathname === "/api/audit") {
     handleAudit(res);
+    return;
+  }
+  if (method === "GET" && pathname === "/api/warnings") {
+    handleWarnings(res);
+    return;
+  }
+  if (method === "GET" && pathname === "/api/diagnostics") {
+    handleDiagnostics(res);
     return;
   }
   if (method === "GET" && pathname === "/api/tunnel-ui-url") {
@@ -2269,6 +3033,43 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       handleOpenLogsFolder(res);
       return;
     }
+    // POST /api/direct-sessions/:sessionId/finalize — finalize a direct session
+    // (must be matched BEFORE any generic /api/direct-sessions/:sessionId pattern)
+    const finalizeDirectMatch = pathname.match(/^\/api\/direct-sessions\/([^/]+)\/finalize$/);
+    if (finalizeDirectMatch) {
+      let sessionId: string;
+      try {
+        sessionId = decodeURIComponent(finalizeDirectMatch[1]);
+      } catch {
+        sessionId = finalizeDirectMatch[1];
+      }
+      await handleDirectSessionFinalize(res, sessionId);
+      return;
+    }
+    // POST /api/direct-sessions/:sessionId/audit — audit a direct session
+    const auditDirectMatch = pathname.match(/^\/api\/direct-sessions\/([^/]+)\/audit$/);
+    if (auditDirectMatch) {
+      let sessionId: string;
+      try {
+        sessionId = decodeURIComponent(auditDirectMatch[1]);
+      } catch {
+        sessionId = auditDirectMatch[1];
+      }
+      handleDirectSessionAudit(res, sessionId);
+      return;
+    }
+    // POST /api/direct-sessions/:sessionId/hide — hide a direct session from the list
+    const hideDirectMatch = pathname.match(/^\/api\/direct-sessions\/([^/]+)\/hide$/);
+    if (hideDirectMatch) {
+      let sessionId: string;
+      try {
+        sessionId = decodeURIComponent(hideDirectMatch[1]);
+      } catch {
+        sessionId = hideDirectMatch[1];
+      }
+      handleDirectSessionHide(res, sessionId);
+      return;
+    }
     // POST /api/tasks/:taskId/reconcile (token already validated above)
     const reconcileMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/reconcile$/);
     if (reconcileMatch) {
@@ -2303,6 +3104,30 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         taskId = openFolderMatch[1];
       }
       handleOpenTaskFolder(res, taskId);
+      return;
+    }
+    // POST /api/tasks/:taskId/hide-stale — hide a stale task from the dashboard
+    const hideStaleMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/hide-stale$/);
+    if (hideStaleMatch) {
+      let taskId: string;
+      try {
+        taskId = decodeURIComponent(hideStaleMatch[1]);
+      } catch {
+        taskId = hideStaleMatch[1];
+      }
+      handleHideStale(res, taskId);
+      return;
+    }
+    // POST /api/evidence-packs/:lineageId/export — export an evidence pack for a lineage
+    const exportPackMatch = pathname.match(/^\/api\/evidence-packs\/([^/]+)\/export$/);
+    if (exportPackMatch) {
+      let lineageId: string;
+      try {
+        lineageId = decodeURIComponent(exportPackMatch[1]);
+      } catch {
+        lineageId = exportPackMatch[1];
+      }
+      handleEvidencePackExport(res, lineageId);
       return;
     }
     sendJson(res, 404, { error: "Not found" });

@@ -37,9 +37,9 @@ export interface FinalizeDirectSessionOutput {
 
 // ── Main function ──────────────────────────────────────────────────
 
-export function finalizeDirectSession(
+export async function finalizeDirectSession(
   input: FinalizeDirectSessionInput
-): FinalizeDirectSessionOutput {
+): Promise<FinalizeDirectSessionOutput> {
   const { session_id } = input;
 
   // 1. Read session and guard active (not expired, not finalized)
@@ -47,10 +47,10 @@ export function finalizeDirectSession(
   guardDirectSessionActive(session);
 
   // 2. Capture after snapshot
-  const afterSnapshot = captureRepoSnapshot(session.resolved_repo_path);
+  const afterSnapshot = await captureRepoSnapshot(session.resolved_repo_path);
 
   // 3. Build change artifacts from before/after snapshots
-  const changeArtifacts = buildChangeArtifacts(
+  const changeArtifacts = await buildChangeArtifacts(
     session.resolved_repo_path,
     session.workspace_snapshot_before,
     afterSnapshot

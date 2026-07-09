@@ -257,22 +257,43 @@ const BINARY_EXTENSIONS = new Set([
   ".wasm", ".node",
 ]);
 
+/**
+ * Maximum bytes to scan for null-byte detection when the extension is not
+ * a known binary type. 1 MB catches binary content embedded deep in files
+ * (e.g., null bytes at offset 8200) without reading excessively large files.
+ */
+const BINARY_SCAN_LIMIT = 1_048_576; // 1 MB
+const BINARY_SCAN_CHUNK = 65536; // 64 KB per read
+
 export function isBinaryFile(filePath: string): boolean {
   const normalized = filePath.replace(/\\/g, "/").toLowerCase();
   for (const ext of BINARY_EXTENSIONS) {
     if (normalized.endsWith(ext)) return true;
   }
 
-  // Check file content for null bytes (simple heuristic)
+  // Scan file content for null bytes in chunks up to BINARY_SCAN_LIMIT.
+  // Previously only the first 8 KB were checked, allowing null bytes at
+  // offset 8193+ to bypass detection.
   try {
+    const stat = statSync(filePath);
+    const scanSize = Math.min(stat.size, BINARY_SCAN_LIMIT);
     const fd = openSync(filePath, "r");
-    const buffer = Buffer.alloc(8192);
-    const bytesRead = readSync(fd, buffer, 0, 8192, 0);
-    closeSync(fd);
-    for (let i = 0; i < bytesRead; i++) {
-      if (buffer[i] === 0) return true;
+    try {
+      const chunk = Buffer.alloc(BINARY_SCAN_CHUNK);
+      let scanned = 0;
+      while (scanned < scanSize) {
+        const toRead = Math.min(BINARY_SCAN_CHUNK, scanSize - scanned);
+        const bytesRead = readSync(fd, chunk, 0, toRead, scanned);
+        if (bytesRead === 0) break;
+        for (let i = 0; i < bytesRead; i++) {
+          if (chunk[i] === 0) return true;
+        }
+        scanned += bytesRead;
+      }
+      return false;
+    } finally {
+      closeSync(fd);
     }
-    return false;
   } catch {
     return false;
   }

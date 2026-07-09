@@ -1,5 +1,157 @@
 # PatchWarden CHANGELOG
 
+## v1.5.1 (2026-07-06)
+
+### Theme: Dashboard UI Optimization
+
+v1.5.1 upgrades the Dashboard from a "viewable status console" to an "operable
+local Agent workflow control center" without changing PatchWarden's safety
+boundary. All safe interfaces (safe_result, safe_audit, safe_test_summary,
+safe_diff_summary, safe_direct_summary, safe_finalize_direct_session,
+safe_audit_direct_session) are now the default UI entry points. Full result,
+diff, and test log are only available in collapsed "advanced" sections and
+never auto-loaded.
+
+### Dashboard
+
+- Added Repo selector at the top: lists workspace root and first-level project
+  directories with package.json version markers. Switching repo refreshes
+  Project Policy, Release, Recent Tasks, Lineage, Evidence Pack, and Direct
+  Sessions.
+- Fixed misleading "release_prepare" text in Release card. The next_action now
+  guides to "Run release_check via create_task template, or run_task_loop with
+  template=release_check."
+- Release card now shows: package name, version_source, version,
+  version_consistent, required_commands (with allowed + blocked_reason per
+  command), commands_blocked_count, ready/unknown/blocked state, and blocked
+  reason.
+- Refactored stale task card into an explainable, actionable health suggestion
+  card with task_id, repo_path, status, error, human-readable explanation,
+  next_action, and quick actions (view detail, copy task_id, hide, recreate
+  task).
+- Enhanced recent task rows: short task_id + copy button + expandable title +
+  repo_path + agent + status + acceptance_status (more prominent) +
+  verification headline + updated_at + next_action. Quick actions per row:
+  safe_result, safe_audit, safe_test_summary, safe_diff_summary, open detail,
+  copy id.
+- Added Task Detail safe-first page: default safe summary view with
+  safe_result, safe_test_summary, safe_diff_summary, safe_audit, warnings,
+  fail_checks, manual_verification_required, recommended_next_actions. Full
+  result/diff/test_log only in collapsed advanced section.
+- Added Health Score card (healthy/warning/degraded/blocked) computed from
+  watcher, tunnel, agents, stale tasks, failed tasks, policy validity, release
+  readiness, and direct profile status.
+- Enhanced Project Policy card: shows auto_cleanup, protected_paths count,
+  high_risk_commands count, release_mode summary. Read-only.
+
+### Lineage and Evidence Pack
+
+- Lineage card now distinguishes empty vs populated states. Empty: "No loop
+  lineage yet" + "Start guarded loop" + "View recent loop runs". Populated:
+  lineage_id, goal, final_status, stop_reason, iterations, main/fix/cleanup
+  task counts, direct_verification, warnings_count.
+- Added Lineage Detail view (modal) showing each iteration's status,
+  acceptance_status, verification, audit, stop_reason, and
+  final_recommended_next_action, grouped by role.
+- Evidence Pack card now binds to Lineage. Empty: "Evidence pack is available
+  after run_task_loop." Populated: lineage_id, export_status,
+  evidence_json_exists, evidence_md_exists, exported_at. Buttons: Export
+  evidence pack, Open EVIDENCE.md, Open evidence.json, Copy lineage_id.
+- Added POST /api/evidence-packs/:lineageId/export endpoint.
+
+### Direct Sessions
+
+- Direct sessions page now groups by status: active, finalized, audited,
+  expired. Expired sessions are collapsed by default.
+- Each session shows: session_id, repo_path, title, created_at, expires_at,
+  finalized, audited, changed_files_total, verification status.
+- Quick actions per session: safe_direct_summary,
+  run_direct_verification_bundle, safe_finalize_direct_session,
+  safe_audit_direct_session, copy session_id, hide expired.
+- Added POST endpoints: /api/direct-sessions/:sessionId/finalize,
+  /api/direct-sessions/:sessionId/audit, /api/direct-sessions/:sessionId/hide.
+
+### Warnings and Diagnostics
+
+- Added Warnings aggregation page (audit.html) grouping warnings by type:
+  unrecorded_command_execution, artifact_hygiene, scope_changes,
+  release_publish_claim, manual_verification_required, stale_task,
+  failed_verification. Each type shows affected_tasks_count, severity,
+  likely_false_positive/needs_fix/blocked, recommended_action, and associated
+  tasks.
+- Added Copy diagnostics button to system status card. Copies server_version,
+  schema_epoch, tool_manifest_sha256, watcher/tunnel status, Core/Direct tool
+  counts, agent status, workspace_root, recent failures,
+  direct_profile_enabled. Output is redacted of sensitive content.
+
+### New API Endpoints
+
+- GET /api/workspace/repos
+- GET /api/tasks/:taskId/safe-result
+- GET /api/tasks/:taskId/safe-audit
+- GET /api/tasks/:taskId/safe-test-summary
+- GET /api/tasks/:taskId/safe-diff-summary
+- GET /api/diagnostics
+- GET /api/warnings
+- POST /api/tasks/:taskId/hide-stale
+- POST /api/direct-sessions/:sessionId/finalize
+- POST /api/direct-sessions/:sessionId/audit
+- POST /api/direct-sessions/:sessionId/hide
+- POST /api/evidence-packs/:lineageId/export
+
+### Extended API Endpoints
+
+- GET /api/tasks now supports repo_path, status, acceptance_status, agent,
+  warning_type query parameters.
+- GET /api/tasks/stale now includes explanation and next_action fields.
+- GET /api/release/status now includes package_name, version_source,
+  version_consistent, required_commands (with blocked_reason),
+  commands_blocked_count, ready_state fields.
+- GET /api/lineages and GET /api/lineages/:id now include goal, final_status,
+  stop_reason, iterations, main/fix/cleanup task counts, direct_verification,
+  warnings_count.
+- GET /api/evidence-packs now includes export_status, evidence_json_exists,
+  evidence_md_exists, exported_at.
+
+### Tool Count
+
+- full profile: 64 unchanged
+- chatgpt_core profile: 26 unchanged
+- chatgpt_direct profile: 14 unchanged
+- chatgpt_search profile: 5 unchanged
+
+### Safety
+
+- No MCP tool schemas modified.
+- No Core/Direct tools deleted or renamed.
+- UI defaults to safe interfaces.
+- Full result/diff/test log only in collapsed advanced sections.
+- No remote write operations (npm publish, git push, git tag, gh release).
+- No sensitive file content read or displayed.
+- Diagnostics output redacted via redactSensitiveContent.
+
+### Async Refactor
+
+- Refactored `captureRepoSnapshot`, `buildChangeArtifacts`, `buildFileStats`,
+  `buildArtifactManifest`, `createTask`, `createDirectSession`,
+  `finalizeDirectSession`, `createSubgoalTask`, `retryTask`,
+  `safeFinalizeDirectSession`, `runAgentAssessment`, `confirmAssessment` from
+  synchronous to async/Promise-based implementations.
+- `runGit` in `changeCapture.ts` moved from `spawnSync` to `execFile` with
+  streaming hash computation; git calls parallelized via `Promise.all`.
+- Improves performance and maintainability; required by controlCenter.ts
+  v1.5.1 async endpoints.
+
+### Security Hardening
+
+- `isBinaryFile` scan window in `directGuards.ts` expanded from 8KB to 1MB to
+  prevent null-byte-at-offset bypass of binary file detection.
+- `postTaskCleanup.ts` adds `safeRemoveSync` fallback for Windows
+  `fs.rmSync` silent failure (retries with `rmdir` / `del`).
+- `direct-guards.test.ts` and `path-guard.test.ts` add coverage for Windows
+  junction escape, intermediate symlink TOCTOU, and backslash separator
+  hardening.
+
 ## v1.5.0 (2026-07-05)
 
 ### Theme: Worktree Isolation, Agent Routing, and Evidence Packs

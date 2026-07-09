@@ -130,7 +130,7 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
   const assessmentId = String(initialStatus.assessment_id || "");
   if (assessmentId) {
     try {
-      const preExecSnapshot = captureRepoSnapshot(repoPath);
+      const preExecSnapshot = await captureRepoSnapshot(repoPath);
       const validation = validateAssessmentFreshness(assessmentId, preExecSnapshot);
       if (!validation.valid) {
         const message = `assessment validation failed: ${validation.failure_reason}. Re-run create_task with execution_mode=assess_only to get a fresh assessment_id.`;
@@ -165,8 +165,8 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
   let beforeWorkspaceSnapshot;
   let externalDirtyBaseline: ExternalDirtyFile[] = [];
   try {
-    beforeSnapshot = captureRepoSnapshot(repoPath);
-    beforeWorkspaceSnapshot = repoPath === wsRoot ? beforeSnapshot : captureRepoSnapshot(wsRoot);
+    beforeSnapshot = await captureRepoSnapshot(repoPath);
+    beforeWorkspaceSnapshot = repoPath === wsRoot ? beforeSnapshot : await captureRepoSnapshot(wsRoot);
     writeSnapshot(taskDir, "git-before.json", beforeSnapshot);
     writeSnapshot(taskDir, "workspace-before.json", beforeWorkspaceSnapshot);
     // Phase 4: Record external dirty files as baseline before task execution
@@ -282,10 +282,10 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
   try {
     // Phase 5: Wrap artifact collection with a timeout
     const collectionResult = await Promise.race([
-      Promise.resolve().then(() => {
-        const afterSnapshot = captureRepoSnapshot(repoPath);
+      Promise.resolve().then(async () => {
+        const afterSnapshot = await captureRepoSnapshot(repoPath);
         writeSnapshot(taskDir, "git-after.json", afterSnapshot);
-        return buildChangeArtifacts(repoPath, beforeSnapshot, afterSnapshot);
+        return await buildChangeArtifacts(repoPath, beforeSnapshot, afterSnapshot);
       }),
       new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(() => reject(new Error("Artifact collection timed out")), ARTIFACT_COLLECTION_TIMEOUT_MS);
@@ -353,7 +353,7 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
   let preexistingExternalDirty: ExternalDirtyFile[] = externalDirtyBaseline;
   let newOutOfScopeChanges: ExternalDirtyFile[] = [];
   try {
-    const afterWorkspaceSnapshot = repoPath === wsRoot ? captureRepoSnapshot(repoPath) : captureRepoSnapshot(wsRoot);
+    const afterWorkspaceSnapshot = repoPath === wsRoot ? await captureRepoSnapshot(repoPath) : await captureRepoSnapshot(wsRoot);
     writeSnapshot(taskDir, "workspace-after.json", afterWorkspaceSnapshot);
     const allExternalDirty = extractExternalDirtyFiles(afterWorkspaceSnapshot, repoPath, wsRoot);
     // Phase 4: Only NEW external dirty files (not in baseline) are scope violations
@@ -405,7 +405,7 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
   writeFileSync(join(taskDir, "changed-files.json"), JSON.stringify(changes, null, 2), "utf-8");
 
   // Phase 6: Generate artifact_manifest.json and group changed files
-  const artifactManifest: ArtifactManifest = buildArtifactManifest(changes.changed_files, repoPath, taskId);
+  const artifactManifest: ArtifactManifest = await buildArtifactManifest(changes.changed_files, repoPath, taskId);
   writeFileSync(join(taskDir, "artifact_manifest.json"), JSON.stringify(artifactManifest, null, 2), "utf-8");
   const changedFileGroups = groupChangedFiles(changes.changed_files);
 

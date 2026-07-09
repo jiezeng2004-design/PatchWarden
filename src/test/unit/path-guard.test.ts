@@ -96,6 +96,36 @@ describe("guardPath", () => {
       rmSync(target, { recursive: true, force: true });
     }
   });
+
+  it("rejects Windows junction escape", { skip: process.platform !== "win32" ? "Windows-only test" : undefined }, () => {
+    const target = mkdtempSync(join(tmpdir(), "pw-junction-target-"));
+    try {
+      const linkPath = join(tempDir, "escape-junction");
+      symlinkSync(target, linkPath, "junction");
+      assert.throws(
+        () => guardPath("escape-junction/secret.txt", tempDir),
+        PatchWardenError
+      );
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects intermediate symlink escape (TOCTOU defense)", { skip: process.platform === "win32" ? "Windows symlink permissions unstable" : undefined }, () => {
+    const target = mkdtempSync(join(tmpdir(), "pw-toctou-target-"));
+    try {
+      const linkPath = join(tempDir, "escape-link");
+      symlinkSync(target, linkPath);
+      mkdirSync(join(target, "subdir"), { recursive: true });
+      writeFileSync(join(target, "subdir", "secret.txt"), "secret", "utf-8");
+      assert.throws(
+        () => guardPath("escape-link/subdir/secret.txt", tempDir),
+        PatchWardenError
+      );
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("guardWorkspacePath", () => {

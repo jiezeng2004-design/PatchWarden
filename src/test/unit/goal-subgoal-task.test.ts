@@ -14,8 +14,8 @@ import { PatchWardenError } from "../../errors.js";
 describe("createSubgoalTask", () => {
 
   describe("错误路径", () => {
-    it("execution_mode=assess_only 抛 invalid_execution_mode", () => {
-      assert.throws(
+    it("execution_mode=assess_only 抛 invalid_execution_mode", async () => {
+      await assert.rejects(
         () =>
           createSubgoalTask({
             goal_id: "goal_nonexistent_test",
@@ -32,8 +32,8 @@ describe("createSubgoalTask", () => {
       );
     });
 
-    it("goal_id 不存在抛 goal_not_found", () => {
-      assert.throws(
+    it("goal_id 不存在抛 goal_not_found", async () => {
+      await assert.rejects(
         () =>
           createSubgoalTask({
             goal_id: "goal_definitely_does_not_exist_99999",
@@ -50,10 +50,10 @@ describe("createSubgoalTask", () => {
       );
     });
 
-    it("assess_only 优先于 goal_not_found（在读取 goal 前校验）", () => {
+    it("assess_only 优先于 goal_not_found（在读取 goal 前校验）", async () => {
       // execution_mode=assess_only 应先抛 invalid_execution_mode，
       // 而不是去读不存在的 goal
-      assert.throws(
+      await assert.rejects(
         () =>
           createSubgoalTask({
             goal_id: "goal_definitely_does_not_exist_99999",

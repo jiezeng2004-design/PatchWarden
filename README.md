@@ -8,7 +8,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-当前源码版本：**v1.5.0**。查看
+当前源码版本：**v1.5.1**。查看
 [CHANGELOG](CHANGELOG.md)、[迁移指南](docs/migration-from-safe-bifrost.md)和
 [发布检查清单](docs/release-checklist.md)。GitHub Release / npm 发布状态需要在发布前单独核对。
 
@@ -751,6 +751,31 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%CD%\scripts\control\st
 `chatgpt_core` / `patchwarden` → `127.0.0.1:8080`，
 `chatgpt_direct` / `patchwarden-direct` → `127.0.0.1:8081`。
 
+## Dashboard 主要页面与推荐工作流
+
+PatchWarden Dashboard (Control Center) 提供以下主要页面：
+
+- **控制台 (Dashboard)**: 系统总览，包含 Repo selector、Health Score、服务状态、Release 卡片、Project Policy、Lineage、Evidence Pack、Stale 任务提示、最近任务列表、系统状态（含 Copy diagnostics）。
+- **任务面板 (Tasks)**: 任务列表，支持按 repo_path / status / acceptance_status / warning type / agent / date range 过滤，每行提供 safe_result / safe_audit / safe_test_summary / safe_diff_summary 快捷操作。
+- **任务详情 (Task Detail)**: 默认展示 safe 摘要（safe_result / safe_test_summary / safe_diff_summary / safe_audit），完整 result / diff / test log 在折叠的高级区按需加载。
+- **Direct 会话 (Direct Sessions)**: 按 active / finalized / audited / expired 分组，提供 safe_direct_summary / safe_finalize_direct_session / safe_audit_direct_session 快捷操作。
+- **审计日志 / Warnings (Audit)**: 按 warning 类型聚合，显示 affected tasks / severity / recommended action。
+- **工作区 (Workspace)**: workspace 一级目录与项目列表。
+- **日志 (Logs)**: Core / Direct / Watcher / Control Center 日志尾部。
+
+推荐工作流：
+
+1. 在 Dashboard 顶部选择目标 repo。
+2. 查看 Health Score 确认系统健康。
+3. 在最近任务列表点击 safe_result 快捷查看任务摘要。
+4. 打开 Task Detail 进行 safe-first 验收，仅在需要时展开高级区查看完整日志。
+5. 使用 Lineage Detail 查看 run_task_loop 的成功/失败原因。
+6. 验收完成后导出 Evidence Pack。
+7. Direct 会话用于独立验证，完成后 finalize + audit。
+8. 遇到问题时点击 Copy diagnostics 复制诊断信息发给 ChatGPT / Codex / opencode 排查。
+
+> 详细说明见 [docs/dashboard-overview.md](docs/dashboard-overview.md)、[docs/task-safe-review-workflow.md](docs/task-safe-review-workflow.md)、[docs/lineage-evidence-pack-workflow.md](docs/lineage-evidence-pack-workflow.md)、[docs/direct-session-workflow.md](docs/direct-session-workflow.md)。
+
 ## 踩坑记录与故障排查
 
 ### 快速对照表
@@ -1081,6 +1106,10 @@ Release 和发布资产校验值。
 - [ChatGPT 调用规范](docs/chatgpt-usage.md)
 - [旧版本迁移指南](docs/migration-from-safe-bifrost.md)
 - [ChatGPT Connector 演示](docs/demo.md)
+- [Dashboard 概览](docs/dashboard-overview.md)
+- [任务 safe 验收工作流](docs/task-safe-review-workflow.md)
+- [Lineage 与 Evidence Pack 工作流](docs/lineage-evidence-pack-workflow.md)
+- [Direct 会话工作流](docs/direct-session-workflow.md)
 - [OpenAI Tunnel 示例](examples/openai-tunnel/README.md)
 - [ChatGPT 测试提示词](examples/openai-tunnel/chatgpt-test-prompt.md)
 
@@ -1096,7 +1125,7 @@ Release 和发布资产校验值。
 - [x] Release Gate（发布前五阶段校验）
 - [x] Worktree 隔离
 - [x] 多 Agent 路由
-- [ ] 本地 Dashboard
+- [x] 本地 Dashboard
 
 ## License
 

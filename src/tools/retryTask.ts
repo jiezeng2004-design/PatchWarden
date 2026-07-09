@@ -4,7 +4,7 @@ import { getTasksDir, getConfig } from "../config.js";
 import { guardReadPath } from "../security/pathGuard.js";
 import { createTask } from "./createTask.js";
 
-export function retryTask(taskId: string) {
+export async function retryTask(taskId: string) {
   const config = getConfig();
   const tasksDir = getTasksDir(config);
   const taskDir = join(tasksDir, taskId);
@@ -23,7 +23,7 @@ export function retryTask(taskId: string) {
   }
 
   // Create a new task with the same parameters
-  const newTask = createTask({
+  const newTask = await createTask({
     plan_id: data.plan_id,
     agent: data.agent,
     repo_path: data.repo_path,

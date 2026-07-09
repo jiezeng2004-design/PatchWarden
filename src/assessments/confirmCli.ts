@@ -21,7 +21,7 @@ if (!assessmentId || process.argv.length !== 3) {
 }
 
 try {
-  const result = confirmAssessment(assessmentId);
+  const result = await confirmAssessment(assessmentId);
   console.log(JSON.stringify(result, null, 2));
 } catch (error) {
   console.error(JSON.stringify(errorPayload(error), null, 2));
