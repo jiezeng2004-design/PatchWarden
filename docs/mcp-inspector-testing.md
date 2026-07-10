@@ -1,6 +1,6 @@
 # 用 MCP Inspector 测试 PatchWarden
 
-> 适用版本：v1.5.1+
+> 本文基于 v1.5.1 源码编写；安装时请使用已验证发布的 <published-version>。
 > 说明：本文以 PatchWarden 为例介绍通用的 MCP server 调试方法，
 > MCP Inspector 是 modelcontextprotocol 社区维护的独立工具。
 
@@ -197,3 +197,4 @@ npx @modelcontextprotocol/inspector cli `
 - `docs/threat-model.md`：PatchWarden 安全契约与敏感文件清单。
 - `docs/evidence-pack-schema.md`：Evidence Pack v2 文件结构。
 - `docs/dashboard-overview.md`：Control Center 与 safe-first 概念。
+- 上游草稿 PR：https://github.com/modelcontextprotocol/inspector/pull/1635
