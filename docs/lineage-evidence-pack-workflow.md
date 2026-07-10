@@ -1,6 +1,6 @@
 # Lineage 与 Evidence Pack 工作流
 
-> 适用版本：v1.5.1+
+> 本文基于 v1.5.1 源码编写；安装时请使用已验证发布的 <published-version>。
 > 相关页面：Dashboard（Lineage / Evidence Pack 卡片）、Lineage Detail 模态框
 
 ## 目的
@@ -20,7 +20,7 @@ Lineage 记录整条循环的因果链，Evidence Pack 把通过验收的 lineag
   final_recommended_next_action。
 - **Evidence Pack**：与 lineage 绑定的证据包，写入
   `.patchwarden/evidence-packs/<lineage_id>/`，包含 `evidence.json` 与
-  `EVIDENCE.md` 两个文件。
+  `EVIDENCE.md` 两个文件（v2 额外包含 6 个结构化文件，见下文）。
 - **export_status**：证据包的导出状态，`pending` / `exported` / `failed`。
 
 ## 工作流
@@ -73,6 +73,31 @@ PatchWarden 会把有界摘要写入：
 .patchwarden/evidence-packs/<lineage_id>/evidence.json
 .patchwarden/evidence-packs/<lineage_id>/EVIDENCE.md
 ```
+
+### 4.1 Evidence Pack v2 结构化文件（v1.5.1+）
+
+v2 在原有 `evidence.json` 与 `EVIDENCE.md` 基础上额外导出 6 个有界文件：
+
+```text
+.patchwarden/evidence-packs/<lineage_id>/risk.json
+.patchwarden/evidence-packs/<lineage_id>/verify.json
+.patchwarden/evidence-packs/<lineage_id>/diffstat.json
+.patchwarden/evidence-packs/<lineage_id>/lineage.json
+.patchwarden/evidence-packs/<lineage_id>/attestation.json
+.patchwarden/evidence-packs/<lineage_id>/redactions.json
+```
+
+| 文件 | 用途 |
+| --- | --- |
+| `risk.json` | 聚合的风险项与严重度（high/medium/low），来源为 rounds 的 fail_checks/warn_checks 与 lineage warnings。 |
+| `verify.json` | 每轮迭代和 direct session 的结构化验证记录（状态、audit、command 计数）。 |
+| `diffstat.json` | 文件级增删统计（路径、增删行数），不含完整 diff。 |
+| `lineage.json` | lineage 有界摘要（goal、final_status、stop_reason、task 计数）。 |
+| `attestation.json` | 版本、commit short hash、Node/OS、tool profile、schema epoch。 |
+| `redactions.json` | 本次导出中脱敏的类别与计数（不存原始隐藏值）。 |
+
+每个文件都经过 `redactSensitiveValue` 脱敏处理。详细字段结构与示例见
+[Evidence Pack v2 文件结构](./evidence-pack-schema.md)。
 
 ### 5. 查看与归档证据文件
 
