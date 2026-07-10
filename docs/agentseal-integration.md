@@ -1,6 +1,6 @@
 # AgentSeal 集成模式
 
-> 适用版本：v1.5.1+
+> 本文基于 v1.5.1 源码编写；安装时请使用已验证发布的 <published-version>。
 > 说明：本文描述的是 PatchWarden 与 AgentSeal 的集成模式建议，**不是** AgentSeal 的官方功能。
 > AgentSeal 是独立的 agent 安全检测项目，本文不声称任何官方集成关系。
 
@@ -147,3 +147,4 @@ AgentSeal 可读取这些文件，作为策略执行情况的回溯证据。
 - `docs/threat-model.md`：PatchWarden 安全契约与敏感文件清单。
 - `docs/evidence-pack-schema.md`：Evidence Pack v2 文件结构。
 - `docs/why-patchwarden.md`：PatchWarden 定位与动机。
+- 上游草稿 PR：https://github.com/getagentseal/agentseal/pull/35
