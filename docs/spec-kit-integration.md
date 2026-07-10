@@ -1,6 +1,6 @@
 # Spec Kit 集成模式
 
-> 适用版本：v1.5.1+
+> 本文基于 v1.5.1 源码编写；安装时请使用已验证发布的 <published-version>。
 > 说明：本文描述的是 PatchWarden 与 Spec Kit 的集成模式建议，**不是** Spec Kit 的官方功能。
 > Spec Kit 是 GitHub 维护的独立项目，本文不声称任何官方集成关系。
 
@@ -65,6 +65,16 @@ Spec Kit 的验收标准通常是自然语言描述。PatchWarden 的 Evidence P
 }
 ```
 
+### 1.5 批量导入 Spec Kit tasks 为 PatchWarden subgoal
+
+PatchWarden 提供 `import_speckit_tasks` 工具，可将 Spec Kit 的 tasks 批量导入为 Goal 下的 subgoal：
+
+- 每个 Spec Kit task 创建一个对应 subgoal，title 取自 task.desc
+- task.files 映射为 subgoal 的 scope_hints（声明改动范围提示）
+- task.depends_on 映射为 subgoal 间的依赖关系
+- Spec Kit 的 acceptance[] 存入 Goal 的 acceptance_criteria 字段
+- 支持幂等导入：重复导入同一 Spec Kit JSON 不会创建重复 subgoal
+
 ### 2. 通过 PatchWarden 执行任务
 
 将 Spec Kit 的 task 通过 MCP 客户端交给 PatchWarden：
@@ -107,7 +117,7 @@ reviewer 阅读 `EVIDENCE.md` 与 `verify.json`，
 
 ## 边界与注意事项
 
-- PatchWarden 不解析 Spec Kit 的 spec 格式，只执行 task 并产出证据。
+- PatchWarden 不解析 Spec Kit 的 spec 格式本身，只处理 tasks 与 acceptance 字段并产出证据。
 - Spec Kit 的 spec 验收逻辑由 Spec Kit 自身或 reviewer 负责，
   PatchWarden 只提供证据材料。
 - 本集成模式不修改 Spec Kit 的任何行为，仅在流程上配合使用。

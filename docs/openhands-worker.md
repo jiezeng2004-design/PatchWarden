@@ -1,6 +1,6 @@
 # OpenHands worker 集成模式
 
-> 适用版本：v1.5.1+
+> 本文基于 v1.5.1 源码编写；安装时请使用已验证发布的 <published-version>。
 > 说明：本文描述的是 PatchWarden 将 OpenHands 作为 worker agent 的集成模式建议。
 > OpenHands 是独立的 AI 软件开发 Agent 项目，本文不声称任何官方集成关系。
 

@@ -1,6 +1,6 @@
 # Evidence Pack v2 文件结构
 
-> 适用版本：v1.5.1+（Evidence Pack v2）
+> 本文基于 v1.5.1 源码编写；安装时请使用已验证发布的 <published-version>。（Evidence Pack v2）
 > 相关页面：`export_task_evidence_pack` MCP 工具、Lineage 与 Evidence Pack 工作流
 
 ## 概述

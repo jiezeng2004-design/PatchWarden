@@ -592,7 +592,7 @@ await test("D8b. tool profiles are exact and schema changes alter the manifest h
   try {
     process.env.PATCHWARDEN_TOOL_PROFILE = "full";
     const fullTools = getToolDefs();
-    if (fullTools.length !== 64) throw new Error(`Expected 64 full tools, got ${fullTools.length}`);
+    if (fullTools.length !== 66) throw new Error(`Expected 66 full tools, got ${fullTools.length}`);
 
     const coreTools = selectToolsForProfile(fullTools, "chatgpt_core", getConfig().enableDirectProfile);
     const names = coreTools.map((tool) => tool.name);

@@ -117,6 +117,7 @@ try {
     "discard_worktree",
     "discover_tools",
     "explain_tool",
+    "export_goal_report",
     "export_handoff",
     "export_task_evidence_pack",
     "finalize_direct_session",
@@ -133,6 +134,7 @@ try {
     "get_task_summary",
     "get_test_log",
     "health_check",
+    "import_speckit_tasks",
     "invoke_discovered_tool",
     "kill_task",
     "list_agents",
@@ -177,7 +179,7 @@ try {
   if (!tools._meta || typeof tools._meta.tool_manifest_sha256 !== "string" || tools._meta.tool_manifest_sha256.length !== 64) {
     throw new Error(`tools/list _meta missing manifest hash: ${JSON.stringify(tools._meta || null)}`);
   }
-  if (tools._meta.tool_profile !== "full" || tools._meta.tool_count !== 64) {
+  if (tools._meta.tool_profile !== "full" || tools._meta.tool_count !== 66) {
     throw new Error(`tools/list _meta profile/count mismatch: ${JSON.stringify(tools._meta)}`);
   }
   if (typeof tools._meta.schema_epoch !== "string" || typeof tools._meta.server_version !== "string") {

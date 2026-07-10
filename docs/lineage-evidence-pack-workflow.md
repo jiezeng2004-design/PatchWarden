@@ -74,7 +74,7 @@ PatchWarden 会把有界摘要写入：
 .patchwarden/evidence-packs/<lineage_id>/EVIDENCE.md
 ```
 
-### 4.1 Evidence Pack v2 结构化文件（v1.5.1+）
+### 4.1 Evidence Pack v2 结构化文件（基于 v1.5.1 源码）
 
 v2 在原有 `evidence.json` 与 `EVIDENCE.md` 基础上额外导出 6 个有界文件：
 

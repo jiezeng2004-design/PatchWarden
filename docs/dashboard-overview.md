@@ -1,6 +1,6 @@
 # Dashboard 概览
 
-> 适用版本：v1.5.1+
+> 本文基于 v1.5.1 源码编写；安装时请使用已验证发布的 <published-version>。
 > 入口：`PatchWarden-Control.cmd` 或托盘菜单中的 "Open Control Center"。
 
 ## 目的

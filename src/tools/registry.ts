@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Shared tool registry for PatchWarden MCP server.
  * Used by both stdio (index.ts) and HTTP (httpServer.ts) transports.
  */
@@ -61,6 +61,8 @@ import { createGoal, listGoals, readGoal, readGoalStatus } from "../goal/goalSto
 import { suggestNextSubgoal } from "../goal/goalGraph.js";
 import { exportHandoff } from "../goal/handoffExport.js";
 import { acceptSubgoal, rejectSubgoal, summarizeGoalProgress } from "../goal/goalProgress.js";
+import { exportGoalReport } from "../goal/goalReport.js";
+import { importSpecKitTasks, parseSpecKitJson } from "../goal/specKitImport.js";
 import { createSubgoalTask } from "./goalSubgoalTask.js";
 import { checkReleaseGate } from "./checkReleaseGate.js";
 import {
@@ -955,6 +957,29 @@ export function getToolDefs(): ToolDef[] {
       },
     },
     {
+      name: "export_goal_report",
+      description: "Export a structured final report for a Goal session, aggregating subgoal completion, task evidence, and risk summary.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          goal_id: { type: "string", description: "The goal id to export report for." },
+        },
+        required: ["goal_id"],
+      },
+    },
+    {
+      name: "import_speckit_tasks",
+      description: "Import Spec Kit tasks into a Goal session as subgoals, mapping task files to scope hints and acceptance criteria.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          goal_id: { type: "string", description: "The goal id to import tasks into." },
+          spec_kit_json: { type: "string", description: "Spec Kit JSON text containing spec, tasks[], and acceptance[] fields." },
+        },
+        required: ["goal_id", "spec_kit_json"],
+      },
+    },
+    {
       name: "check_release_gate",
       description:
         "v1.0.0: Verify release readiness across five sequential stages: local_ready → packed_ready → published_verified → github_release_verified → ci_verified. Remote stages (published/github/ci) query npm registry and GitHub API via node:https read-only GET; network errors return 'not_checked' (not 'failed'). Never claims release complete before published_verified passes. Does not execute shell commands for remote queries.",
@@ -1807,6 +1832,18 @@ async function handleToolCallInternal(name: string, args: Record<string, unknown
       const goalId = String(args?.goal_id ?? "");
       const goalStatus = readGoalStatus(goalId);
       return toResult(exportHandoff(goalId, goalStatus));
+    }
+
+    case "export_goal_report": {
+      const goalId = String(args?.goal_id ?? "");
+      return toResult(exportGoalReport(goalId));
+    }
+
+    case "import_speckit_tasks": {
+      const goalId = String(args?.goal_id ?? "");
+      const jsonText = String(args?.spec_kit_json ?? "");
+      const input = parseSpecKitJson(jsonText);
+      return toResult(importSpecKitTasks(goalId, input));
     }
 
     case "check_release_gate": {

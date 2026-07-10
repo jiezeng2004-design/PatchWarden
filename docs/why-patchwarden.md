@@ -1,6 +1,6 @@
 # 为什么需要 PatchWarden
 
-> 适用版本：v1.5.1+
+> 本文基于 v1.5.1 源码编写；安装时请使用已验证发布的 <published-version>。
 > 面向：使用 ChatGPT、Codex、OpenCode 等 MCP 客户端但需要安全边界的开发者
 
 ## 背景：本地 Agent 的安全缺口
