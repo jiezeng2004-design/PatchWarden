@@ -12,11 +12,12 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { loadConfig } from "./config.js";
 import { registerTools } from "./tools/registry.js";
 import { PATCHWARDEN_VERSION } from "./version.js";
+import { logger } from "./logging.js";
 
 const config = loadConfig();
 
-console.error(`[patchwarden] Workspace: ${config.workspaceRoot}`);
-console.error(`[patchwarden] Transport: stdio`);
+logger.info(`[patchwarden] Workspace: ${config.workspaceRoot}`);
+logger.info("[patchwarden] Transport: stdio");
 
 const server = new Server(
   { name: "patchwarden", version: PATCHWARDEN_VERSION },
@@ -27,8 +28,10 @@ registerTools(server);
 
 const transport = new StdioServerTransport();
 server.connect(transport).catch((err) => {
-  console.error("[patchwarden] Fatal:", err);
+  logger.fatal("[patchwarden] Fatal", {
+    error: err instanceof Error ? err.message : String(err),
+  });
   process.exit(1);
 });
 
-console.error("[patchwarden] MCP server ready on stdio");
+logger.info("[patchwarden] MCP server ready on stdio");

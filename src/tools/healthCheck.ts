@@ -195,14 +195,14 @@ function directoryStatus(path: string, allowCreatable: boolean, createRoot?: str
       try {
         accessSync(parent, constants.R_OK | constants.W_OK);
         return { available: true, path, readable: false, writable: true, reason: "Directory will be created on first use." };
-      } catch {}
+      } catch {} // probe failure handled by return value
     }
     return { available: false, path, readable: false, writable: false, reason: "Directory does not exist." };
   }
   let readable = false;
   let writable = false;
-  try { accessSync(path, constants.R_OK); readable = true; } catch {}
-  try { accessSync(path, constants.W_OK); writable = true; } catch {}
+  try { accessSync(path, constants.R_OK); readable = true; } catch {} // probe failure handled by return value
+  try { accessSync(path, constants.W_OK); writable = true; } catch {} // probe failure handled by return value
   return {
     available: readable && writable,
     path,

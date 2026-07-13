@@ -31,6 +31,10 @@ export interface Subgoal {
   task_ids: string[];
   accepted_at?: string;
   rejected_reason?: string;
+  /** Spec Kit task id 回溯（用于幂等去重） */
+  external_ref?: string;
+  /** Spec Kit task.files 提示（作用域文件路径列表） */
+  scope_hints?: string[];
 }
 
 export interface GoalStatus {
@@ -41,6 +45,8 @@ export interface GoalStatus {
   created_at: string;
   updated_at: string;
   subgoals: Subgoal[];
+  /** Spec Kit 验收标准列表 */
+  acceptance_criteria?: string[];
 }
 
 // ── 合法状态转换表 ────────────────────────────────────────────────

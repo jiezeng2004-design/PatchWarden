@@ -103,9 +103,9 @@ export function safeDirectSummary(sessionId: string, options: SafeViewOptions = 
   return directSessionToSafe(session, maxItems, "summary");
 }
 
-export function safeFinalizeDirectSession(sessionId: string, options: SafeViewOptions = {}) {
+export async function safeFinalizeDirectSession(sessionId: string, options: SafeViewOptions = {}) {
   const maxItems = normalizeMaxItems(options.max_items);
-  const finalized = finalizeDirectSession({ session_id: sessionId });
+  const finalized = await finalizeDirectSession({ session_id: sessionId });
   const session = readDirectSession(sessionId);
   return redact({
     ...directSessionToSafe(session, maxItems, "finalize"),

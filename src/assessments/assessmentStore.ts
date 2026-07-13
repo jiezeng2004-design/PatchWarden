@@ -314,7 +314,7 @@ export function validateAssessmentFreshness(
  * This is intentionally not registered as an MCP tool: a remote client may
  * request confirmation, but it cannot grant confirmation to itself.
  */
-export function confirmAssessment(assessmentId: string): AssessmentConfirmationResult {
+export async function confirmAssessment(assessmentId: string): Promise<AssessmentConfirmationResult> {
   if (!/^assessment_\d{8}_\d{6}_[0-9a-f]{32}$/.test(assessmentId)) {
     throw new PatchWardenError(
       "assessment_id_invalid",
@@ -334,7 +334,7 @@ export function confirmAssessment(assessmentId: string): AssessmentConfirmationR
     );
   }
 
-  const snapshot = captureRepoSnapshot(assessment.resolved_repo_path);
+  const snapshot = await captureRepoSnapshot(assessment.resolved_repo_path);
   const validation = validateAssessmentFreshness(assessmentId, snapshot, {
     allow_unconfirmed: true,
     // A standalone CLI has no active MCP profile snapshot. The execute path

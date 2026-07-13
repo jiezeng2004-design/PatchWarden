@@ -8,7 +8,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Current source version: **v1.5.0**. See the
+Current source version: **v1.5.1**. See the
 [CHANGELOG](CHANGELOG.md), [migration guide](docs/migration-from-safe-bifrost.md), and
 [release checklist](docs/release-checklist.md). Verify GitHub Release / npm publication separately before release.
 
@@ -46,6 +46,7 @@ independent verification evidence.
 - [HTTP MCP mode](#http-mcp-mode)
 - [Diagnostics and health checks](#diagnostics-and-health-checks)
 - [Lessons learned and troubleshooting](#lessons-learned-and-troubleshooting)
+- [Ecosystem guides](#ecosystem-guides)
 - [Security boundaries and local data](#security-boundaries-and-local-data)
 - [Upgrading and migration](#upgrading-and-migration)
 - [Development and release verification](#development-and-release-verification)
@@ -845,6 +846,31 @@ It stops only this project's launchers and Watcher plus `tunnel-client.exe`
 processes that exactly match the selected profile. It does not globally
 terminate unrelated PatchWarden, OpenCode, or Codex instances.
 
+## Dashboard pages and recommended workflow
+
+The PatchWarden Dashboard (Control Center) provides these main pages:
+
+- **Dashboard**: System overview, including Repo selector, Health Score, service status, Release card, Project Policy, Lineage, Evidence Pack, stale task hints, recent task list, and system status (with Copy diagnostics).
+- **Tasks**: Task list, filterable by repo_path / status / acceptance_status / warning type / agent / date range. Each row offers safe_result / safe_audit / safe_test_summary / safe_diff_summary quick actions.
+- **Task Detail**: Defaults to a safe summary (safe_result / safe_test_summary / safe_diff_summary / safe_audit). Full result / diff / test log live in a collapsed advanced section and load on demand.
+- **Direct Sessions**: Grouped by active / finalized / audited / expired, with safe_direct_summary / safe_finalize_direct_session / safe_audit_direct_session quick actions.
+- **Audit / Warnings**: Aggregated by warning type, showing affected tasks / severity / recommended action.
+- **Workspace**: First-level workspace directories and project list.
+- **Logs**: Tails of Core / Direct / Watcher / Control Center logs.
+
+Recommended workflow:
+
+1. Select the target repo at the top of the Dashboard.
+2. Check the Health Score to confirm system health.
+3. Click safe_result on a recent task row to view the task summary.
+4. Open Task Detail for safe-first acceptance; expand the advanced section only when you need the full logs.
+5. Use Lineage Detail to inspect why a run_task_loop succeeded or failed.
+6. Export the Evidence Pack after acceptance.
+7. Use Direct sessions for independent verification, then finalize + audit.
+8. When something goes wrong, click Copy diagnostics and paste the output to ChatGPT / Codex / opencode for triage.
+
+> See [docs/dashboard-overview.md](docs/dashboard-overview.md), [docs/task-safe-review-workflow.md](docs/task-safe-review-workflow.md), [docs/lineage-evidence-pack-workflow.md](docs/lineage-evidence-pack-workflow.md), and [docs/direct-session-workflow.md](docs/direct-session-workflow.md) for details.
+
 ## Lessons learned and troubleshooting
 
 ### Quick reference
@@ -1017,6 +1043,17 @@ the Watcher, and retains the existing DPAPI credential handling. In a fresh
 ChatGPT conversation, `health_check` should report `chatgpt_direct`, fourteen
 tools, and `direct_profile_enabled=true`.
 
+## Ecosystem guides
+
+- [Why PatchWarden](docs/why-patchwarden.md)
+- [Evidence Pack v2 schema](docs/evidence-pack-schema.md)
+- [Spec Kit integration](docs/spec-kit-integration.md)
+- [AgentSeal integration](docs/agentseal-integration.md)
+- [MCP Inspector testing](docs/mcp-inspector-testing.md)
+- [OpenCode worker integration](docs/opencode-worker.md)
+- [OpenHands worker integration](docs/openhands-worker.md)
+- [Threat model](docs/threat-model.md)
+
 ## Security boundaries and local data
 
 Primary protections:
@@ -1122,6 +1159,10 @@ and release-asset checksums independently.
 - [ChatGPT usage guide](docs/chatgpt-usage.md)
 - [Migration guide](docs/migration-from-safe-bifrost.md)
 - [ChatGPT Connector demo](docs/demo.md)
+- [Dashboard overview](docs/dashboard-overview.md)
+- [Task safe review workflow](docs/task-safe-review-workflow.md)
+- [Lineage and Evidence Pack workflow](docs/lineage-evidence-pack-workflow.md)
+- [Direct session workflow](docs/direct-session-workflow.md)
 - [OpenAI tunnel examples](examples/openai-tunnel/README.md)
 - [ChatGPT test prompt](examples/openai-tunnel/chatgpt-test-prompt.md)
 
@@ -1137,7 +1178,7 @@ and release-asset checksums independently.
 - [x] Release Gate (five-stage pre-release verification)
 - [x] Worktree isolation
 - [x] Multi-agent routing
-- [ ] Local dashboard
+- [x] Local dashboard
 
 ## License
 

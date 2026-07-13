@@ -4,6 +4,7 @@ node_modules/
 dist/
 .patchwarden/
 .safe-bifrost/
+.trae/
 .env
 *.log
 patchwarden.config.json
@@ -29,4 +30,4 @@ safe-bifrost-*.tgz
 /scripts/launchers/Kill-PatchWarden.cmd
 /CODE_WIKI.md
 /PatchWarden-UI.zip
-/patchwarden-v0.6.1-SHA256SUMS.txt
+/patchwarden-v*-SHA256SUMS.txt

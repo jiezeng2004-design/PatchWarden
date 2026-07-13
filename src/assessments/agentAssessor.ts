@@ -21,7 +21,7 @@ export interface AgentAssessorInput {
   config: PatchWardenConfig;
 }
 
-export function runAgentAssessment(input: AgentAssessorInput): AgentAssessmentSummary {
+export async function runAgentAssessment(input: AgentAssessorInput): Promise<AgentAssessmentSummary> {
   const logPaths: AgentAssessmentSummary["log_paths"] = {
     stdout: resolve(input.assessmentDir, "agent-assessment-stdout.log"),
     stderr: resolve(input.assessmentDir, "agent-assessment-stderr.log"),
@@ -53,7 +53,7 @@ export function runAgentAssessment(input: AgentAssessorInput): AgentAssessmentSu
   // ── 2. Before snapshot (repo-scoped) ──
   let repoBefore: RepoSnapshot;
   try {
-    repoBefore = captureRepoSnapshot(input.repoPath);
+    repoBefore = await captureRepoSnapshot(input.repoPath);
   } catch {
     // If we can't capture before snapshot, conservatively skip agent assessment
     emptySummary.status = "spawn_failed";
@@ -95,7 +95,7 @@ export function runAgentAssessment(input: AgentAssessorInput): AgentAssessmentSu
   let readOnlyViolation = false;
   let violationFiles: string[] = [];
   try {
-    const repoAfter = captureRepoSnapshot(input.repoPath);
+    const repoAfter = await captureRepoSnapshot(input.repoPath);
     const changes = compareSnapshots(repoBefore, repoAfter);
     if (changes.length > 0) {
       readOnlyViolation = true;

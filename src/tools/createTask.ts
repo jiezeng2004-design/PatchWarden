@@ -181,9 +181,9 @@ export interface CreateTaskOutput {
   };
 }
 
-export function createTask(input: CreateTaskInput & { execution_mode: "assess_only" }): AssessOnlyOutput;
-export function createTask(input: CreateTaskInput): CreateTaskOutput;
-export function createTask(input: CreateTaskInput): CreateTaskResult {
+export function createTask(input: CreateTaskInput & { execution_mode: "assess_only" }): Promise<AssessOnlyOutput>;
+export function createTask(input: CreateTaskInput): Promise<CreateTaskOutput>;
+export async function createTask(input: CreateTaskInput): Promise<CreateTaskResult> {
   const config = getConfig();
   const tasksDir = getTasksDir(config);
   const plansDir = getPlansDir(config);
@@ -243,7 +243,7 @@ export function createTask(input: CreateTaskInput): CreateTaskResult {
 
   // Resolve repo alias if configured
   let resolvedRepoPath = effectiveInput.repo_path?.trim() || "";
-  const aliases = (config as any).repoAliases as Record<string, string> | undefined;
+  const aliases = config.repoAliases;
   if (aliases && resolvedRepoPath && aliases[resolvedRepoPath]) {
     resolvedRepoPath = aliases[resolvedRepoPath];
   }
@@ -382,7 +382,7 @@ export function createTask(input: CreateTaskInput): CreateTaskResult {
       planBlockReason = e instanceof PatchWardenError ? e.reason : "plan_content_blocked";
     }
 
-    const snapshot = captureRepoSnapshot(safeRepoPath);
+    const snapshot = await captureRepoSnapshot(safeRepoPath);
     const snapshotTruncated = snapshot.warnings.some((w) => w.includes("snapshot limited"));
 
     let riskResult;
@@ -441,7 +441,7 @@ export function createTask(input: CreateTaskInput): CreateTaskResult {
       preGeneratedAssessmentDir = createAssessmentDir(preGeneratedAssessmentId);
 
       const assessorAgentName = config.agentAssessmentAgentName || effectiveInput.agent;
-      agentAssessmentSummary = runAgentAssessment({
+      agentAssessmentSummary = await runAgentAssessment({
         assessmentId: preGeneratedAssessmentId,
         assessmentDir: preGeneratedAssessmentDir,
         agentName: assessorAgentName,
@@ -572,7 +572,7 @@ export function createTask(input: CreateTaskInput): CreateTaskResult {
 
   // ── execute mode with assessment_id: validate freshness ──
   if (assessmentRecord) {
-    const snapshot = captureRepoSnapshot(safeRepoPath);
+    const snapshot = await captureRepoSnapshot(safeRepoPath);
     const validation = validateAssessmentFreshness(input.assessment_id!, snapshot);
     if (!validation.valid) {
       throw new PatchWardenError(

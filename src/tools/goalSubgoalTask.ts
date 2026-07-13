@@ -64,7 +64,7 @@ export interface CreateSubgoalTaskOutput {
  * @throws PatchWardenError("invalid_dependency") 当 depends_on 引用不存在的 subgoal
  * @throws PatchWardenError("invalid_execution_mode") 当 execution_mode 为 "assess_only"
  */
-export function createSubgoalTask(input: CreateSubgoalTaskInput): CreateSubgoalTaskOutput {
+export async function createSubgoalTask(input: CreateSubgoalTaskInput): Promise<CreateSubgoalTaskOutput> {
   // assess_only 不产生 task，无法关联到 subgoal
   if (input.execution_mode === "assess_only") {
     throw new PatchWardenError(
@@ -113,7 +113,7 @@ export function createSubgoalTask(input: CreateSubgoalTaskInput): CreateSubgoalT
   // 3. 调用 createTask 创建关联任务（强制 execute 模式，确保返回 CreateTaskOutput）
   let taskId: string;
   try {
-    const taskResult = createTask({
+    const taskResult = await createTask({
       plan_id: input.plan_id,
       inline_plan: input.inline_plan,
       plan_title: input.plan_title,

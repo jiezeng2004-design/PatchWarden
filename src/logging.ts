@@ -7,7 +7,7 @@ import { getConfig } from "./config.js";
 
 // ── Types ─────────────────────────────────────────────────────────
 
-export type LogLevel = "info" | "warn" | "error" | "audit";
+export type LogLevel = "info" | "warn" | "error" | "fatal" | "audit";
 
 export interface LogEntry {
   timestamp: string;
@@ -88,6 +88,15 @@ export class Logger {
 
   error(message: string, context?: Record<string, unknown>): void {
     emit({ timestamp: new Date().toISOString(), level: "error", message, ...context });
+  }
+
+  /**
+   * Emit a fatal-level log entry. Use this immediately before a process
+   * exits with a non-zero status, to record the unrecoverable condition.
+   * Level is higher than `error`.
+   */
+  fatal(message: string, context?: Record<string, unknown>): void {
+    emit({ timestamp: new Date().toISOString(), level: "fatal", message, ...context });
   }
 
   /**

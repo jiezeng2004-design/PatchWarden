@@ -250,36 +250,134 @@ html.dark {
     <main class="flex-1 overflow-y-auto p-6" style="background-color: var(--pw-bg-elevated);">
 
       <!-- ===== Filter Bar ===== -->
-      <div class="flex flex-wrap items-center gap-3 mb-5">
-        <!-- Status Filter Dropdown -->
-        <div class="relative">
-          <select id="statusFilter" class="appearance-none pl-3 pr-8 py-1.5 rounded-lg text-xs font-medium outline-none cursor-pointer transition-colors" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border-subtle); color: var(--pw-text-secondary); font-family: var(--pw-font-sans);">
-            <option value="" data-zh="全部状态" data-en="All Status">全部状态</option>
-            <option value="pending">Pending</option>
-            <option value="running">Running</option>
-            <option value="done">Done</option>
-            <option value="failed">Failed</option>
-          </select>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--pw-text-tertiary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
-            <polyline points="6 9 12 15 18 9"/>
-          </svg>
+      <div class="rounded-lg mb-5 p-4" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
+        <div class="flex flex-wrap items-end gap-3">
+          <!-- Repo Path Filter -->
+          <div class="flex flex-col gap-1">
+            <label class="text-xs font-medium" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="仓库" data-en="Repo">仓库</label>
+            <div class="relative">
+              <select id="repoFilter" class="appearance-none pl-3 pr-8 py-1.5 rounded-lg text-xs font-medium outline-none cursor-pointer transition-colors" style="background-color: var(--pw-bg-elevated); border: 1px solid var(--pw-border-subtle); color: var(--pw-text-primary); font-family: var(--pw-font-sans); min-width: 180px;">
+                <option value="" data-zh="全部仓库" data-en="All repos">全部仓库</option>
+              </select>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--pw-text-tertiary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </div>
+          </div>
+
+          <!-- Status Filter -->
+          <div class="flex flex-col gap-1">
+            <label class="text-xs font-medium" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="状态" data-en="Status">状态</label>
+            <div class="relative">
+              <select id="statusFilter" class="appearance-none pl-3 pr-8 py-1.5 rounded-lg text-xs font-medium outline-none cursor-pointer transition-colors" style="background-color: var(--pw-bg-elevated); border: 1px solid var(--pw-border-subtle); color: var(--pw-text-primary); font-family: var(--pw-font-sans); min-width: 140px;">
+                <option value="" data-zh="全部状态" data-en="All Status">全部状态</option>
+                <option value="running">Running</option>
+                <option value="pending">Pending</option>
+                <option value="done">Done</option>
+                <option value="failed">Failed</option>
+                <option value="failed_verification">Failed Verification</option>
+                <option value="failed_policy_violation">Failed Policy Violation</option>
+                <option value="failed_scope_violation">Failed Scope Violation</option>
+                <option value="needs_fix">Needs Fix</option>
+                <option value="ready_for_review">Ready For Review</option>
+                <option value="done_by_agent">Done By Agent</option>
+              </select>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--pw-text-tertiary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </div>
+          </div>
+
+          <!-- Acceptance Status Filter -->
+          <div class="flex flex-col gap-1">
+            <label class="text-xs font-medium" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="验收" data-en="Acceptance">验收</label>
+            <div class="relative">
+              <select id="acceptanceFilter" class="appearance-none pl-3 pr-8 py-1.5 rounded-lg text-xs font-medium outline-none cursor-pointer transition-colors" style="background-color: var(--pw-bg-elevated); border: 1px solid var(--pw-border-subtle); color: var(--pw-text-primary); font-family: var(--pw-font-sans); min-width: 160px;">
+                <option value="" data-zh="全部验收" data-en="All Acceptance">全部验收</option>
+                <option value="ready_for_review">Ready For Review</option>
+                <option value="done_by_agent">Done By Agent</option>
+                <option value="needs_fix">Needs Fix</option>
+                <option value="failed_verification">Failed Verification</option>
+                <option value="failed_policy_violation">Failed Policy Violation</option>
+                <option value="failed_scope_violation">Failed Scope Violation</option>
+              </select>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--pw-text-tertiary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </div>
+          </div>
+
+          <!-- Warning Type Filter -->
+          <div class="flex flex-col gap-1">
+            <label class="text-xs font-medium" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="警告类型" data-en="Warning Type">警告类型</label>
+            <div class="relative">
+              <select id="warningTypeFilter" class="appearance-none pl-3 pr-8 py-1.5 rounded-lg text-xs font-medium outline-none cursor-pointer transition-colors" style="background-color: var(--pw-bg-elevated); border: 1px solid var(--pw-border-subtle); color: var(--pw-text-primary); font-family: var(--pw-font-sans); min-width: 180px;">
+                <option value="" data-zh="全部警告" data-en="All Warnings">全部警告</option>
+                <option value="unrecorded_command_execution">Unrecorded Command Execution</option>
+                <option value="artifact_hygiene">Artifact Hygiene</option>
+                <option value="scope_changes">Scope Changes</option>
+                <option value="release_publish_claim">Release Publish Claim</option>
+                <option value="manual_verification_required">Manual Verification Required</option>
+                <option value="stale_task">Stale Task</option>
+                <option value="failed_verification">Failed Verification</option>
+              </select>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--pw-text-tertiary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </div>
+          </div>
+
+          <!-- Agent Filter -->
+          <div class="flex flex-col gap-1">
+            <label class="text-xs font-medium" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="Agent" data-en="Agent">Agent</label>
+            <div class="relative">
+              <select id="agentFilter" class="appearance-none pl-3 pr-8 py-1.5 rounded-lg text-xs font-medium outline-none cursor-pointer transition-colors" style="background-color: var(--pw-bg-elevated); border: 1px solid var(--pw-border-subtle); color: var(--pw-text-primary); font-family: var(--pw-font-sans); min-width: 140px;">
+                <option value="" data-zh="全部 Agent" data-en="All Agents">全部 Agent</option>
+              </select>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--pw-text-tertiary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </div>
+          </div>
+
+          <!-- Date From -->
+          <div class="flex flex-col gap-1">
+            <label class="text-xs font-medium" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="更新从" data-en="Updated From">更新从</label>
+            <input id="dateFromFilter" type="date" class="px-3 py-1.5 rounded-lg text-xs font-medium outline-none cursor-pointer transition-colors" style="background-color: var(--pw-bg-elevated); border: 1px solid var(--pw-border-subtle); color: var(--pw-text-primary); font-family: var(--pw-font-sans); color-scheme: dark;" />
+          </div>
+
+          <!-- Date To -->
+          <div class="flex flex-col gap-1">
+            <label class="text-xs font-medium" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="更新至" data-en="Updated To">更新至</label>
+            <input id="dateToFilter" type="date" class="px-3 py-1.5 rounded-lg text-xs font-medium outline-none cursor-pointer transition-colors" style="background-color: var(--pw-bg-elevated); border: 1px solid var(--pw-border-subtle); color: var(--pw-text-primary); font-family: var(--pw-font-sans); color-scheme: dark;" />
+          </div>
+
+          <!-- Action Buttons -->
+          <div class="flex items-center gap-2">
+            <button id="applyFiltersBtn" class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors" style="background-color: var(--pw-accent); color: var(--pw-text-inverse); font-family: var(--pw-font-sans);">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+              <span data-zh="应用筛选" data-en="Apply Filters">应用筛选</span>
+            </button>
+            <button id="clearFiltersBtn" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors" style="background-color: var(--pw-bg-hover); color: var(--pw-text-secondary); border: 1px solid var(--pw-border-subtle); font-family: var(--pw-font-sans);">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              <span data-zh="清空筛选" data-en="Clear Filters">清空筛选</span>
+            </button>
+          </div>
+
+          <!-- Refresh + Count -->
+          <button id="refreshBtn" class="flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ml-auto" style="background-color: var(--pw-bg-elevated); color: var(--pw-text-secondary); border: 1px solid var(--pw-border-subtle); font-family: var(--pw-font-sans);">
+            <svg id="refreshIcon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="23 4 23 10 17 10"/>
+              <polyline points="1 20 1 14 7 14"/>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+            <span data-zh="刷新" data-en="Refresh">刷新</span>
+          </button>
         </div>
-
-        <!-- Refresh Button -->
-        <button id="refreshBtn" class="flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors" style="background-color: var(--pw-bg-surface); color: var(--pw-text-secondary); border: 1px solid var(--pw-border-subtle); font-family: var(--pw-font-sans);">
-          <svg id="refreshIcon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="23 4 23 10 17 10"/>
-            <polyline points="1 20 1 14 7 14"/>
-            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-          </svg>
-          <span data-zh="刷新" data-en="Refresh">刷新</span>
-        </button>
-
-        <!-- Spacer -->
-        <div class="flex-1"></div>
-
-        <!-- Count Summary -->
-        <div id="countSummary" class="text-xs" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);">--</div>
+        <div class="flex items-center justify-between mt-3 pt-3" style="border-top: 1px solid var(--pw-border-subtle);">
+          <div id="filterStatusText" class="text-xs" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);">—</div>
+          <div id="countSummary" class="text-xs" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);">--</div>
+        </div>
       </div>
 
       <!-- ===== Task Table (border-led card) ===== -->
@@ -324,16 +422,18 @@ html.dark {
 
         <!-- Table -->
         <div id="tableWrapper" class="hidden overflow-x-auto">
-          <table class="w-full text-left" style="min-width: 960px;">
+          <table class="w-full text-left" style="min-width: 1200px;">
             <thead>
               <tr style="border-bottom: 1px solid var(--pw-border);">
                 <th class="px-4 py-3 text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="任务ID" data-en="Task ID">任务ID</th>
                 <th class="px-4 py-3 text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="标题" data-en="Title">标题</th>
                 <th class="px-4 py-3 text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);">Agent</th>
                 <th class="px-4 py-3 text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="状态" data-en="Status">状态</th>
+                <th class="px-4 py-3 text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="验收" data-en="Acceptance">验收</th>
+                <th class="px-4 py-3 text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="验证" data-en="Verification">验证</th>
                 <th class="px-4 py-3 text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="阶段" data-en="Phase">阶段</th>
                 <th class="px-4 py-3 text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="创建时间" data-en="Created">创建时间</th>
-                <th class="px-4 py-3 text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="待因" data-en="Pending Reason">待因</th>
+                <th class="px-4 py-3 text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="下一步" data-en="Next Action">下一步</th>
                 <th class="px-4 py-3 text-xs font-semibold whitespace-nowrap text-right" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="操作" data-en="Actions">操作</th>
               </tr>
             </thead>
@@ -341,6 +441,17 @@ html.dark {
               <!-- Rendered by JavaScript -->
             </tbody>
           </table>
+        </div>
+      </div>
+
+      <!-- ===== SAFE MODAL ===== -->
+      <div id="safe-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" style="background-color: rgba(0,0,0,0.6);">
+        <div class="rounded-lg w-full max-w-2xl max-h-[80vh] flex flex-col" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border); box-shadow: var(--pw-shadow-modal);">
+          <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
+            <h3 id="safe-modal-title" class="text-sm font-semibold truncate" style="color: var(--pw-text-primary);">—</h3>
+            <button id="safe-modal-close" class="text-lg leading-none" style="color: var(--pw-text-tertiary);" type="button">×</button>
+          </div>
+          <div id="safe-modal-body" class="flex-1 overflow-auto px-4 py-3 text-xs" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono); white-space: pre-wrap; word-break: break-all;"></div>
         </div>
       </div>
 
@@ -418,6 +529,35 @@ html.dark {
       background-color: var(--pw-bg-active) !important;
       color: var(--pw-text-primary) !important;
     }
+    /* Quick action icon buttons */
+    .pw-quick-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      border-radius: 4px;
+      border: 1px solid var(--pw-border-subtle);
+      background-color: var(--pw-bg-hover);
+      color: var(--pw-text-secondary);
+      cursor: pointer;
+      transition: background-color var(--pw-transition-fast), color var(--pw-transition-fast);
+      text-decoration: none;
+      vertical-align: middle;
+    }
+    .pw-quick-btn:hover {
+      background-color: var(--pw-bg-active);
+      color: var(--pw-text-primary);
+      filter: none;
+    }
+    /* Acceptance status badge - more prominent than status */
+    .pw-acceptance-badge {
+      font-size: var(--pw-text-sm);
+      font-weight: var(--pw-weight-bold);
+      padding: 2px 8px;
+      border-width: 1px;
+      border-style: solid;
+    }
   </style>
 
   <script>
@@ -434,6 +574,11 @@ html.dark {
         done:                    { color: 'success', text: '已完成' },
         failed:                  { color: 'error',   text: '失败' },
         failed_scope_violation:  { color: 'error',   text: '范围违规' },
+        failed_policy_violation: { color: 'error',   text: '策略违规' },
+        failed_verification:     { color: 'error',   text: '验证失败' },
+        needs_fix:               { color: 'warning', text: '需修复' },
+        ready_for_review:        { color: 'info',    text: '待审核' },
+        done_by_agent:           { color: 'success', text: 'Agent 完成' },
         canceled:                { color: 'muted',   text: '已取消' },
         timeout:                 { color: 'muted',   text: '超时' }
       };
@@ -448,7 +593,18 @@ html.dark {
       };
 
       var allTasks = [];
-      var currentFilter = '';
+      // currentFilters holds the active filter values for all dimensions.
+      // repo_path / status / acceptance_status / agent are sent to the backend.
+      // warning_type / date_from / date_to are applied client-side.
+      var currentFilters = {
+        repo_path: '',
+        status: '',
+        acceptance_status: '',
+        agent: '',
+        warning_type: '',
+        date_from: '',
+        date_to: ''
+      };
 
       // ---- DOM helpers ----
       function $(id) { return document.getElementById(id); }
@@ -486,6 +642,124 @@ html.dark {
 
       function getPhaseLabel(phase) {
         return PHASE_LABELS[phase] || phase || '—';
+      }
+
+      function shortId(id) {
+        if (!id) return '—';
+        var s = String(id);
+        return s.length > 22 ? s.slice(0, 10) + '…' + s.slice(-8) : s;
+      }
+
+      // ---- Safe summary + clipboard helpers ----
+      async function fetchJson(url) {
+        var res = await fetch(url);
+        if (!res.ok) throw new Error('HTTP ' + res.status + ' · ' + url);
+        return res.json();
+      }
+
+      function showToast(kind, title, msg) {
+        var container = document.getElementById('toast-container');
+        if (!container) {
+          container = document.createElement('div');
+          container.id = 'toast-container';
+          container.className = 'fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-sm pointer-events-none';
+          document.body.appendChild(container);
+        }
+        var el = document.createElement('div');
+        var borderColors = {
+          success: 'var(--pw-state-success)',
+          error: 'var(--pw-state-error)',
+          warning: 'var(--pw-state-warning)',
+          info: 'var(--pw-state-info)'
+        };
+        el.className = 'pointer-events-auto flex items-start gap-2 px-3 py-2 rounded-lg text-xs';
+        el.style.cssText = 'background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border); border-left: 3px solid ' + (borderColors[kind] || borderColors.info) + '; color: var(--pw-text-primary); box-shadow: var(--pw-shadow-float); max-width: 320px;';
+        el.innerHTML = '<div class="min-w-0 flex-1"><div style="font-weight:600;">' + escapeHtml(title || '') + '</div>' + (msg ? '<div style="color: var(--pw-text-secondary);">' + escapeHtml(msg) + '</div>' : '') + '</div>';
+        container.appendChild(el);
+        setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 4000);
+      }
+
+      function copyToClipboard(text, label) {
+        if (!text) return;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(function () {
+            showToast('success', '已复制', (label || '内容') + '已复制到剪贴板');
+          }).catch(function () {
+            showToast('error', '复制失败', '请手动复制');
+          });
+        } else {
+          showToast('warning', '复制不支持', '浏览器不支持剪贴板 API');
+        }
+      }
+
+      function showSafeModal(title, data) {
+        var modal = $('safe-modal');
+        var titleEl = $('safe-modal-title');
+        var bodyEl = $('safe-modal-body');
+        if (!modal || !titleEl || !bodyEl) return;
+        titleEl.textContent = title || '—';
+        var content;
+        if (data && typeof data === 'object') {
+          content = JSON.stringify(data, null, 2);
+        } else {
+          content = String(data || '');
+        }
+        bodyEl.textContent = content;
+        modal.classList.remove('hidden');
+      }
+
+      function closeSafeModal() {
+        var modal = $('safe-modal');
+        if (modal) modal.classList.add('hidden');
+      }
+
+      async function fetchSafeSummary(taskId, kind, title) {
+        if (!taskId) return;
+        try {
+          var data = await fetchJson('/api/tasks/' + encodeURIComponent(taskId) + '/' + kind);
+          showSafeModal(title, data);
+        } catch (err) {
+          showToast('error', '加载失败', title + ': ' + err.message);
+        }
+      }
+
+      // ---- Status priority ----
+      function primaryStatus(task) {
+        if (!task) return { key: '', label: '—', color: 'muted' };
+        var priority = [
+          'failed_policy_violation',
+          'failed_scope_violation',
+          'failed_verification',
+          'needs_fix',
+          'ready_for_review',
+          'done_by_agent',
+          'running',
+          'pending'
+        ];
+        var status = task.status || '';
+        var acceptance = task.acceptance_status || '';
+        var statusIdx = priority.indexOf(status);
+        var acceptanceIdx = priority.indexOf(acceptance);
+        var chosen = '';
+        if (statusIdx >= 0 && acceptanceIdx >= 0) {
+          chosen = statusIdx <= acceptanceIdx ? status : acceptance;
+        } else if (statusIdx >= 0) {
+          chosen = status;
+        } else if (acceptanceIdx >= 0) {
+          chosen = acceptance;
+        } else {
+          chosen = acceptance || status || '';
+        }
+        var meta = getStatusMeta(chosen || status);
+        return { key: chosen, label: meta.text, color: meta.color };
+      }
+
+      function verificationHeadline(t) {
+        if (!t) return '—';
+        if (t.verification && t.verification.headline) return t.verification.headline;
+        if (t.safe_result && t.safe_result.verification && t.safe_result.verification.headline) return t.safe_result.verification.headline;
+        if (t.verification_headline) return t.verification_headline;
+        return '—';
       }
 
       // ---- State rendering ----
@@ -541,52 +815,156 @@ html.dark {
 
       // ---- Row rendering ----
       function renderRow(task, idx) {
+        var taskId = task.task_id || '';
         var meta = getStatusMeta(task.status);
         var style = badgeStyle(meta.color);
         var pulseClass = (task.status === 'running') ? ' pw-pulse-badge' : '';
-        var truncatedId = truncate(task.task_id, 12);
+        var truncatedId = truncate(taskId, 12);
         var createdAt = formatTime(task.created_at);
         var phaseLabel = getPhaseLabel(task.phase);
         var altBg = (idx % 2 === 1) ? ' background-color: var(--pw-bg-hover);' : '';
+        var detailHref = '/pages/task-detail.html?id=' + encodeURIComponent(taskId);
 
-        var pendingCell;
-        if (task.pending_reason) {
-          pendingCell = '<span class="inline-block truncate" style="max-width: 180px; color: var(--pw-state-warning); font-family: var(--pw-font-sans);" title="'
-                      + escapeAttr(task.pending_reason) + '">'
-                      + escapeHtml(truncate(task.pending_reason, 28))
-                      + '</span>';
+        // Skip status badge if redundant with acceptance (done + done_by_agent)
+        var skipStatusBadge = (task.status === 'done' && task.acceptance_status === 'done_by_agent');
+
+        // Acceptance badge (more prominent)
+        var accCell;
+        if (task.acceptance_status) {
+          var accMeta = getStatusMeta(task.acceptance_status);
+          var accStyle = badgeStyle(accMeta.color);
+          accCell = '<span class="inline-flex items-center gap-1.5 pw-acceptance-badge rounded-md whitespace-nowrap" style="' + accStyle + ' font-family: var(--pw-font-sans); border-color: ' + getAccentColor(accMeta.color) + ';">'
+                  + '<span class="shrink-0 w-1.5 h-1.5 rounded-full" style="background-color: currentColor;"></span>'
+                  + escapeHtml(accMeta.text)
+                  + '</span>';
         } else {
-          pendingCell = '<span style="color: var(--pw-text-tertiary);">—</span>';
+          accCell = '<span style="color: var(--pw-text-tertiary);">—</span>';
         }
 
-        var detailHref = '/pages/task-detail.html?id=' + encodeURIComponent(task.task_id || '');
+        // Verification headline
+        var headline = verificationHeadline(task);
+        var verifyCell = '<span class="inline-block truncate" style="max-width: 180px; color: var(--pw-text-secondary); font-family: var(--pw-font-sans);" title="' + escapeAttr(headline) + '">' + escapeHtml(truncate(headline, 30)) + '</span>';
+
+        // Next action cell
+        var nextActionCell;
+        if (task.next_action) {
+          nextActionCell = '<span class="inline-block truncate" style="max-width: 160px; color: var(--pw-text-secondary); font-family: var(--pw-font-sans);" title="' + escapeAttr(task.next_action) + '">' + escapeHtml(truncate(task.next_action, 28)) + '</span>';
+        } else if (task.pending_reason) {
+          nextActionCell = '<span class="inline-block truncate" style="max-width: 160px; color: var(--pw-state-warning); font-family: var(--pw-font-sans);" title="' + escapeAttr(task.pending_reason) + '">' + escapeHtml(truncate(task.pending_reason, 28)) + '</span>';
+        } else {
+          nextActionCell = '<span style="color: var(--pw-text-tertiary);">—</span>';
+        }
+
+        // Status cell (skip badge if redundant)
+        var statusCell;
+        if (skipStatusBadge) {
+          statusCell = '<span style="color: var(--pw-text-tertiary);">—</span>';
+        } else {
+          statusCell = '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium whitespace-nowrap' + pulseClass + '" style="' + style + ' font-family: var(--pw-font-sans);" data-status="' + escapeAttr(task.status || '') + '">'
+                     + '<span class="shrink-0 w-1.5 h-1.5 rounded-full" style="background-color: currentColor;"></span>'
+                     + escapeHtml(meta.text)
+                     + '</span>';
+        }
+
+        // Quick action buttons
+        var quickActions =
+            '<button class="pw-quick-btn" data-safe-action="safe-result" data-task-id="' + escapeAttr(taskId) + '" title="safe result" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></button>'
+          + '<button class="pw-quick-btn" data-safe-action="safe-audit" data-task-id="' + escapeAttr(taskId) + '" title="safe audit" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></button>'
+          + '<button class="pw-quick-btn" data-safe-action="safe-test-summary" data-task-id="' + escapeAttr(taskId) + '" title="safe test summary" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></button>'
+          + '<button class="pw-quick-btn" data-safe-action="safe-diff-summary" data-task-id="' + escapeAttr(taskId) + '" title="safe diff summary" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg></button>'
+          + '<button class="pw-quick-btn" data-copy-id="' + escapeAttr(taskId) + '" title="复制 task_id" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>'
+          + '<a href="' + detailHref + '" class="pw-quick-btn" title="查看详情"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></a>';
 
         return ''
           + '<tr class="transition-colors" style="border-bottom: 1px solid var(--pw-border-subtle);' + altBg + '">'
-          +   '<td class="px-4 py-3 text-xs whitespace-nowrap" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);" title="' + escapeAttr(task.task_id || '') + '">' + escapeHtml(truncatedId) + '</td>'
-          +   '<td class="px-4 py-3 text-sm" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans); max-width: 320px;">' + escapeHtml(task.title || '—') + '</td>'
+          +   '<td class="px-4 py-3 whitespace-nowrap">'
+          +     '<div class="flex items-center gap-1">'
+          +       '<span class="text-xs" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);" title="' + escapeAttr(taskId) + '">' + escapeHtml(truncatedId) + '</span>'
+          +       '<button class="pw-quick-btn" data-copy-id="' + escapeAttr(taskId) + '" title="复制 task_id" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>'
+          +     '</div>'
+          +   '</td>'
+          +   '<td class="px-4 py-3 text-sm" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans); max-width: 280px;">' + escapeHtml(task.title || '—') + '</td>'
           +   '<td class="px-4 py-3">'
           +     '<span class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium whitespace-nowrap" style="' + agentBadgeStyle(task.agent) + ' font-family: var(--pw-font-mono);">' + escapeHtml(task.agent || '—') + '</span>'
           +   '</td>'
-          +   '<td class="px-4 py-3">'
-          +     '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium whitespace-nowrap' + pulseClass + '" style="' + style + ' font-family: var(--pw-font-sans);" data-status="' + escapeAttr(task.status || '') + '">'
-          +       '<span class="shrink-0 w-1.5 h-1.5 rounded-full" style="background-color: currentColor;"></span>'
-          +       escapeHtml(meta.text)
-          +     '</span>'
-          +   '</td>'
+          +   '<td class="px-4 py-3">' + statusCell + '</td>'
+          +   '<td class="px-4 py-3">' + accCell + '</td>'
+          +   '<td class="px-4 py-3 text-xs">' + verifyCell + '</td>'
           +   '<td class="px-4 py-3 text-xs whitespace-nowrap" style="color: var(--pw-text-secondary); font-family: var(--pw-font-sans);" data-phase="' + escapeAttr(task.phase || '') + '">' + escapeHtml(phaseLabel) + '</td>'
           +   '<td class="px-4 py-3 text-xs whitespace-nowrap" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);" title="' + escapeAttr(task.created_at || '') + '">' + escapeHtml(createdAt) + '</td>'
-          +   '<td class="px-4 py-3 text-xs" style="font-family: var(--pw-font-sans);">' + pendingCell + '</td>'
+          +   '<td class="px-4 py-3 text-xs" style="font-family: var(--pw-font-sans);">' + nextActionCell + '</td>'
           +   '<td class="px-4 py-3 text-right">'
-          +     '<a href="' + detailHref + '" class="inline-block px-3 py-1 rounded-md text-xs font-medium whitespace-nowrap transition-colors" style="background-color: var(--pw-bg-hover); color: var(--pw-text-secondary); border: 1px solid var(--pw-border-subtle); font-family: var(--pw-font-sans);" data-zh="查看详情" data-en="View Details">查看详情</a>'
+          +     '<div class="inline-flex items-center gap-1">' + quickActions + '</div>'
           +   '</td>'
           + '</tr>';
       }
 
+      function getAccentColor(color) {
+        switch (color) {
+          case 'success': return 'var(--pw-state-success)';
+          case 'info':    return 'var(--pw-state-info)';
+          case 'warning': return 'var(--pw-state-warning)';
+          case 'error':   return 'var(--pw-state-error)';
+          default:        return 'var(--pw-text-secondary)';
+        }
+      }
+
+      // ---- Client-side filter helpers ----
+      // Extracts warning-type-related signals from a task for client-side filtering.
+      function taskMatchesWarningType(task, warningType) {
+        if (!warningType) return true;
+        if (!task) return false;
+        // Check warnings array (most precise)
+        if (Array.isArray(task.warnings)) {
+          for (var i = 0; i < task.warnings.length; i++) {
+            var w = task.warnings[i] || {};
+            if (w.type === warningType || w.code === warningType || w.kind === warningType) return true;
+          }
+        }
+        // Check stale_task flag
+        if (warningType === 'stale_task' && task.is_stale === true) return true;
+        // Check failed_verification mapping
+        if (warningType === 'failed_verification' &&
+            (task.status === 'failed_verification' || task.acceptance_status === 'failed_verification')) return true;
+        // Check status / acceptance_status containing the warning type
+        if (task.status === warningType || task.acceptance_status === warningType) return true;
+        // Check verification headline (loose contains for manual_verification_required, scope_changes, etc.)
+        var headline = verificationHeadline(task);
+        if (headline && headline.toLowerCase().indexOf(warningType.replace(/_/g, ' ')) >= 0) return true;
+        return false;
+      }
+
+      function taskMatchesDateRange(task, dateFrom, dateTo) {
+        if (!dateFrom && !dateTo) return true;
+        if (!task) return false;
+        var ts = task.updated_at || task.created_at;
+        if (!ts) return false;
+        var d = new Date(ts);
+        if (isNaN(d.getTime())) return false;
+        if (dateFrom) {
+          var from = new Date(dateFrom + 'T00:00:00');
+          if (d < from) return false;
+        }
+        if (dateTo) {
+          var to = new Date(dateTo + 'T23:59:59');
+          if (d > to) return false;
+        }
+        return true;
+      }
+
+      function applyClientSideFilters(tasks) {
+        var out = tasks.slice();
+        if (currentFilters.warning_type) {
+          out = out.filter(function (t) { return taskMatchesWarningType(t, currentFilters.warning_type); });
+        }
+        if (currentFilters.date_from || currentFilters.date_to) {
+          out = out.filter(function (t) { return taskMatchesDateRange(t, currentFilters.date_from, currentFilters.date_to); });
+        }
+        return out;
+      }
+
       function renderTasks() {
-        var filtered = currentFilter
-          ? allTasks.filter(function (t) { return t && t.status === currentFilter; })
-          : allTasks.slice();
+        var filtered = applyClientSideFilters(allTasks);
 
         // Sort by created_at desc (newest first). Falls back gracefully if missing.
         filtered.sort(function (a, b) {
@@ -606,13 +984,16 @@ html.dark {
           }
           $('taskTableBody').innerHTML = html;
           showTable();
+          wireQuickActions();
         }
 
         // Count summary
-        if (currentFilter) {
+        var hasFilters = currentFilters.repo_path || currentFilters.status || currentFilters.acceptance_status ||
+                         currentFilters.agent || currentFilters.warning_type || currentFilters.date_from || currentFilters.date_to;
+        if (hasFilters) {
           $('countSummary').textContent = '显示 ' + filtered.length + ' / ' + allTasks.length + ' 条';
         } else {
-          $('countSummary').textContent = '共 ' + allTasks.length + ' 条';
+          $('countSummary').textContent = '共 ' + filtered.length + ' 条';
         }
       }
 
@@ -634,6 +1015,64 @@ html.dark {
         el.innerHTML = '<span class="shrink-0 w-1.5 h-1.5 rounded-full" style="background-color: ' + dotColor + ';"></span><span>Watcher: ' + escapeHtml(status) + '</span>';
       }
 
+      // ---- Filter query building ----
+      // Builds a query string from the backend-supported filter dimensions.
+      function buildFilterQueryString() {
+        var params = [];
+        if (currentFilters.repo_path) {
+          params.push('repo_path=' + encodeURIComponent(currentFilters.repo_path));
+        }
+        if (currentFilters.status) {
+          params.push('status=' + encodeURIComponent(currentFilters.status));
+        }
+        if (currentFilters.acceptance_status) {
+          params.push('acceptance_status=' + encodeURIComponent(currentFilters.acceptance_status));
+        }
+        if (currentFilters.agent) {
+          params.push('agent=' + encodeURIComponent(currentFilters.agent));
+        }
+        return params.length ? ('?' + params.join('&')) : '';
+      }
+
+      // Reads current dropdown/input values into currentFilters.
+      function readFiltersFromUI() {
+        currentFilters.repo_path = $('repoFilter') ? $('repoFilter').value : '';
+        currentFilters.status = $('statusFilter') ? $('statusFilter').value : '';
+        currentFilters.acceptance_status = $('acceptanceFilter') ? $('acceptanceFilter').value : '';
+        currentFilters.agent = $('agentFilter') ? $('agentFilter').value : '';
+        currentFilters.warning_type = $('warningTypeFilter') ? $('warningTypeFilter').value : '';
+        currentFilters.date_from = $('dateFromFilter') ? $('dateFromFilter').value : '';
+        currentFilters.date_to = $('dateToFilter') ? $('dateToFilter').value : '';
+      }
+
+      // Resets all filter UI inputs to empty.
+      function clearFilterUI() {
+        var ids = ['repoFilter', 'statusFilter', 'acceptanceFilter', 'agentFilter', 'warningTypeFilter', 'dateFromFilter', 'dateToFilter'];
+        ids.forEach(function (id) {
+          var el = $(id);
+          if (el) el.value = '';
+        });
+        currentFilters = {
+          repo_path: '', status: '', acceptance_status: '', agent: '',
+          warning_type: '', date_from: '', date_to: ''
+        };
+      }
+
+      // Updates the small status text describing active filters.
+      function updateFilterStatusText() {
+        var el = $('filterStatusText');
+        if (!el) return;
+        var parts = [];
+        if (currentFilters.repo_path) parts.push('repo: ' + currentFilters.repo_path);
+        if (currentFilters.status) parts.push('status: ' + currentFilters.status);
+        if (currentFilters.acceptance_status) parts.push('acceptance: ' + currentFilters.acceptance_status);
+        if (currentFilters.agent) parts.push('agent: ' + currentFilters.agent);
+        if (currentFilters.warning_type) parts.push('warning: ' + currentFilters.warning_type);
+        if (currentFilters.date_from) parts.push('from: ' + currentFilters.date_from);
+        if (currentFilters.date_to) parts.push('to: ' + currentFilters.date_to);
+        el.textContent = parts.length ? ('已应用筛选 · ' + parts.join(' · ')) : '无筛选';
+      }
+
       // ---- API call ----
       function setRefreshing(isRefreshing) {
         var icon = $('refreshIcon');
@@ -648,7 +1087,8 @@ html.dark {
       function fetchTasks() {
         showLoading();
         setRefreshing(true);
-        fetch(API_URL, {
+        var url = API_URL + buildFilterQueryString();
+        fetch(url, {
           method: 'GET',
           headers: { 'Accept': 'application/json' },
           cache: 'no-store'
@@ -665,6 +1105,7 @@ html.dark {
             allTasks = (data && Array.isArray(data.tasks)) ? data.tasks : [];
             renderWatcher(data && data.watcher);
             renderTasks();
+            updateFilterStatusText();
           })
           .catch(function (err) {
             var msg = (err && err.message) ? err.message : '未知错误';
@@ -679,10 +1120,62 @@ html.dark {
           });
       }
 
+      // ---- Dropdown population ----
+      async function loadRepos() {
+        var select = $('repoFilter');
+        if (!select) return;
+        try {
+          var data = await fetchJson('/api/workspace/repos');
+          var repos = Array.isArray(data.repos) ? data.repos : [];
+          var html = '<option value="" data-zh="全部仓库" data-en="All repos">全部仓库</option>';
+          repos.forEach(function (r) {
+            var label = r.name + (r.has_package_json && r.version ? ' (v' + r.version + ')' : '');
+            var val = r.path || r.name;
+            html += '<option value="' + escapeAttr(val) + '">' + escapeHtml(label) + '</option>';
+          });
+          select.innerHTML = html;
+        } catch (err) {
+          // keep default option
+          console.error('loadRepos failed:', err);
+        }
+      }
+
+      async function loadAgents() {
+        var select = $('agentFilter');
+        if (!select) return;
+        try {
+          var data = await fetchJson('/api/status');
+          var agents = (data && Array.isArray(data.agents)) ? data.agents : [];
+          var html = '<option value="" data-zh="全部 Agent" data-en="All Agents">全部 Agent</option>';
+          agents.forEach(function (a) {
+            if (a && a.name) {
+              html += '<option value="' + escapeAttr(a.name) + '">' + escapeHtml(a.name) + (a.available ? '' : ' (unavailable)') + '</option>';
+            }
+          });
+          select.innerHTML = html;
+        } catch (err) {
+          // keep default option
+          console.error('loadAgents failed:', err);
+        }
+      }
+
       // ---- Event wiring ----
+      // Status filter: apply immediately on change (keeps original UX)
       $('statusFilter').addEventListener('change', function (e) {
-        currentFilter = e.target.value;
-        renderTasks();
+        readFiltersFromUI();
+        fetchTasks();
+      });
+
+      // Apply Filters button: reads all filter values and refetches
+      $('applyFiltersBtn').addEventListener('click', function () {
+        readFiltersFromUI();
+        fetchTasks();
+      });
+
+      // Clear Filters button: resets all filters and refetches
+      $('clearFiltersBtn').addEventListener('click', function () {
+        clearFilterUI();
+        fetchTasks();
       });
 
       $('refreshBtn').addEventListener('click', fetchTasks);
@@ -692,8 +1185,52 @@ html.dark {
         retryBtn.addEventListener('click', fetchTasks);
       }
 
-      // Initial load
-      fetchTasks();
+      // Safe modal close handlers
+      var modalClose = $('safe-modal-close');
+      if (modalClose) {
+        modalClose.addEventListener('click', function () { closeSafeModal(); });
+      }
+      var safeModal = $('safe-modal');
+      if (safeModal) {
+        safeModal.addEventListener('click', function (e) {
+          if (e.target === safeModal) closeSafeModal();
+        });
+      }
+
+      // ---- Quick action button wiring (called after render) ----
+      var SAFE_TITLE_MAP = {
+        'safe-result': 'Safe Result',
+        'safe-audit': 'Safe Audit',
+        'safe-test-summary': 'Safe Test Summary',
+        'safe-diff-summary': 'Safe Diff Summary'
+      };
+
+      function wireQuickActions() {
+        var tbody = $('taskTableBody');
+        if (!tbody) return;
+        tbody.querySelectorAll('[data-safe-action]').forEach(function (btn) {
+          btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            var action = btn.getAttribute('data-safe-action');
+            var tid = btn.getAttribute('data-task-id');
+            fetchSafeSummary(tid, action, SAFE_TITLE_MAP[action] || action);
+          });
+        });
+        tbody.querySelectorAll('[data-copy-id]').forEach(function (btn) {
+          btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            copyToClipboard(btn.getAttribute('data-copy-id'), 'task_id');
+          });
+        });
+      }
+
+      // Initial load: populate filter dropdowns, then fetch tasks
+      // Dropdowns load in parallel (best-effort); tasks fetch runs regardless.
+      Promise.allSettled([loadRepos(), loadAgents()]).finally(function () {
+        fetchTasks();
+      });
     })();
   </script>
 

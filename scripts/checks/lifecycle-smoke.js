@@ -175,7 +175,7 @@ try {
   await test("git diff captures tracked and untracked task changes", async () => {
     writeFileSync(join(repoPath, "preexisting-user-file.txt"), "preexisting and untouched\n", "utf-8");
     const plan = savePlan({ title: "Change capture", content: "Modify fixture files." });
-    const task = createTask({
+    const task = await createTask({
       plan_id: plan.plan_id,
       agent: "writer",
       repo_path: "repo",
@@ -231,7 +231,7 @@ try {
   });
 
   await test("inspect_only template fails when the agent changes repository files", async () => {
-    const task = createTask({
+    const task = await createTask({
       template: "inspect_only",
       goal: "Inspect the fixture without modifying files",
       agent: "writer",
@@ -249,7 +249,7 @@ try {
 
   await test("legacy test_command becomes one independent verification command", async () => {
     const plan = savePlan({ title: "Legacy verification", content: "No changes." });
-    const task = createTask({
+    const task = await createTask({
       plan_id: plan.plan_id,
       agent: "noop",
       repo_path: "repo",
@@ -267,7 +267,7 @@ try {
 
   await test("no-change task returns an explicit empty diff result", async () => {
     const plan = savePlan({ title: "No diff", content: "Do not change files." });
-    const task = createTask({ plan_id: plan.plan_id, agent: "noop", repo_path: "repo" });
+    const task = await createTask({ plan_id: plan.plan_id, agent: "noop", repo_path: "repo" });
     const result = await runTask(task.task_id);
     if (!isDoneStatus(result.status)) throw new Error(`No-op task failed: ${JSON.stringify(result)}`);
     const diff = getDiff(task.task_id);
@@ -288,7 +288,7 @@ try {
 
   await test("large diff response is truncated while diff.patch remains complete", async () => {
     const plan = savePlan({ title: "Large diff", content: "Create a large text file." });
-    const task = createTask({ plan_id: plan.plan_id, agent: "largewriter", repo_path: "repo" });
+    const task = await createTask({ plan_id: plan.plan_id, agent: "largewriter", repo_path: "repo" });
     const result = await runTask(task.task_id);
     if (!isDoneStatus(result.status)) throw new Error(`Large task failed: ${JSON.stringify(result)}`);
     const diff = getDiff(task.task_id);
@@ -300,7 +300,7 @@ try {
 
   await test("non-Git repositories return hash-only evidence with a reason", async () => {
     const plan = savePlan({ title: "Non-Git evidence", content: "Modify files in a non-Git repository." });
-    const task = createTask({ plan_id: plan.plan_id, agent: "writer", repo_path: "plain-repo" });
+    const task = await createTask({ plan_id: plan.plan_id, agent: "writer", repo_path: "plain-repo" });
     const result = await runTask(task.task_id);
     if (!isDoneStatus(result.status)) throw new Error(`Non-Git task failed: ${JSON.stringify(result)}`);
     const diff = getDiff(task.task_id);
@@ -315,7 +315,7 @@ try {
 
   await test("binary Git changes remain reviewable as a textual Git binary patch", async () => {
     const plan = savePlan({ title: "Binary evidence", content: "Create a binary fixture." });
-    const task = createTask({ plan_id: plan.plan_id, agent: "binarywriter", repo_path: "repo" });
+    const task = await createTask({ plan_id: plan.plan_id, agent: "binarywriter", repo_path: "repo" });
     const result = await runTask(task.task_id);
     if (!isDoneStatus(result.status)) throw new Error(`Binary task failed: ${JSON.stringify(result)}`);
     const diff = getDiff(task.task_id);
@@ -326,7 +326,7 @@ try {
 
   await test("artifact hygiene separates source, ignored output, runtime data, and suspicious changes", async () => {
     const plan = savePlan({ title: "Artifact hygiene", content: "Generate representative task outputs." });
-    const task = createTask({ plan_id: plan.plan_id, agent: "artifactwriter", repo_path: "repo" });
+    const task = await createTask({ plan_id: plan.plan_id, agent: "artifactwriter", repo_path: "repo" });
     const result = await runTask(task.task_id);
     if (!isDoneStatus(result.status)) throw new Error(`Artifact task failed: ${JSON.stringify(result)}`);
     const standard = getTaskSummary(task.task_id);
@@ -355,7 +355,7 @@ try {
 
   await test("deleted tracked files are identified with file stats", async () => {
     const plan = savePlan({ title: "Delete fixture", content: "Delete the designated fixture file." });
-    const task = createTask({ plan_id: plan.plan_id, agent: "deleter", repo_path: "repo" });
+    const task = await createTask({ plan_id: plan.plan_id, agent: "deleter", repo_path: "repo" });
     const result = await runTask(task.task_id);
     if (!isDoneStatus(result.status)) throw new Error(`Delete task failed: ${JSON.stringify(result)}`);
     const diff = getDiff(task.task_id);
@@ -366,7 +366,7 @@ try {
 
   await test("wait_for_task stays in the tool loop and returns terminal acceptance", async () => {
     const plan = savePlan({ title: "Wait loop", content: "Finish normally." });
-    const task = createTask({ plan_id: plan.plan_id, agent: "writer", repo_path: "repo" });
+    const task = await createTask({ plan_id: plan.plan_id, agent: "writer", repo_path: "repo" });
     const running = runTask(task.task_id);
     const waited = await waitForTask(task.task_id, 5);
     await raceWithTimeout(running, 15000, "wait_for_task loop did not terminate within 15s");
@@ -380,7 +380,7 @@ try {
 
   await test("wait_for_task explicitly requires another call when the task is not terminal", async () => {
     const plan = savePlan({ title: "Pending wait", content: "Remain queued for this check." });
-    const task = createTask({ plan_id: plan.plan_id, agent: "slow", repo_path: "repo" });
+    const task = await createTask({ plan_id: plan.plan_id, agent: "slow", repo_path: "repo" });
     const waited = await waitForTask(task.task_id, 1);
     if (waited.terminal || !waited.timed_out || !waited.continuation_required) {
       throw new Error(`Expected continuation response: ${JSON.stringify(waited)}`);
@@ -390,11 +390,17 @@ try {
 
   await test("running task summary includes heartbeat, phase, command, and elapsed time", async () => {
     const plan = savePlan({ title: "Running summary", content: "Wait." });
-    const task = createTask({ plan_id: plan.plan_id, agent: "slow", repo_path: "repo", timeout_seconds: 30 });
+    const task = await createTask({ plan_id: plan.plan_id, agent: "slow", repo_path: "repo", timeout_seconds: 30 });
     const running = runTask(task.task_id);
     await waitForRunning(getTaskStatus, task.task_id);
-    await sleep(50);
-    const summary = getTaskSummary(task.task_id);
+    // Wait for the task to transition from "preparing" to actually running a command.
+    // Async snapshot may delay the preparing phase, so poll until current_command appears.
+    let summary;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      await sleep(50);
+      summary = getTaskSummary(task.task_id);
+      if (summary.current_command) break;
+    }
     if (summary.terminal || !summary.last_heartbeat_at || !summary.phase || !summary.current_command || summary.elapsed_ms < 0) {
       throw new Error(`Running summary incomplete: ${JSON.stringify(summary)}`);
     }
@@ -404,7 +410,7 @@ try {
 
   await test("verification failure produces failed_verification and structured evidence", async () => {
     const plan = savePlan({ title: "Verify failure", content: "Finish normally." });
-    const task = createTask({
+    const task = await createTask({
       plan_id: plan.plan_id,
       agent: "writer",
       repo_path: "repo",
@@ -434,7 +440,7 @@ try {
 
   await test("out-of-scope workspace changes fail the task and generate a rollback plan", async () => {
     const plan = savePlan({ title: "Scope violation", content: "Do not leave the repository." });
-    const task = createTask({
+    const task = await createTask({
       plan_id: plan.plan_id,
       agent: "scopebreaker",
       repo_path: "repo",
@@ -505,7 +511,7 @@ try {
     reloadConfig(cfg2);
 
     const plan = savePlan({ title: "Noop with external dirty", content: "Do nothing." });
-    const task = createTask({ plan_id: plan.plan_id, agent: "noop", repo_path: "repo", verify_commands: ["node --check main.js"] });
+    const task = await createTask({ plan_id: plan.plan_id, agent: "noop", repo_path: "repo", verify_commands: ["node --check main.js"] });
     const result = await runTask(task.task_id);
 
     if (!isDoneStatus(result.status)) {
@@ -590,7 +596,7 @@ try {
     reloadConfig(cfg2);
 
     const plan = savePlan({ title: "External dirty modifier", content: "Modify external tracked file." });
-    const task = createTask({ plan_id: plan.plan_id, agent: "extmod", repo_path: "repo", verify_commands: ["node --check main.js"] });
+    const task = await createTask({ plan_id: plan.plan_id, agent: "extmod", repo_path: "repo", verify_commands: ["node --check main.js"] });
     const result = await runTask(task.task_id);
 
     if (result.status !== "failed_scope_violation") {
@@ -675,7 +681,7 @@ try {
     reloadConfig(cfg2);
 
     const plan = savePlan({ title: "Clean external modifier", content: "Modify clean external tracked file." });
-    const task = createTask({ plan_id: plan.plan_id, agent: "extmod", repo_path: "repo", verify_commands: ["node --check main.js"] });
+    const task = await createTask({ plan_id: plan.plan_id, agent: "extmod", repo_path: "repo", verify_commands: ["node --check main.js"] });
     const result = await runTask(task.task_id);
 
     if (result.status !== "failed_scope_violation") {
@@ -752,7 +758,7 @@ try {
     reloadConfig(cfg2);
 
     const plan = savePlan({ title: "External rename", content: "Rename external tracked file." });
-    const task = createTask({ plan_id: plan.plan_id, agent: "extrenamer", repo_path: "repo", verify_commands: ["node --check main.js"] });
+    const task = await createTask({ plan_id: plan.plan_id, agent: "extrenamer", repo_path: "repo", verify_commands: ["node --check main.js"] });
     const result = await runTask(task.task_id);
 
     if (result.status !== "failed_scope_violation") {
@@ -794,7 +800,7 @@ try {
 
   await test("timeout terminates a long-running agent", async () => {
     const plan = savePlan({ title: "Timeout", content: "Wait." });
-    const task = createTask({ plan_id: plan.plan_id, agent: "slow", repo_path: "repo", timeout_seconds: 1 });
+    const task = await createTask({ plan_id: plan.plan_id, agent: "slow", repo_path: "repo", timeout_seconds: 1 });
     const started = Date.now();
     const result = await runTask(task.task_id);
     if (result.status !== "failed" || !result.error?.includes("timed out")) {
@@ -810,7 +816,7 @@ try {
 
   await test("cancel_task safely stops a running agent", async () => {
     const plan = savePlan({ title: "Cancel", content: "Wait." });
-    const task = createTask({ plan_id: plan.plan_id, agent: "slow", repo_path: "repo", timeout_seconds: 30 });
+    const task = await createTask({ plan_id: plan.plan_id, agent: "slow", repo_path: "repo", timeout_seconds: 30 });
     const running = runTask(task.task_id);
     await waitForRunning(getTaskStatus, task.task_id);
     const request = cancelTask(task.task_id);
@@ -823,7 +829,7 @@ try {
 
   await test("kill_task immediately stops a running agent", async () => {
     const plan = savePlan({ title: "Kill", content: "Wait." });
-    const task = createTask({ plan_id: plan.plan_id, agent: "slow", repo_path: "repo", timeout_seconds: 30 });
+    const task = await createTask({ plan_id: plan.plan_id, agent: "slow", repo_path: "repo", timeout_seconds: 30 });
     const running = runTask(task.task_id);
     await waitForRunning(getTaskStatus, task.task_id);
     const request = killTask(task.task_id);

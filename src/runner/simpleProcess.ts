@@ -62,10 +62,10 @@ export function runSimpleProcessSync(options: SimpleProcessOptions): SimpleProce
   );
 
   if (options.stdoutPath && stdout) {
-    try { writeFileSyncAppend(options.stdoutPath, stdout); } catch {}
+    try { writeFileSyncAppend(options.stdoutPath, stdout); } catch {} // best-effort log write; failure doesn't affect result
   }
   if (options.stderrPath && stderr) {
-    try { writeFileSyncAppend(options.stderrPath, stderr); } catch {}
+    try { writeFileSyncAppend(options.stderrPath, stderr); } catch {} // best-effort log write; failure doesn't affect result
   }
 
   return {
@@ -196,7 +196,7 @@ function gracefulKill(child: ChildProcess): void {
   try {
     if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGTERM");
     else child.kill("SIGTERM");
-  } catch {}
+  } catch {} // cleanup failure is safe to ignore
 }
 
 function forceKill(child: ChildProcess): void {
@@ -213,7 +213,7 @@ function forceKill(child: ChildProcess): void {
       process.kill(-child.pid, "SIGKILL");
     }
   } catch {
-    try { child.kill("SIGKILL"); } catch {}
+    try { child.kill("SIGKILL"); } catch {} // cleanup failure is safe to ignore
   }
 }
 
