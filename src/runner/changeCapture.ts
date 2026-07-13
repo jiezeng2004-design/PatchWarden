@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  createReadStream,
   existsSync,
   lstatSync,
   readFileSync,
@@ -8,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, relative, resolve, isAbsolute } from "node:path";
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { isSensitivePath } from "../security/sensitiveGuard.js";
 
 const MAX_HASH_BYTES = 5 * 1024 * 1024;
@@ -90,9 +91,10 @@ export interface ChangeArtifacts {
   artifact_hygiene: ArtifactHygiene;
 }
 
-export function captureRepoSnapshot(repoPath: string): RepoSnapshot {
+export async function captureRepoSnapshot(repoPath: string): Promise<RepoSnapshot> {
   const warnings: string[] = [];
-  const isGit = runGit(repoPath, ["rev-parse", "--is-inside-work-tree"]).stdout.trim() === "true";
+  const isGitResult = await runGit(repoPath, ["rev-parse", "--is-inside-work-tree"]);
+  const isGit = isGitResult.stdout.trim() === "true";
   let head: string | null = null;
   let status = "";
   let paths: string[] = [];
@@ -101,9 +103,17 @@ export function captureRepoSnapshot(repoPath: string): RepoSnapshot {
 
   const dirtyPaths = new Set<string>();
   if (isGit) {
-    const headResult = runGit(repoPath, ["rev-parse", "HEAD"]);
+    // The following five git calls are independent of each other and can run in parallel.
+    const [headResult, statusResult, trackedResult, ignoredResult, listedResult] = await Promise.all([
+      runGit(repoPath, ["rev-parse", "HEAD"]),
+      runGit(repoPath, ["status", "--porcelain=v1", "-uall"]),
+      runGit(repoPath, ["ls-files", "-z"]),
+      runGit(repoPath, ["ls-files", "-o", "-i", "--exclude-standard", "-z"]),
+      runGit(repoPath, ["ls-files", "-co", "--exclude-standard", "-z"]),
+    ]);
+
     if (headResult.status === 0) head = headResult.stdout.trim() || null;
-    status = runGit(repoPath, ["status", "--porcelain=v1", "-uall"]).stdout.trimEnd();
+    status = statusResult.stdout.trimEnd();
     // Parse git status --porcelain to collect all dirty paths
     for (const line of status.split("\n")) {
       if (line.length < 4) continue;
@@ -125,20 +135,17 @@ export function captureRepoSnapshot(repoPath: string): RepoSnapshot {
         }
       }
     }
-    const tracked = runGit(repoPath, ["ls-files", "-z"]);
-    if (tracked.status === 0) {
-      for (const path of tracked.stdout.split("\0").filter(Boolean)) trackedPaths.add(normalizePath(path));
+    if (trackedResult.status === 0) {
+      for (const path of trackedResult.stdout.split("\0").filter(Boolean)) trackedPaths.add(normalizePath(path));
     }
-    const ignored = runGit(repoPath, ["ls-files", "-o", "-i", "--exclude-standard", "-z"]);
-    if (ignored.status === 0) {
-      for (const path of ignored.stdout.split("\0").filter(Boolean)) ignoredPaths.add(normalizePath(path));
+    if (ignoredResult.status === 0) {
+      for (const path of ignoredResult.stdout.split("\0").filter(Boolean)) ignoredPaths.add(normalizePath(path));
     } else {
       warnings.push("git ignored-file discovery failed; ignored classification may be incomplete");
     }
-    const listed = runGit(repoPath, ["ls-files", "-co", "--exclude-standard", "-z"]);
-    if (listed.status === 0) {
+    if (listedResult.status === 0) {
       paths = [...new Set([
-        ...listed.stdout.split("\0").filter(Boolean),
+        ...listedResult.stdout.split("\0").filter(Boolean),
         ...walkWorkspace(repoPath),
       ])];
     } else {
@@ -193,11 +200,11 @@ export function writeSnapshot(taskDir: string, filename: string, snapshot: RepoS
   writeFileSync(join(taskDir, filename), JSON.stringify(snapshot, null, 2), "utf-8");
 }
 
-export function buildChangeArtifacts(
+export async function buildChangeArtifacts(
   repoPath: string,
   before: RepoSnapshot,
   after: RepoSnapshot
-): ChangeArtifacts {
+): Promise<ChangeArtifacts> {
   const changedFiles = compareSnapshots(before, after);
   const artifactHygiene = classifyArtifactHygiene(changedFiles);
   const sections: string[] = [];
@@ -205,18 +212,18 @@ export function buildChangeArtifacts(
 
   if (before.is_git && after.is_git && scopedPaths.length > 0) {
     if (before.head && after.head && before.head !== after.head) {
-      const committed = runGit(repoPath, ["diff", "--no-color", "--binary", before.head, after.head, "--", ...scopedPaths]);
+      const committed = await runGit(repoPath, ["diff", "--no-color", "--binary", before.head, after.head, "--", ...scopedPaths]);
       if (committed.stdout.trim()) sections.push("# Changes committed during task\n", committed.stdout.trimEnd());
     }
 
     const base = after.head || "HEAD";
-    const working = runGit(repoPath, ["diff", "--no-color", "--binary", base, "--", ...scopedPaths]);
+    const working = await runGit(repoPath, ["diff", "--no-color", "--binary", base, "--", ...scopedPaths]);
     if (working.stdout.trim()) sections.push("# Staged and unstaged changes\n", working.stdout.trimEnd());
 
     for (const file of changedFiles.filter((item) => item.change === "added").slice(0, 100)) {
-      const tracked = runGit(repoPath, ["ls-files", "--error-unmatch", "--", file.path]);
+      const tracked = await runGit(repoPath, ["ls-files", "--error-unmatch", "--", file.path]);
       if (tracked.status === 0) continue;
-      const untracked = runGit(repoPath, ["diff", "--no-index", "--no-color", "--binary", "--", "/dev/null", file.path]);
+      const untracked = await runGit(repoPath, ["diff", "--no-index", "--no-color", "--binary", "--", "/dev/null", file.path]);
       if (untracked.stdout.trim()) sections.push("# Untracked file\n", untracked.stdout.trimEnd());
     }
   }
@@ -232,7 +239,7 @@ export function buildChangeArtifacts(
   const fullDiff = `${evidence}\n\n${body || (changedFiles.length ? "(textual patch unavailable; see changed-files.json for hash evidence)" : "(no task file changes detected)")}\n`;
   const additions = fullDiff.split(/\r?\n/).filter((line) => line.startsWith("+") && !line.startsWith("+++")).length;
   const deletions = fullDiff.split(/\r?\n/).filter((line) => line.startsWith("-") && !line.startsWith("---")).length;
-  const fileStats = buildFileStats(repoPath, before, after, changedFiles);
+  const fileStats = await buildFileStats(repoPath, before, after, changedFiles);
 
   return {
     changed_files: changedFiles,
@@ -255,13 +262,13 @@ export function buildChangeArtifacts(
   };
 }
 
-function buildFileStats(
+async function buildFileStats(
   repoPath: string,
   before: RepoSnapshot,
   after: RepoSnapshot,
   changedFiles: ChangedFile[]
-): ChangeArtifacts["file_stats"] {
-  return changedFiles.map((file) => {
+): Promise<ChangeArtifacts["file_stats"]> {
+  const results = await Promise.all(changedFiles.map(async (file) => {
     let additions = 0;
     let deletions = 0;
     const paths = file.old_path ? [file.old_path, file.path] : [file.path];
@@ -272,8 +279,10 @@ function buildFileStats(
         ranges.push([before.head, after.head]);
       }
       ranges.push([after.head || "HEAD"]);
-      for (const range of ranges) {
-        const result = runGit(repoPath, ["diff", "--numstat", ...range, "--", ...paths]);
+      const rangeResults = await Promise.all(
+        ranges.map((range) => runGit(repoPath, ["diff", "--numstat", ...range, "--", ...paths]))
+      );
+      for (const result of rangeResults) {
         for (const line of result.stdout.split(/\r?\n/).filter(Boolean)) {
           const [added, removed] = line.split(/\s+/);
           if (/^\d+$/.test(added)) additions += Number(added);
@@ -286,11 +295,12 @@ function buildFileStats(
       try {
         const content = readFileSync(resolve(repoPath, file.path), "utf-8");
         additions = countLines(content);
-      } catch {}
+      } catch {} // probe failure handled by return value (additions stays 0)
     }
 
     return { path: file.path, status: file.change, additions, deletions };
-  });
+  }));
+  return results;
 }
 
 function countLines(content: string): number {
@@ -441,11 +451,11 @@ export interface ArtifactManifest {
   artifacts: ArtifactManifestEntry[];
 }
 
-export function buildArtifactManifest(
+export async function buildArtifactManifest(
   changedFiles: ChangedFile[],
   repoPath: string,
   taskId?: string
-): ArtifactManifest {
+): Promise<ArtifactManifest> {
   const entries: ArtifactManifestEntry[] = [];
   for (const file of changedFiles) {
     if (file.kind !== "build_artifact") continue;
@@ -457,7 +467,7 @@ export function buildArtifactManifest(
       if (stat.isFile()) {
         size = stat.size;
         if (size <= MAX_HASH_BYTES) {
-          sha256 = createHash("sha256").update(readFileSync(absolutePath)).digest("hex");
+          sha256 = await hashFileAsync(absolutePath);
         }
       }
     } catch {
@@ -635,16 +645,34 @@ function walkWorkspace(root: string): string[] {
   return result;
 }
 
-function runGit(repoPath: string, args: string[]) {
-  const result = spawnSync("git", args, {
-    cwd: repoPath,
-    encoding: "utf-8",
-    timeout: 30_000,
-    maxBuffer: MAX_DIFF_BYTES,
+function runGit(repoPath: string, args: string[]): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    execFile("git", args, {
+      cwd: repoPath,
+      encoding: "utf-8",
+      timeout: 30_000,
+      maxBuffer: MAX_DIFF_BYTES,
+    }, (err, stdout, stderr) => {
+      let status: number | null;
+      if (err) {
+        // err.code is the exit code (number) when the process exited with a non-zero status;
+        // it is a string (e.g. "ENOENT") when spawning failed or the buffer limit was hit.
+        status = typeof err.code === "number" ? err.code : null;
+      } else {
+        status = 0;
+      }
+      resolve({ status, stdout: stdout || "", stderr: stderr || "" });
+    });
   });
-  return {
-    status: result.status,
-    stdout: result.stdout || "",
-    stderr: result.stderr || "",
-  };
+}
+
+function hashFileAsync(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(filePath);
+    stream.on("error", reject);
+    hash.on("error", reject);
+    hash.on("finish", () => resolve(hash.digest("hex")));
+    stream.pipe(hash);
+  });
 }

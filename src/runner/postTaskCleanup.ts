@@ -1,6 +1,30 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { platform } from "node:os";
+
+const isWindows = platform() === "win32";
+
+/**
+ * Remove a file or directory, working around Node.js fs.rmSync issues on Windows
+ * where recursive directory deletion silently fails (Node v22+).
+ * Falls back to `rmdir /s /q` on Windows if rmSync doesn't remove the path.
+ */
+function safeRemoveSync(targetPath: string): void {
+  rmSync(targetPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  if (isWindows && existsSync(targetPath)) {
+    try {
+      const stat = statSync(targetPath);
+      if (stat.isDirectory()) {
+        execFileSync("cmd", ["/c", "rmdir", "/s", "/q", targetPath], { windowsHide: true });
+      } else {
+        execFileSync("cmd", ["/c", "del", "/f", "/q", targetPath], { windowsHide: true });
+      }
+    } catch {
+      // Best effort — caller will verify via existsSync if needed
+    }
+  }
+}
 
 const EXCLUDED_DIRS = new Set([".git", ".patchwarden", ".venv", "node_modules", "samples", "docs"]);
 const CLEANUP_DIRS = new Set(["__pycache__", "dist", "release_packages", "temp_files"]);
@@ -42,7 +66,7 @@ export function runPostTaskCleanup(repoPath: string, taskDir: string): PostTaskC
       continue;
     }
     try {
-      rmSync(candidate.path, { recursive: true, force: true });
+      safeRemoveSync(candidate.path);
       report.removed.push({ path: rel, reason: candidate.reason });
     } catch (error) {
       report.skipped.push({

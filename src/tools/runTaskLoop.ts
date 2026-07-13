@@ -202,7 +202,7 @@ export async function runTaskLoopWithDeps(
       timeout_seconds: normalized.task_timeout_seconds,
       execution_mode: "assess_only",
     };
-    const assessment = deps.createTask(assessmentInput as CreateTaskInput & { execution_mode: "assess_only" }) as any;
+    const assessment = await deps.createTask(assessmentInput as CreateTaskInput & { execution_mode: "assess_only" }) as any;
     if (assessment.decision === "blocked") {
       return finalize("blocked", "high_risk_blocked", "Risk assessment blocked task execution.", assessment.reason_codes?.join(", "));
     }
@@ -210,7 +210,7 @@ export async function runTaskLoopWithDeps(
       return finalize("blocked", "user_confirmation_required", "Ask the user to confirm the assessment before executing the loop.");
     }
 
-    const created = deps.createTask({
+    const created = await deps.createTask({
       execution_mode: "execute",
       assessment_id: String(assessment.assessment_id || ""),
     }) as any;
@@ -403,7 +403,7 @@ async function runDirectVerification(
 
   let sessionId = "";
   try {
-    const session = deps.createDirectSession({
+    const session = await deps.createDirectSession({
       repo_path: repoPath,
       title: `Direct verification for ${lineageId}`,
     });
@@ -413,7 +413,7 @@ async function runDirectVerification(
       commands: normalized.direct_verify_commands,
       timeout_seconds: normalized.direct_verify_timeout_seconds,
     });
-    const finalized = deps.safeFinalizeDirectSession(sessionId, { max_items: 8 }) as any;
+    const finalized = await deps.safeFinalizeDirectSession(sessionId, { max_items: 8 }) as any;
     const audit = deps.safeAuditDirectSession(sessionId, { max_items: 8 }) as any;
     const evidence: TaskLineageDirectSession = {
       session_id: sessionId,

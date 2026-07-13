@@ -3,6 +3,14 @@
 This is a privacy-safe demo flow for GitHub. It uses placeholder workspace
 names and avoids real tunnel IDs, account names, API keys, or local user paths.
 
+## Animated OSS Demo
+
+This scripted GIF summarizes the public maintainer workflow without showing
+private accounts, real API keys, real task history, or local user paths. It is a
+demo asset, not third-party adoption evidence.
+
+![PatchWarden OSS demo](assets/patchwarden-oss-demo.gif)
+
 ## Demo: ChatGPT Lists A Workspace
 
 Prompt in ChatGPT with the PatchWarden connector selected:

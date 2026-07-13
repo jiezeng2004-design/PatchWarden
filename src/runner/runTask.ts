@@ -31,6 +31,8 @@ import {
   type ChangeArtifacts,
   type ExternalDirtyFile,
   type ArtifactManifest,
+  type RepoSnapshot,
+  type ChangedFileGroups,
 } from "./changeCapture.js";
 import { PatchWardenError, errorPayload } from "../errors.js";
 import { diagnoseAndroidBuild } from "../tools/androidDoctor.js";
@@ -85,7 +87,63 @@ interface VerifyReport {
   failure_reason?: string;
 }
 
+interface TaskContext {
+  taskId: string;
+  taskDir: string;
+  statusFile: string;
+  repoPath: string;
+  wsRoot: string;
+  config: ReturnType<typeof getConfig>;
+  plansDir: string;
+  initialStatus: Record<string, any>;
+  planId: string;
+  agentName: string;
+  testCommand: string;
+  changePolicy: string;
+  verifyCommands: string[];
+  timeoutSeconds: number;
+  startedAtMs: number;
+  deadlineMs: number;
+  beforeSnapshot: RepoSnapshot;
+  beforeWorkspaceSnapshot: RepoSnapshot;
+  externalDirtyBaseline: ExternalDirtyFile[];
+}
+
+interface ExecutionState {
+  agentResult: ManagedProcessResult | null;
+  testResult: TestExecutionResult;
+  verifyResults: TestExecutionResult[];
+  finalStatus: TaskStatus;
+  finalError: string | null;
+  lastCaughtError: unknown;
+}
+
+interface ArtifactEvidence {
+  changes: ChangeArtifacts;
+  artifactStatus: "collected" | "partial" | "failed" | "timeout";
+  artifactCollectionError: string | null;
+  artifactCollectionStartedAt: string;
+  artifactCollectionFinishedAt: string;
+  outOfScopeChanges: ChangedFile[];
+  newOutOfScopeChanges: ExternalDirtyFile[];
+  preexistingExternalDirty: ExternalDirtyFile[];
+  preexistingWarnings: string[];
+  cleanupReport: PostTaskCleanupReport;
+  artifactManifest: ArtifactManifest;
+  changedFileGroups: ChangedFileGroups;
+}
+
 export async function runTask(taskId: string): Promise<TaskRunResult> {
+  const prepared = await prepareTask(taskId);
+  if (!("taskDir" in prepared)) return prepared;
+  const ctx: TaskContext = prepared;
+  const state = await executeAgent(ctx);
+  await runVerification(ctx, state);
+  const evidence = await collectArtifacts(ctx, state);
+  return finalizeTask(ctx, state, evidence);
+}
+
+async function prepareTask(taskId: string): Promise<TaskContext | TaskRunResult> {
   const config = getConfig();
   const tasksDir = getTasksDir(config);
   const plansDir = getPlansDir(config);
@@ -126,11 +184,10 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
     return failBeforeExecution(taskId, taskDir, message, error);
   }
 
-  // ── Assessment freshness revalidation before execution ──
   const assessmentId = String(initialStatus.assessment_id || "");
   if (assessmentId) {
     try {
-      const preExecSnapshot = captureRepoSnapshot(repoPath);
+      const preExecSnapshot = await captureRepoSnapshot(repoPath);
       const validation = validateAssessmentFreshness(assessmentId, preExecSnapshot);
       if (!validation.valid) {
         const message = `assessment validation failed: ${validation.failure_reason}. Re-run create_task with execution_mode=assess_only to get a fresh assessment_id.`;
@@ -151,141 +208,157 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
     current_command: null,
     error: null,
   });
-  // v0.7.0: record task_started_at and watcher_instance_id so diagnose_task
-  // can detect PID reuse and orphaned tasks. watcher_instance_id comes from
-  // the watcher process env; when run_task MCP tool is used directly, this
-  // field is intentionally left undefined so ownership cannot be falsely claimed.
   writeTaskRuntime(taskDir, {
     task_started_at: new Date(startedAtMs).toISOString(),
     watcher_instance_id: process.env.PATCHWARDEN_WATCHER_INSTANCE_ID || undefined,
   });
   setTaskPhase(taskDir, "preparing", null, "Capturing pre-task repository state.");
 
-  let beforeSnapshot;
-  let beforeWorkspaceSnapshot;
+  let beforeSnapshot: RepoSnapshot;
+  let beforeWorkspaceSnapshot: RepoSnapshot;
   let externalDirtyBaseline: ExternalDirtyFile[] = [];
   try {
-    beforeSnapshot = captureRepoSnapshot(repoPath);
-    beforeWorkspaceSnapshot = repoPath === wsRoot ? beforeSnapshot : captureRepoSnapshot(wsRoot);
+    beforeSnapshot = await captureRepoSnapshot(repoPath);
+    beforeWorkspaceSnapshot = repoPath === wsRoot ? beforeSnapshot : await captureRepoSnapshot(wsRoot);
     writeSnapshot(taskDir, "git-before.json", beforeSnapshot);
     writeSnapshot(taskDir, "workspace-before.json", beforeWorkspaceSnapshot);
-    // Phase 4: Record external dirty files as baseline before task execution
     externalDirtyBaseline = extractExternalDirtyFiles(beforeWorkspaceSnapshot, repoPath, wsRoot);
   } catch (error) {
     const message = `Pre-task snapshot failed: ${errorMessage(error)}`;
     return failBeforeExecution(taskId, taskDir, message, error);
   }
 
-  let agentResult: ManagedProcessResult | null = null;
-  let testResult: TestExecutionResult = skippedTest(testCommand, repoPath, "Agent did not complete successfully.");
-  const verifyResults: TestExecutionResult[] = [];
-  let finalStatus: TaskStatus = "failed";
-  let finalError: string | null = null;
-  let lastCaughtError: unknown = null;
+  return {
+    taskId, taskDir, statusFile, repoPath, wsRoot, config, plansDir, initialStatus,
+    planId, agentName, testCommand, changePolicy, verifyCommands, timeoutSeconds,
+    startedAtMs, deadlineMs, beforeSnapshot, beforeWorkspaceSnapshot, externalDirtyBaseline,
+  };
+}
+
+async function executeAgent(ctx: TaskContext): Promise<ExecutionState> {
+  const state: ExecutionState = {
+    agentResult: null,
+    testResult: skippedTest(ctx.testCommand, ctx.repoPath, "Agent did not complete successfully."),
+    verifyResults: [],
+    finalStatus: "failed",
+    finalError: null,
+    lastCaughtError: null,
+  };
 
   try {
-    const planFile = resolve(plansDir, planId, "plan.md");
-    if (!existsSync(planFile)) throw new Error(`Plan not found: "${planId}". Save the plan first.`);
+    const planFile = resolve(ctx.plansDir, ctx.planId, "plan.md");
+    if (!existsSync(planFile)) throw new Error(`Plan not found: "${ctx.planId}". Save the plan first.`);
     const planContent = readFileSync(planFile, "utf-8");
-    const prompt = buildExecutionPrompt(planContent, repoPath, testCommand);
-    const invocation = buildAgentInvocation(agentName, repoPath, prompt, config);
-    const agentCommandLabel = invocation.commandLabel;
+    const prompt = buildExecutionPrompt(planContent, ctx.repoPath, ctx.testCommand);
+    const invocation = buildAgentInvocation(ctx.agentName, ctx.repoPath, prompt, ctx.config);
 
-    setTaskPhase(taskDir, "executing_agent", agentCommandLabel);
-    agentResult = await runManagedProcess({
+    setTaskPhase(ctx.taskDir, "executing_agent", invocation.commandLabel);
+    state.agentResult = await runManagedProcess({
       command: invocation.command,
       args: invocation.args,
-      cwd: repoPath,
-      taskDir,
-      statusFile,
+      cwd: ctx.repoPath,
+      taskDir: ctx.taskDir,
+      statusFile: ctx.statusFile,
       phase: "executing_agent",
-      currentCommand: agentCommandLabel,
-      deadlineMs,
-      stdoutPath: join(taskDir, "stdout.log"),
-      stderrPath: join(taskDir, "stderr.log"),
+      currentCommand: invocation.commandLabel,
+      deadlineMs: ctx.deadlineMs,
+      stdoutPath: join(ctx.taskDir, "stdout.log"),
+      stderrPath: join(ctx.taskDir, "stderr.log"),
     });
 
+    const agentResult = state.agentResult;
     if (agentResult.terminationReason === "canceled" || agentResult.terminationReason === "killed") {
-      finalStatus = "canceled";
-      finalError = agentResult.terminationReason === "killed"
+      state.finalStatus = "canceled";
+      state.finalError = agentResult.terminationReason === "killed"
         ? "Task was terminated by kill_task."
         : "Task was canceled by user request.";
     } else if (agentResult.terminationReason === "timeout") {
-      finalError = `Task timed out after ${timeoutSeconds} seconds during agent execution.`;
+      state.finalError = `Task timed out after ${ctx.timeoutSeconds} seconds during agent execution.`;
     } else if (agentResult.spawnError) {
-      finalError = `Agent spawn failed: ${agentResult.spawnError}`;
+      state.finalError = `Agent spawn failed: ${agentResult.spawnError}`;
     } else if (agentResult.exitCode !== 0) {
-      finalError = `Agent exited with code ${agentResult.exitCode}.`;
-    } else if (verifyCommands.length > 0) {
-      for (const command of verifyCommands) {
-        setTaskPhase(taskDir, "running_tests", command);
-        const verification = await runTrustedTestCommand(command, repoPath, taskDir, statusFile, deadlineMs);
-        verifyResults.push(verification);
-        if (verification.terminationReason || Date.now() >= deadlineMs) break;
-      }
-      testResult = verifyResults[0] || skippedTest(testCommand, repoPath, "No verification command ran.");
-      const interrupted = verifyResults.find((result) => result.terminationReason);
-      const failedVerification = verifyResults.find((result) => result.spawnError || result.exitCode !== 0);
-      if (interrupted?.terminationReason === "canceled" || interrupted?.terminationReason === "killed") {
-        finalStatus = "canceled";
-        finalError = interrupted.terminationReason === "killed"
-          ? "Task was terminated by kill_task during verification."
-          : "Task was canceled during verification.";
-      } else if (interrupted?.terminationReason === "timeout" || Date.now() >= deadlineMs) {
-        finalError = `Task timed out after ${timeoutSeconds} seconds during verification.`;
-      } else if (failedVerification) {
-        finalStatus = "failed_verification";
-        finalError = failedVerification.spawnError
-          ? `Verification command \"${failedVerification.command}\" could not start: ${failedVerification.spawnError}`
-          : `Verification command \"${failedVerification.command}\" exited with code ${failedVerification.exitCode}.`;
-      } else if (verifyResults.length === verifyCommands.length) {
-        finalStatus = "done_by_agent";
-      } else {
-        finalError = "Verification did not complete all configured commands.";
-      }
-    } else {
-      testResult = skippedTest(testCommand, repoPath, "No verification command configured.");
-      finalStatus = "done_by_agent";
+      state.finalError = `Agent exited with code ${agentResult.exitCode}.`;
     }
   } catch (error) {
-    lastCaughtError = error;
-    finalError = errorMessage(error);
+    state.lastCaughtError = error;
+    state.finalError = errorMessage(error);
   }
 
-  let cleanupReport: PostTaskCleanupReport = {
-    enabled: true,
-    removed: [],
-    skipped: [],
-    source_files_touched: 0,
-  };
-  if (finalStatus !== "canceled") {
+  return state;
+}
+
+async function runVerification(ctx: TaskContext, state: ExecutionState): Promise<ExecutionState> {
+  if (state.finalError !== null) return state;
+
+  try {
+    if (ctx.verifyCommands.length > 0) {
+      for (const command of ctx.verifyCommands) {
+        setTaskPhase(ctx.taskDir, "running_tests", command);
+        const verification = await runTrustedTestCommand(command, ctx.repoPath, ctx.taskDir, ctx.statusFile, ctx.deadlineMs);
+        state.verifyResults.push(verification);
+        if (verification.terminationReason || Date.now() >= ctx.deadlineMs) break;
+      }
+      state.testResult = state.verifyResults[0] || skippedTest(ctx.testCommand, ctx.repoPath, "No verification command ran.");
+      const interrupted = state.verifyResults.find((result) => result.terminationReason);
+      const failedVerification = state.verifyResults.find((result) => result.spawnError || result.exitCode !== 0);
+      if (interrupted?.terminationReason === "canceled" || interrupted?.terminationReason === "killed") {
+        state.finalStatus = "canceled";
+        state.finalError = interrupted.terminationReason === "killed"
+          ? "Task was terminated by kill_task during verification."
+          : "Task was canceled during verification.";
+      } else if (interrupted?.terminationReason === "timeout" || Date.now() >= ctx.deadlineMs) {
+        state.finalError = `Task timed out after ${ctx.timeoutSeconds} seconds during verification.`;
+      } else if (failedVerification) {
+        state.finalStatus = "failed_verification";
+        state.finalError = failedVerification.spawnError
+          ? `Verification command "${failedVerification.command}" could not start: ${failedVerification.spawnError}`
+          : `Verification command "${failedVerification.command}" exited with code ${failedVerification.exitCode}.`;
+      } else if (state.verifyResults.length === ctx.verifyCommands.length) {
+        state.finalStatus = "done_by_agent";
+      } else {
+        state.finalError = "Verification did not complete all configured commands.";
+      }
+    } else {
+      state.testResult = skippedTest(ctx.testCommand, ctx.repoPath, "No verification command configured.");
+      state.finalStatus = "done_by_agent";
+    }
+  } catch (error) {
+    state.lastCaughtError = error;
+    state.finalError = errorMessage(error);
+  }
+
+  return state;
+}
+
+async function collectArtifacts(ctx: TaskContext, state: ExecutionState): Promise<ArtifactEvidence> {
+  let cleanupReport: PostTaskCleanupReport = { enabled: true, removed: [], skipped: [], source_files_touched: 0 };
+  if (state.finalStatus !== "canceled") {
     try {
-      cleanupReport = runPostTaskCleanup(repoPath, taskDir);
-      updateStatus(taskDir, { cleanup: cleanupReport });
+      cleanupReport = runPostTaskCleanup(ctx.repoPath, ctx.taskDir);
+      updateStatus(ctx.taskDir, { cleanup: cleanupReport });
     } catch (error) {
       cleanupReport = {
-        enabled: true,
-        removed: [],
+        enabled: true, removed: [],
         skipped: [{ path: ".", reason: "post_task_cleanup", skip_reason: errorMessage(error) }],
         source_files_touched: 0,
       };
-      writeFileSync(join(taskDir, "post-task-cleanup.json"), JSON.stringify(cleanupReport, null, 2), "utf-8");
-      updateStatus(taskDir, { cleanup: cleanupReport });
+      writeFileSync(join(ctx.taskDir, "post-task-cleanup.json"), JSON.stringify(cleanupReport, null, 2), "utf-8");
+      updateStatus(ctx.taskDir, { cleanup: cleanupReport });
     }
   }
-  setTaskPhase(taskDir, "collecting_artifacts", null, "Capturing post-task state and writing reports.");
+
+  setTaskPhase(ctx.taskDir, "collecting_artifacts", null, "Capturing post-task state and writing reports.");
   const artifactCollectionStartedAt = new Date().toISOString();
   let changes: ChangeArtifacts;
   let artifactStatus: "collected" | "partial" | "failed" | "timeout" = "collected";
   let artifactCollectionError: string | null = null;
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   try {
-    // Phase 5: Wrap artifact collection with a timeout
     const collectionResult = await Promise.race([
-      Promise.resolve().then(() => {
-        const afterSnapshot = captureRepoSnapshot(repoPath);
-        writeSnapshot(taskDir, "git-after.json", afterSnapshot);
-        return buildChangeArtifacts(repoPath, beforeSnapshot, afterSnapshot);
+      Promise.resolve().then(async () => {
+        const afterSnapshot = await captureRepoSnapshot(ctx.repoPath);
+        writeSnapshot(ctx.taskDir, "git-after.json", afterSnapshot);
+        return await buildChangeArtifacts(ctx.repoPath, ctx.beforeSnapshot, afterSnapshot);
       }),
       new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(() => reject(new Error("Artifact collection timed out")), ARTIFACT_COLLECTION_TIMEOUT_MS);
@@ -295,13 +368,9 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
     changes = collectionResult;
   } catch (error) {
     if (timeoutHandle) clearTimeout(timeoutHandle);
-    lastCaughtError = error;
+    state.lastCaughtError = error;
     artifactCollectionError = errorMessage(error);
-    if (artifactCollectionError.includes("timed out")) {
-      artifactStatus = "timeout";
-    } else {
-      artifactStatus = "failed";
-    }
+    artifactStatus = artifactCollectionError.includes("timed out") ? "timeout" : "failed";
     changes = {
       changed_files: [],
       diff: `(change capture failed: ${artifactCollectionError})\n`,
@@ -311,17 +380,16 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
       additions: 0,
       deletions: 0,
       file_stats: [],
-      workspace_dirty_before: beforeSnapshot.workspace_dirty,
-      workspace_dirty_after: beforeSnapshot.workspace_dirty,
+      workspace_dirty_before: ctx.beforeSnapshot.workspace_dirty,
+      workspace_dirty_after: ctx.beforeSnapshot.workspace_dirty,
       patch_mode: "hash_only",
       unavailable_reason: `Change capture failed: ${artifactCollectionError}`,
       artifact_hygiene: emptyArtifactHygiene(),
     };
-    // Phase 5: Write partial_result.md when artifact collection fails
-    writeFileSync(join(taskDir, "partial_result.md"), [
+    writeFileSync(join(ctx.taskDir, "partial_result.md"), [
       "# PatchWarden Partial Result",
       "",
-      `Task: ${taskId}`,
+      `Task: ${ctx.taskId}`,
       "",
       "## Artifact Collection Status",
       artifactStatus,
@@ -330,64 +398,90 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
       artifactCollectionError,
       "",
       "## Agent Status",
-      agentResult ? `Exit code: ${agentResult.exitCode}` : "Agent did not run",
+      state.agentResult ? `Exit code: ${state.agentResult.exitCode}` : "Agent did not run",
       "",
       "## Verification Status",
-      verifyResults.length > 0 ? verifyResults.map((r) => `- ${r.command}: exit ${r.exitCode}`).join("\n") : "No verification ran",
+      state.verifyResults.length > 0 ? state.verifyResults.map((r) => `- ${r.command}: exit ${r.exitCode}`).join("\n") : "No verification ran",
       "",
       "## Note",
       "Artifact collection did not complete. The task result may be incomplete. Review stdout.log, stderr.log, and verify.json for details.",
       "",
     ].join("\n"), "utf-8");
-    // Don't override test failure with artifact failure
-    if (finalStatus === "done_by_agent") {
-      finalError = `Change capture failed: ${artifactCollectionError}`;
-      finalStatus = "failed";
+    if (state.finalStatus === "done_by_agent") {
+      state.finalError = `Change capture failed: ${artifactCollectionError}`;
+      state.finalStatus = "failed";
     } else {
-      finalError ||= `Change capture failed: ${artifactCollectionError}`;
+      state.finalError ||= `Change capture failed: ${artifactCollectionError}`;
     }
   }
   const artifactCollectionFinishedAt = new Date().toISOString();
 
   let outOfScopeChanges: ChangedFile[] = [];
-  let preexistingExternalDirty: ExternalDirtyFile[] = externalDirtyBaseline;
+  const preexistingExternalDirty: ExternalDirtyFile[] = ctx.externalDirtyBaseline;
   let newOutOfScopeChanges: ExternalDirtyFile[] = [];
   try {
-    const afterWorkspaceSnapshot = repoPath === wsRoot ? captureRepoSnapshot(repoPath) : captureRepoSnapshot(wsRoot);
-    writeSnapshot(taskDir, "workspace-after.json", afterWorkspaceSnapshot);
-    const allExternalDirty = extractExternalDirtyFiles(afterWorkspaceSnapshot, repoPath, wsRoot);
-    // Phase 4: Only NEW external dirty files (not in baseline) are scope violations
-    newOutOfScopeChanges = findNewExternalDirtyFiles(externalDirtyBaseline, allExternalDirty);
-    outOfScopeChanges = compareSnapshots(beforeWorkspaceSnapshot, afterWorkspaceSnapshot)
+    const afterWorkspaceSnapshot = ctx.repoPath === ctx.wsRoot ? await captureRepoSnapshot(ctx.repoPath) : await captureRepoSnapshot(ctx.wsRoot);
+    writeSnapshot(ctx.taskDir, "workspace-after.json", afterWorkspaceSnapshot);
+    const allExternalDirty = extractExternalDirtyFiles(afterWorkspaceSnapshot, ctx.repoPath, ctx.wsRoot);
+    newOutOfScopeChanges = findNewExternalDirtyFiles(ctx.externalDirtyBaseline, allExternalDirty);
+    outOfScopeChanges = compareSnapshots(ctx.beforeWorkspaceSnapshot, afterWorkspaceSnapshot)
       .filter((file) =>
-        !isPathInside(resolve(wsRoot, file.path), repoPath) ||
-        Boolean(file.old_path && !isPathInside(resolve(wsRoot, file.old_path), repoPath))
+        !isPathInside(resolve(ctx.wsRoot, file.path), ctx.repoPath) ||
+        Boolean(file.old_path && !isPathInside(resolve(ctx.wsRoot, file.old_path), ctx.repoPath))
       );
   } catch (error) {
-    finalError ||= `Workspace scope capture failed: ${errorMessage(error)}`;
-    if (finalStatus === "done_by_agent") finalStatus = "failed";
+    state.finalError ||= `Workspace scope capture failed: ${errorMessage(error)}`;
+    if (state.finalStatus === "done_by_agent") state.finalStatus = "failed";
   }
 
-  // Phase 4: Pre-existing external dirty files are warnings, not failures
   const preexistingWarnings: string[] = preexistingExternalDirty.length > 0
     ? [`Pre-existing external dirty files (not caused by this task): ${preexistingExternalDirty.length} file(s)`]
     : [];
 
+  applyScopeViolationVerdict(ctx, state, changes, newOutOfScopeChanges, preexistingExternalDirty);
+
+  writeFileSync(join(ctx.taskDir, "git.diff"), changes.diff, "utf-8");
+  writeFileSync(join(ctx.taskDir, "diff.patch"), changes.diff, "utf-8");
+  writeFileSync(join(ctx.taskDir, "changed-files.json"), JSON.stringify(changes, null, 2), "utf-8");
+  const artifactManifest = await buildArtifactManifest(changes.changed_files, ctx.repoPath, ctx.taskId);
+  writeFileSync(join(ctx.taskDir, "artifact_manifest.json"), JSON.stringify(artifactManifest, null, 2), "utf-8");
+  const changedFileGroups = groupChangedFiles(changes.changed_files);
+  writeFileSync(join(ctx.taskDir, "file-stats.json"), JSON.stringify({
+    task_id: ctx.taskId,
+    additions: changes.additions,
+    deletions: changes.deletions,
+    files: changes.file_stats,
+  }, null, 2), "utf-8");
+
+  return {
+    changes, artifactStatus, artifactCollectionError, artifactCollectionStartedAt, artifactCollectionFinishedAt,
+    outOfScopeChanges, newOutOfScopeChanges, preexistingExternalDirty, preexistingWarnings, cleanupReport,
+    artifactManifest, changedFileGroups,
+  };
+}
+
+function applyScopeViolationVerdict(
+  ctx: TaskContext,
+  state: ExecutionState,
+  changes: ChangeArtifacts,
+  newOutOfScopeChanges: ExternalDirtyFile[],
+  preexistingExternalDirty: ExternalDirtyFile[],
+): void {
   if (newOutOfScopeChanges.length > 0) {
-    finalStatus = "failed_scope_violation";
-    finalError = `Detected ${newOutOfScopeChanges.length} new change(s) outside resolved_repo_path during task execution.`;
-    writeFileSync(join(taskDir, "rollback-plan.json"), JSON.stringify({
-      task_id: taskId,
+    state.finalStatus = "failed_scope_violation";
+    state.finalError = `Detected ${newOutOfScopeChanges.length} new change(s) outside resolved_repo_path during task execution.`;
+    writeFileSync(join(ctx.taskDir, "rollback-plan.json"), JSON.stringify({
+      task_id: ctx.taskId,
       status: "review_required",
       automatic_rollback_performed: false,
       warning: "Review ownership and concurrent edits before rollback. PatchWarden did not modify or restore these files.",
       out_of_scope_changes: newOutOfScopeChanges,
       preexisting_external_dirty_files: preexistingExternalDirty,
     }, null, 2), "utf-8");
-    writeFileSync(join(taskDir, "rollback_scope_violation_plan.md"), [
+    writeFileSync(join(ctx.taskDir, "rollback_scope_violation_plan.md"), [
       "# Scope Violation Rollback Plan",
       "",
-      `Task: ${taskId}`,
+      `Task: ${ctx.taskId}`,
       "",
       "PatchWarden did not automatically roll back any file. Review concurrent or user-owned edits before acting.",
       "",
@@ -395,47 +489,34 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
       ...newOutOfScopeChanges.map((file) => `- ${file.change}: ${file.path}`),
       "",
     ].join("\n"), "utf-8");
-  } else if (changePolicy === "no_changes" && changes.changed_files.length > 0) {
-    finalStatus = "failed_policy_violation";
-    finalError = `Task policy requires no repository changes, but detected ${changes.changed_files.length} change(s).`;
+  } else if (ctx.changePolicy === "no_changes" && changes.changed_files.length > 0) {
+    state.finalStatus = "failed_policy_violation";
+    state.finalError = `Task policy requires no repository changes, but detected ${changes.changed_files.length} change(s).`;
   }
+}
 
-  writeFileSync(join(taskDir, "git.diff"), changes.diff, "utf-8");
-  writeFileSync(join(taskDir, "diff.patch"), changes.diff, "utf-8");
-  writeFileSync(join(taskDir, "changed-files.json"), JSON.stringify(changes, null, 2), "utf-8");
+function finalizeTask(ctx: TaskContext, state: ExecutionState, evidence: ArtifactEvidence): TaskRunResult {
+  const { changes, artifactStatus, artifactCollectionError, artifactCollectionStartedAt, artifactCollectionFinishedAt,
+    outOfScopeChanges, newOutOfScopeChanges, preexistingExternalDirty, preexistingWarnings, cleanupReport,
+    artifactManifest, changedFileGroups } = evidence;
 
-  // Phase 6: Generate artifact_manifest.json and group changed files
-  const artifactManifest: ArtifactManifest = buildArtifactManifest(changes.changed_files, repoPath, taskId);
-  writeFileSync(join(taskDir, "artifact_manifest.json"), JSON.stringify(artifactManifest, null, 2), "utf-8");
-  const changedFileGroups = groupChangedFiles(changes.changed_files);
-
-  writeFileSync(join(taskDir, "file-stats.json"), JSON.stringify({
-    task_id: taskId,
-    additions: changes.additions,
-    deletions: changes.deletions,
-    files: changes.file_stats,
-  }, null, 2), "utf-8");
-  writeFileSync(join(taskDir, "test.log"), buildTestLog(testResult), "utf-8");
-  const verifyJson = buildVerifyJson(verifyCommands, verifyResults, repoPath);
-  // Phase 4: Use newOutOfScopeChanges (not outOfScopeChanges) for verify_status
-  // to stay consistent with finalStatus. Pre-existing external dirty files
-  // that didn't change during the task should NOT cause verify_status to fail.
+  writeFileSync(join(ctx.taskDir, "test.log"), buildTestLog(state.testResult), "utf-8");
+  const verifyJson = buildVerifyJson(ctx.verifyCommands, state.verifyResults, ctx.repoPath);
   if (newOutOfScopeChanges.length > 0) {
     verifyJson.status = "failed";
     verifyJson.failure_reason = "scope_violation";
-  } else if (finalStatus === "failed_policy_violation") {
+  } else if (state.finalStatus === "failed_policy_violation") {
     verifyJson.status = "failed";
     verifyJson.failure_reason = "change_policy_violation";
   }
-  writeFileSync(join(taskDir, "verify.json"), JSON.stringify(verifyJson, null, 2), "utf-8");
-  writeFileSync(join(taskDir, "verify.log"), buildVerifyLog(verifyJson.commands), "utf-8");
+  writeFileSync(join(ctx.taskDir, "verify.json"), JSON.stringify(verifyJson, null, 2), "utf-8");
+  writeFileSync(join(ctx.taskDir, "verify.log"), buildVerifyLog(verifyJson.commands), "utf-8");
 
-  if (!["canceled", "done_by_agent", "failed_verification", "failed_scope_violation", "failed_policy_violation"].includes(finalStatus)) finalStatus = "failed";
-  const finalPhase: TaskPhase = finalStatus === "done_by_agent" ? "done_by_agent" : finalStatus;
-  const followup = buildFailureFollowup(finalStatus, finalError, verifyJson.commands);
+  if (!["canceled", "done_by_agent", "failed_verification", "failed_scope_violation", "failed_policy_violation"].includes(state.finalStatus)) state.finalStatus = "failed";
+  const finalPhase: TaskPhase = state.finalStatus === "done_by_agent" ? "done_by_agent" : (state.finalStatus as TaskPhase);
+  const followup = buildFailureFollowup(state.finalStatus, state.finalError, verifyJson.commands);
 
-  // Phase 7: Run Android build environment diagnostics if android_app exists
-  const androidDiagnostic = diagnoseAndroidBuild(repoPath);
+  const androidDiagnostic = diagnoseAndroidBuild(ctx.repoPath);
   let androidWarning: string | null = null;
   if (androidDiagnostic.status !== "skip") {
     if (androidDiagnostic.status === "fail") {
@@ -449,13 +530,13 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
   }
 
   const resultMd = buildResultMarkdown({
-    taskId,
-    planId,
-    agent: agentName,
-    status: finalStatus,
-    error: finalError,
-    agentResult,
-    testResult,
+    taskId: ctx.taskId,
+    planId: ctx.planId,
+    agent: ctx.agentName,
+    status: state.finalStatus,
+    error: state.finalError,
+    agentResult: state.agentResult,
+    testResult: state.testResult,
     verify: verifyJson,
     changes,
     outOfScopeChanges,
@@ -466,18 +547,88 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
     androidWarning,
     preexistingWarnings,
   });
-  writeFileSync(join(taskDir, "result.md"), resultMd, "utf-8");
-  writeFileSync(join(taskDir, "result.json"), JSON.stringify({
-    task_id: taskId,
-    status: finalStatus,
-    agent: agentName,
-    workspace_root: wsRoot,
-    repo_path: initialStatus.repo_path,
-    resolved_repo_path: repoPath,
-    plan_source: initialStatus.plan_source || "saved",
-    template: initialStatus.template || null,
-    change_policy: changePolicy,
-    summary: finalError || "Agent execution and configured verification completed successfully.",
+  writeFileSync(join(ctx.taskDir, "result.md"), resultMd, "utf-8");
+
+  const resultJson = buildResultJson({
+    ctx, state, evidence, verifyJson, followup, androidDiagnostic, androidWarning,
+  });
+  writeFileSync(join(ctx.taskDir, "result.json"), JSON.stringify(resultJson, null, 2), "utf-8");
+
+  if (state.finalError) {
+    const structuredError = errorPayload(state.lastCaughtError);
+    writeFileSync(join(ctx.taskDir, "error.log"), JSON.stringify({
+      summary: state.finalError,
+      ...structuredError,
+    }, null, 2), "utf-8");
+  }
+
+  const finishedAt = new Date().toISOString();
+  updateStatus(ctx.taskDir, {
+    status: state.finalStatus,
+    phase: finalPhase,
+    current_command: null,
+    last_heartbeat_at: finishedAt,
+    finished_at: finishedAt,
+    error: state.finalError,
+    changed_files: changes.changed_files.map(({ path, change }) => ({ path, change })),
+    artifact_hygiene_counts: changes.artifact_hygiene.counts,
+    artifact_status: artifactStatus,
+    artifact_collection_error: artifactCollectionError,
+    artifact_collection_started_at: artifactCollectionStartedAt,
+    artifact_collection_finished_at: artifactCollectionFinishedAt,
+    cleanup: cleanupReport,
+    out_of_scope_changes: outOfScopeChanges,
+    new_out_of_scope_changes: newOutOfScopeChanges,
+    preexisting_external_dirty_files: preexistingExternalDirty,
+    verify_status: verifyJson.status,
+    verify_commands: ctx.verifyCommands,
+    diff_available: changes.diff_available,
+    diff_truncated: changes.diff_truncated,
+    workspace_dirty_before: changes.workspace_dirty_before,
+    workspace_dirty_after: changes.workspace_dirty_after,
+    workspace_dirty: changes.workspace_dirty_after,
+    acceptance_status: state.finalStatus === "done_by_agent" ? "pending" : null,
+  });
+  writeTaskRuntime(ctx.taskDir, {
+    phase: finalPhase,
+    current_command: null,
+    last_heartbeat_at: finishedAt,
+    runner_pid: process.pid,
+    child_pid: undefined,
+  });
+  writeTaskProgress(ctx.taskDir, finalPhase, {
+    heartbeatAt: finishedAt,
+    note: state.finalError || `Task finished with status ${state.finalStatus}.`,
+  });
+
+  return { task_id: ctx.taskId, status: state.finalStatus, error: state.finalError };
+}
+
+function buildResultJson(input: {
+  ctx: TaskContext;
+  state: ExecutionState;
+  evidence: ArtifactEvidence;
+  verifyJson: VerifyReport;
+  followup: ReturnType<typeof buildFailureFollowup>;
+  androidDiagnostic: ReturnType<typeof diagnoseAndroidBuild>;
+  androidWarning: string | null;
+}): Record<string, unknown> {
+  const { ctx, state, evidence, verifyJson, followup, androidDiagnostic, androidWarning } = input;
+  const { changes, artifactStatus, artifactCollectionError, artifactCollectionStartedAt,
+    artifactCollectionFinishedAt, outOfScopeChanges, newOutOfScopeChanges,
+    preexistingExternalDirty, cleanupReport, artifactManifest, changedFileGroups } = evidence;
+
+  return {
+    task_id: ctx.taskId,
+    status: state.finalStatus,
+    agent: ctx.agentName,
+    workspace_root: ctx.wsRoot,
+    repo_path: ctx.initialStatus.repo_path,
+    resolved_repo_path: ctx.repoPath,
+    plan_source: ctx.initialStatus.plan_source || "saved",
+    template: ctx.initialStatus.template || null,
+    change_policy: ctx.changePolicy,
+    summary: state.finalError || "Agent execution and configured verification completed successfully.",
     changed_files: changes.changed_files,
     changed_file_groups: {
       source_changes: changedFileGroups.source_changes.length,
@@ -515,70 +666,21 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
       ...(artifactStatus !== "collected" ? ["partial_result.md"] : []),
     ],
     warnings: [
-      ...beforeSnapshot.warnings,
+      ...ctx.beforeSnapshot.warnings,
       ...(changes.diff_truncated ? ["diff.patch was truncated; changed-files.json retains file evidence."] : []),
-      ...preexistingWarnings,
+      ...evidence.preexistingWarnings,
       ...(androidWarning ? [androidWarning] : []),
     ],
-    errors: finalError ? [finalError] : [],
-    known_issues: finalError ? [finalError] : [],
+    errors: state.finalError ? [state.finalError] : [],
+    known_issues: state.finalError ? [state.finalError] : [],
     failure_reason: followup.failure_reason,
     failed_command: followup.failed_command,
     suggested_next_action: followup.suggested_next_action,
     safe_followup_prompt: followup.safe_followup_prompt,
-    next_steps: finalStatus === "done_by_agent"
+    next_steps: state.finalStatus === "done_by_agent"
       ? ["Review get_task_summary and audit_task before accepting the work."]
       : ["Resolve the reported failure before accepting the work."],
-  }, null, 2), "utf-8");
-  if (finalError) {
-    // Phase 9: Preserve PatchWardenError structured info in error.log
-    const structuredError = errorPayload(lastCaughtError);
-    writeFileSync(join(taskDir, "error.log"), JSON.stringify({
-      summary: finalError,
-      ...structuredError,
-    }, null, 2), "utf-8");
-  }
-
-  const finishedAt = new Date().toISOString();
-  updateStatus(taskDir, {
-    status: finalStatus,
-    phase: finalPhase,
-    current_command: null,
-    last_heartbeat_at: finishedAt,
-    finished_at: finishedAt,
-    error: finalError,
-    changed_files: changes.changed_files.map(({ path, change }) => ({ path, change })),
-    artifact_hygiene_counts: changes.artifact_hygiene.counts,
-    artifact_status: artifactStatus,
-    artifact_collection_error: artifactCollectionError,
-    artifact_collection_started_at: artifactCollectionStartedAt,
-    artifact_collection_finished_at: artifactCollectionFinishedAt,
-    cleanup: cleanupReport,
-    out_of_scope_changes: outOfScopeChanges,
-    new_out_of_scope_changes: newOutOfScopeChanges,
-    preexisting_external_dirty_files: preexistingExternalDirty,
-    verify_status: verifyJson.status,
-    verify_commands: verifyCommands,
-    diff_available: changes.diff_available,
-    diff_truncated: changes.diff_truncated,
-    workspace_dirty_before: changes.workspace_dirty_before,
-    workspace_dirty_after: changes.workspace_dirty_after,
-    workspace_dirty: changes.workspace_dirty_after,
-    acceptance_status: finalStatus === "done_by_agent" ? "pending" : null,
-  });
-  writeTaskRuntime(taskDir, {
-    phase: finalPhase,
-    current_command: null,
-    last_heartbeat_at: finishedAt,
-    runner_pid: process.pid,
-    child_pid: undefined,
-  });
-  writeTaskProgress(taskDir, finalPhase, {
-    heartbeatAt: finishedAt,
-    note: finalError || `Task finished with status ${finalStatus}.`,
-  });
-
-  return { task_id: taskId, status: finalStatus, error: finalError };
+  };
 }
 
 function buildFailureFollowup(
@@ -724,8 +826,8 @@ async function runManagedProcess(options: {
     // force-resolve to prevent the runner from hanging indefinitely.
     // Only starts AFTER termination is requested — normal long tasks are unaffected.
     fallbackTimer = setTimeout(() => {
-      try { forceKill(child); } catch {}
-      try { child.kill("SIGKILL"); } catch {}
+      try { forceKill(child); } catch {} // cleanup failure is safe to ignore
+      try { child.kill("SIGKILL"); } catch {} // cleanup failure is safe to ignore
       // Resolve the exit promise via the shared finish handle
       if (childExitFinish) childExitFinish(null);
     }, 10000);
@@ -1153,7 +1255,7 @@ function gracefulKill(child: ChildProcess): void {
   try {
     if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGTERM");
     else child.kill("SIGTERM");
-  } catch {}
+  } catch {} // cleanup failure is safe to ignore
 }
 
 function forceKill(child: ChildProcess): void {
@@ -1170,7 +1272,7 @@ function forceKill(child: ChildProcess): void {
       process.kill(-child.pid, "SIGKILL");
     }
   } catch {
-    try { child.kill("SIGKILL"); } catch {}
+    try { child.kill("SIGKILL"); } catch {} // cleanup failure is safe to ignore
   }
 }
 

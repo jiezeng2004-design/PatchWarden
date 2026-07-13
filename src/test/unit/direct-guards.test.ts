@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { guardDirectPath, guardDirectWritePath, guardDirectReadPath, guardDirectPatchSize, guardDirectFileSize, isBinaryFile } from "../../direct/directGuards.js";
 import { PatchWardenError } from "../../errors.js";
+import { reloadConfig } from "../../config.js";
 import type { PatchWardenConfig } from "../../config.js";
 
 function makeConfig(workspaceRoot: string): PatchWardenConfig {
@@ -199,30 +200,87 @@ describe("guardDirectPatchSize", () => {
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), "pw-patchsize-"));
-    process.env.PATCHWARDEN_CONFIG = "";
+    // Write a real config file so getConfig() picks it up
+    const configPath = join(tempDir, "patchwarden.config.json");
+    writeFileSync(configPath, JSON.stringify({
+      workspaceRoot: tempDir,
+      agents: { codex: { command: "codex", args: ["exec", "{prompt}"] } },
+      allowedTestCommands: ["npm test"],
+      directMaxPatchBytes: 1000,
+      directMaxFileBytes: 5000,
+    }), "utf-8");
+    process.env.PATCHWARDEN_CONFIG = configPath;
+    reloadConfig();
   });
 
   afterEach(() => {
     rmSync(tempDir, { recursive: true, force: true });
     delete process.env.PATCHWARDEN_CONFIG;
+    reloadConfig();
   });
 
   it("allows patches within size limit", () => {
-    // We can't easily call this without a config, so just test the logic
-    // guardDirectPatchSize calls getConfig() internally
-    // We'll test it indirectly by checking it doesn't throw for small sizes
-    // when config is loaded with defaults
-    // Skip if no config available
+    assert.doesNotThrow(() => guardDirectPatchSize(500));
+    assert.doesNotThrow(() => guardDirectPatchSize(1000));
   });
 
   it("rejects patches exceeding size limit", () => {
-    // This test would need config setup; skip for now
+    assert.throws(
+      () => guardDirectPatchSize(1001),
+      (err: unknown) => err instanceof PatchWardenError && err.reason === "patch_too_large"
+    );
+    assert.throws(
+      () => guardDirectPatchSize(999999),
+      (err: unknown) => err instanceof PatchWardenError && err.reason === "patch_too_large"
+    );
+  });
+
+  it("allows zero-size patch", () => {
+    assert.doesNotThrow(() => guardDirectPatchSize(0));
   });
 });
 
 describe("guardDirectFileSize", () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "pw-filesize-"));
+    const configPath = join(tempDir, "patchwarden.config.json");
+    writeFileSync(configPath, JSON.stringify({
+      workspaceRoot: tempDir,
+      agents: { codex: { command: "codex", args: ["exec", "{prompt}"] } },
+      allowedTestCommands: ["npm test"],
+      directMaxPatchBytes: 1000,
+      directMaxFileBytes: 5000,
+    }), "utf-8");
+    process.env.PATCHWARDEN_CONFIG = configPath;
+    reloadConfig();
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+    delete process.env.PATCHWARDEN_CONFIG;
+    reloadConfig();
+  });
+
   it("allows files within size limit", () => {
-    // Similar to above, needs config
+    assert.doesNotThrow(() => guardDirectFileSize(100));
+    assert.doesNotThrow(() => guardDirectFileSize(5000));
+  });
+
+  it("rejects files exceeding size limit", () => {
+    assert.throws(
+      () => guardDirectFileSize(5001),
+      (err: unknown) => err instanceof PatchWardenError && err.reason === "file_too_large"
+    );
+    assert.throws(
+      () => guardDirectFileSize(9999999),
+      (err: unknown) => err instanceof PatchWardenError && err.reason === "file_too_large"
+    );
+  });
+
+  it("allows zero-size file", () => {
+    assert.doesNotThrow(() => guardDirectFileSize(0));
   });
 });
 
@@ -293,5 +351,117 @@ describe("isBinaryFile", () => {
 
   it("returns false for non-existent files without binary extension", () => {
     assert.equal(isBinaryFile(join(tempDir, "nonexistent.txt")), false);
+  });
+
+  // ── Adversarial: null byte beyond 8KB read window ──
+  it("detects null byte at position 8200 (beyond old 8KB window)", () => {
+    // Previously isBinaryFile only read the first 8192 bytes, so a null byte
+    // at position 8200 would bypass detection. Now we scan up to 1 MB.
+    const stealthBinary = join(tempDir, "stealth.txt");
+    const buffer = Buffer.alloc(8200, 0x41); // 8200 bytes of 'A'
+    buffer[8199] = 0; // null byte just beyond the old 8KB read window
+    writeFileSync(stealthBinary, buffer);
+    assert.equal(isBinaryFile(stealthBinary), true);
+  });
+
+  it("detects null byte at exactly position 8192 (first byte beyond old window)", () => {
+    const stealthBinary = join(tempDir, "boundary-plus.txt");
+    const buffer = Buffer.alloc(8193, 0x41);
+    buffer[8192] = 0; // first byte beyond the old 8KB read window
+    writeFileSync(stealthBinary, buffer);
+    assert.equal(isBinaryFile(stealthBinary), true);
+  });
+
+  it("detects null byte at 100KB offset", () => {
+    const deepBinary = join(tempDir, "deep.txt");
+    const buffer = Buffer.alloc(102400, 0x41);
+    buffer[102399] = 0;
+    writeFileSync(deepBinary, buffer);
+    assert.equal(isBinaryFile(deepBinary), true);
+  });
+
+  it("detects null byte at 1MB offset (scan limit boundary)", () => {
+    const limitBinary = join(tempDir, "limit.txt");
+    const buffer = Buffer.alloc(1_048_576, 0x41);
+    buffer[1_048_575] = 0;
+    writeFileSync(limitBinary, buffer);
+    assert.equal(isBinaryFile(limitBinary), true);
+  });
+
+  it("does not scan beyond 1MB limit", () => {
+    // A null byte just past the 1MB scan limit should NOT be detected.
+    // This documents the remaining scan boundary.
+    const overLimit = join(tempDir, "over-limit.txt");
+    const buffer = Buffer.alloc(1_048_577, 0x41);
+    buffer[1_048_576] = 0; // first byte beyond scan limit
+    writeFileSync(overLimit, buffer);
+    assert.equal(isBinaryFile(overLimit), false);
+  });
+});
+
+// ── Adversarial: Windows backslash prefix bypass attempts ──
+
+describe("guardDirectWritePath adversarial separator tests", () => {
+  let tempDir: string;
+  let repoPath: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "pw-directsep-"));
+    repoPath = join(tempDir, "my-repo");
+    mkdirSync(repoPath, { recursive: true });
+    mkdirSync(join(repoPath, "src"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("blocks node_modules with backslash prefix", () => {
+    assert.throws(
+      () => guardDirectWritePath("node_modules\\evil\\index.js", repoPath, tempDir),
+      (err: unknown) => err instanceof PatchWardenError && err.reason === "blocked_artifact_path"
+    );
+  });
+
+  it("blocks dist with backslash prefix", () => {
+    assert.throws(
+      () => guardDirectWritePath("dist\\main.js", repoPath, tempDir),
+      (err: unknown) => err instanceof PatchWardenError && err.reason === "blocked_artifact_path"
+    );
+  });
+
+  it("blocks release with backslash prefix", () => {
+    assert.throws(
+      () => guardDirectWritePath("release\\app.exe", repoPath, tempDir),
+      (err: unknown) => err instanceof PatchWardenError && err.reason === "blocked_artifact_path"
+    );
+  });
+
+  it("blocks nested node_modules with mixed separators", () => {
+    assert.throws(
+      () => guardDirectWritePath("src\\node_modules/evil\\index.js", repoPath, tempDir),
+      (err: unknown) => err instanceof PatchWardenError && err.reason === "blocked_artifact_path"
+    );
+  });
+
+  it("blocks .patchwarden with backslash prefix", () => {
+    assert.throws(
+      () => guardDirectWritePath(".patchwarden\\tasks\\evil.json", repoPath, tempDir),
+      (err: unknown) => err instanceof PatchWardenError && err.reason === "internal_patchwarden_path_blocked"
+    );
+  });
+
+  it("blocks .env with backslash prefix", () => {
+    assert.throws(
+      () => guardDirectWritePath("path\\to\\.env", repoPath, tempDir),
+      (err: unknown) => err instanceof PatchWardenError && err.reason === "sensitive_path_blocked"
+    );
+  });
+
+  it("blocks config.json with backslash path", () => {
+    assert.throws(
+      () => guardDirectWritePath("subdir\\config.json", repoPath, tempDir),
+      (err: unknown) => err instanceof PatchWardenError && err.reason === "sensitive_path_blocked"
+    );
   });
 });

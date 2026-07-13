@@ -25,29 +25,30 @@ import { registerTools } from "./tools/registry.js";
 import { healthCheck } from "./tools/healthCheck.js";
 import { getToolCatalogSnapshot } from "./tools/registry.js";
 import { PATCHWARDEN_VERSION } from "./version.js";
+import { logger } from "./logging.js";
 
 // ── Bootstrap ─────────────────────────────────────────────────────
 
 const config = loadConfig();
 const port = parseInt(process.env.PATCHWARDEN_HTTP_PORT || "") ||
-  (config as any).httpPort ||
+  config.httpPort ||
   7331;
 const host = "127.0.0.1";
 
-console.error(`[patchwarden-http] Workspace: ${config.workspaceRoot}`);
-console.error(`[patchwarden-http] Listening:  http://${host}:${port}/mcp`);
-console.error(`[patchwarden-http] ⚠️  Bound to 127.0.0.1 only — not exposed to network`);
+logger.info(`[patchwarden-http] Workspace: ${config.workspaceRoot}`);
+logger.info(`[patchwarden-http] Listening:  http://${host}:${port}/mcp`);
+logger.info(`[patchwarden-http] ⚠️  Bound to 127.0.0.1 only — not exposed to network`);
 
 // ── Owner token (optional) ────────────────────────────────────────
 
-const httpCfg = (config as any).http || {};
+const httpCfg = config.http || {};
 const ownerTokenEnv = httpCfg.ownerTokenEnv || "PATCHWARDEN_OWNER_TOKEN";
 const ownerToken = process.env[ownerTokenEnv] || "";
 
 if (ownerToken) {
-  console.error(`[patchwarden-http] 🔒 Owner token required (env: ${ownerTokenEnv})`);
+  logger.info(`[patchwarden-http] 🔒 Owner token required (env: ${ownerTokenEnv})`);
 } else {
-  console.error(`[patchwarden-http] ⚠️  No owner token set — all local requests accepted`);
+  logger.info(`[patchwarden-http] ⚠️  No owner token set — all local requests accepted`);
 }
 
 function checkOwnerToken(req: IncomingMessage): boolean {
@@ -142,7 +143,9 @@ async function handleMcpRequest(req: IncomingMessage, res: ServerResponse): Prom
     await mcpServer.connect(transport);
     await transport.handleRequest(req, res);
   } catch (err) {
-    console.error("[patchwarden-http] Request error:", err);
+    logger.error("[patchwarden-http] Request error", {
+      error: err instanceof Error ? err.message : String(err),
+    });
     if (!res.headersSent) {
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Internal server error" }));
@@ -253,22 +256,22 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
 
 httpServer.on("error", (err: NodeJS.ErrnoException) => {
   if (err.code === "EADDRINUSE") {
-    console.error(`[patchwarden-http] Fatal: port ${port} is already in use on ${host}.`);
-    console.error("[patchwarden-http] Stop the other PatchWarden HTTP instance or change httpPort in patchwarden.config.json.");
+    logger.fatal(`[patchwarden-http] Fatal: port ${port} is already in use on ${host}.`);
+    logger.fatal("[patchwarden-http] Stop the other PatchWarden HTTP instance or change httpPort in patchwarden.config.json.");
   } else {
-    console.error(`[patchwarden-http] Fatal: ${err.message}`);
+    logger.fatal(`[patchwarden-http] Fatal: ${err.message}`);
   }
   process.exit(1);
 });
 
 httpServer.listen(port, host, () => {
-  console.error(`[patchwarden-http] ✅ Ready`);
-  console.error(`[patchwarden-http] Admin:    http://${host}:${port}/admin/tasks/:id/accept`);
+  logger.info(`[patchwarden-http] ✅ Ready`);
+  logger.info(`[patchwarden-http] Admin:    http://${host}:${port}/admin/tasks/:id/accept`);
 });
 
 // Graceful shutdown
 process.on("SIGINT", () => {
-  console.error("[patchwarden-http] Shutting down...");
+  logger.info("[patchwarden-http] Shutting down...");
   httpServer.close(() => process.exit(0));
 });
 

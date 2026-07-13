@@ -23,6 +23,9 @@ export interface PatchWardenConfig {
   watcherStaleSeconds: number;
   toolProfile?: "full" | "chatgpt_core" | "chatgpt_direct" | "chatgpt_search";
   repoAliases?: Record<string, string>;
+  httpPort?: number;
+  http?: { port?: number; host?: string; ownerTokenEnv?: string };
+  enableRunTaskTool?: boolean;
   enableAgentAssessment?: boolean;
   agentAssessmentTimeoutSeconds?: number;
   agentAssessmentMaxOutputBytes?: number;
@@ -232,6 +235,40 @@ function normalizeConfig(config: PatchWardenConfig): PatchWardenConfig {
     config.toolProfile !== "chatgpt_search"
   ) {
     throw new Error('toolProfile must be "full", "chatgpt_core", "chatgpt_direct", or "chatgpt_search"');
+  }
+  if (config.repoAliases !== undefined) {
+    if (typeof config.repoAliases !== "object" || config.repoAliases === null || Array.isArray(config.repoAliases)) {
+      throw new Error("repoAliases must be an object mapping alias names to repository paths");
+    }
+    for (const [alias, target] of Object.entries(config.repoAliases)) {
+      if (typeof target !== "string") {
+        throw new Error(`repoAliases["${alias}"] must be a string`);
+      }
+    }
+  }
+  if (config.httpPort !== undefined) {
+    if (typeof config.httpPort !== "number" || !Number.isInteger(config.httpPort) || config.httpPort < 1 || config.httpPort > 65535) {
+      throw new Error("httpPort must be an integer from 1 to 65535");
+    }
+  }
+  if (config.http !== undefined) {
+    if (typeof config.http !== "object" || config.http === null || Array.isArray(config.http)) {
+      throw new Error("http must be an object");
+    }
+    if (config.http.port !== undefined) {
+      if (typeof config.http.port !== "number" || !Number.isInteger(config.http.port) || config.http.port < 1 || config.http.port > 65535) {
+        throw new Error("http.port must be an integer from 1 to 65535");
+      }
+    }
+    if (config.http.host !== undefined && typeof config.http.host !== "string") {
+      throw new Error("http.host must be a string");
+    }
+    if (config.http.ownerTokenEnv !== undefined && typeof config.http.ownerTokenEnv !== "string") {
+      throw new Error("http.ownerTokenEnv must be a string");
+    }
+  }
+  if (config.enableRunTaskTool !== undefined && typeof config.enableRunTaskTool !== "boolean") {
+    throw new Error("enableRunTaskTool must be a boolean");
   }
   if (config.enableAgentAssessment !== undefined && typeof config.enableAgentAssessment !== "boolean") {
     throw new Error("enableAgentAssessment must be a boolean");

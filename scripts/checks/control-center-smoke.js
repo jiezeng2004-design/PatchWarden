@@ -1088,6 +1088,351 @@ async function testControlCenterStatusApi() {
   }
 }
 
+// ── Test 21: GET /api/workspace/repos returns valid JSON with repos array ──
+async function testWorkspaceReposApi() {
+  const name = "Test 21: /api/workspace/repos returns valid JSON with repos array";
+  try {
+    const res = await httpGet(`${BASE_URL}/api/workspace/repos`);
+    if (res.status !== 200) {
+      record(name, false, `status ${res.status} (expected 200)`);
+      return;
+    }
+    const json = tryJson(res.body);
+    if (!json || !isObject(json)) {
+      record(name, false, `body is not a JSON object: ${res.body.slice(0, 200)}`);
+      return;
+    }
+    const problems = [];
+    if (!Array.isArray(json.repos)) problems.push("'repos' is not an array");
+    if (typeof json.workspace_root !== "string" && json.workspace_root !== null) {
+      problems.push("'workspace_root' is neither string nor null");
+    }
+    if (Array.isArray(json.repos)) {
+      for (let i = 0; i < json.repos.length; i++) {
+        const repo = json.repos[i];
+        if (!isObject(repo)) {
+          problems.push(`repos[${i}] is not an object`);
+          continue;
+        }
+        if (typeof repo.name !== "string") problems.push(`repos[${i}].name not string`);
+        if (typeof repo.path !== "string") problems.push(`repos[${i}].path not string`);
+        if (typeof repo.has_package_json !== "boolean") problems.push(`repos[${i}].has_package_json not boolean`);
+      }
+    }
+    if (problems.length === 0) {
+      record(name, true);
+    } else {
+      record(name, false, problems.join("; "));
+    }
+  } catch (err) {
+    record(name, false, `error: ${err.message}`);
+  }
+}
+
+// ── Test 22: /api/release/status no longer mentions release_prepare and has ready_state ──
+async function testReleaseStatusFields() {
+  const name = "Test 22: /api/release/status has ready_state and no release_prepare text";
+  try {
+    const res = await httpGet(`${BASE_URL}/api/release/status?repo_path=.`);
+    if (res.status !== 200) {
+      record(name, false, `status ${res.status} (expected 200)`);
+      return;
+    }
+    const json = tryJson(res.body);
+    if (!json || !isObject(json)) {
+      record(name, false, `body is not a JSON object: ${res.body.slice(0, 200)}`);
+      return;
+    }
+    const problems = [];
+    if (!("ready_state" in json)) problems.push("missing 'ready_state' field");
+    if (typeof json.ready_state !== "string") problems.push("'ready_state' is not a string");
+    if (!("package_name" in json)) problems.push("missing 'package_name' field");
+    if (!("version_source" in json)) problems.push("missing 'version_source' field");
+    if (!("version_consistent" in json)) problems.push("missing 'version_consistent' field");
+    if (!Array.isArray(json.required_commands)) problems.push("'required_commands' is not an array");
+    if (typeof json.commands_blocked_count !== "number") problems.push("'commands_blocked_count' is not a number");
+    // The old misleading "release_prepare" text must no longer appear.
+    if (res.body.includes("release_prepare")) {
+      problems.push("response still contains 'release_prepare' text");
+    }
+    if (Array.isArray(json.required_commands)) {
+      for (let i = 0; i < json.required_commands.length; i++) {
+        const cmd = json.required_commands[i];
+        if (!isObject(cmd)) {
+          problems.push(`required_commands[${i}] is not an object`);
+          continue;
+        }
+        if (typeof cmd.command !== "string") problems.push(`required_commands[${i}].command not string`);
+        if (typeof cmd.allowed !== "boolean") problems.push(`required_commands[${i}].allowed not boolean`);
+        if (!("blocked_reason" in cmd)) problems.push(`required_commands[${i}] missing 'blocked_reason'`);
+      }
+    }
+    if (problems.length === 0) {
+      record(name, true);
+    } else {
+      record(name, false, problems.join("; "));
+    }
+  } catch (err) {
+    record(name, false, `error: ${err.message}`);
+  }
+}
+
+// ── Test 23: Safe task endpoints return valid JSON without full content ──
+async function testSafeTaskEndpoints() {
+  const name = "Test 23: safe task endpoints return valid JSON without stdout/stderr/diff";
+  const endpoints = [
+    "safe-result",
+    "safe-audit",
+    "safe-test-summary",
+    "safe-diff-summary",
+  ];
+  const problems = [];
+  for (const ep of endpoints) {
+    try {
+      const res = await httpGet(`${BASE_URL}/api/tasks/nonexistent-smoke-task/${ep}`);
+      if (res.status !== 200) {
+        problems.push(`/api/tasks/:id/${ep} -> status ${res.status} (expected 200, not 500)`);
+        continue;
+      }
+      const json = tryJson(res.body);
+      if (!json || !isObject(json)) {
+        problems.push(`/api/tasks/:id/${ep} body is not a JSON object: ${res.body.slice(0, 120)}`);
+        continue;
+      }
+      // Safe endpoints must NOT expose full stdout/stderr/diff content.
+      const text = res.body.toLowerCase();
+      if (text.includes('"stdout"') && text.includes('"stderr"')) {
+        // Some safe endpoints may include a "stdout" key as a bounded field; the
+        // invariant we care about is that they don't return the full raw logs.
+        // We only flag if both stdout AND stderr appear together (log-shaped).
+        problems.push(`/api/tasks/:id/${ep} may leak stdout+stderr shaped fields`);
+      }
+      if (text.includes('"diff_patch"')) {
+        problems.push(`/api/tasks/:id/${ep} leaks 'diff_patch' field`);
+      }
+    } catch (err) {
+      problems.push(`/api/tasks/:id/${ep} error: ${err.message}`);
+    }
+  }
+  if (problems.length === 0) {
+    record(name, true);
+  } else {
+    record(name, false, problems.join("; "));
+  }
+}
+
+// ── Test 24: /api/tasks?status=running returns valid filtered JSON ──
+async function testTasksFilter() {
+  const name = "Test 24: /api/tasks?status=running returns valid filtered JSON";
+  try {
+    const res = await httpGet(`${BASE_URL}/api/tasks?status=running`);
+    if (res.status !== 200) {
+      record(name, false, `status ${res.status} (expected 200)`);
+      return;
+    }
+    const json = tryJson(res.body);
+    if (!json || !isObject(json)) {
+      record(name, false, `body is not a JSON object: ${res.body.slice(0, 200)}`);
+      return;
+    }
+    const problems = [];
+    if (!Array.isArray(json.tasks)) problems.push("'tasks' is not an array");
+    if (typeof json.total !== "number") problems.push("'total' is not a number");
+    if (typeof json.returned !== "number") problems.push("'returned' is not a number");
+    // Every returned task must match the filter (if any tasks exist).
+    if (Array.isArray(json.tasks)) {
+      for (let i = 0; i < json.tasks.length; i++) {
+        if (json.tasks[i].status !== "running") {
+          problems.push(`tasks[${i}].status is '${json.tasks[i].status}' (expected 'running')`);
+        }
+      }
+      if (json.tasks.length !== json.total) {
+        problems.push(`tasks.length (${json.tasks.length}) != total (${json.total})`);
+      }
+    }
+    if (problems.length === 0) {
+      record(name, true);
+    } else {
+      record(name, false, problems.join("; "));
+    }
+  } catch (err) {
+    record(name, false, `error: ${err.message}`);
+  }
+}
+
+// ── Test 25: /api/tasks/stale has explanation and next_action on stale tasks ──
+async function testStaleTasksExplanation() {
+  const name = "Test 25: /api/tasks/stale stale tasks have explanation and next_action";
+  try {
+    const res = await httpGet(`${BASE_URL}/api/tasks/stale`);
+    if (res.status !== 200) {
+      record(name, false, `status ${res.status} (expected 200)`);
+      return;
+    }
+    const json = tryJson(res.body);
+    if (!json || !isObject(json)) {
+      record(name, false, `body is not a JSON object: ${res.body.slice(0, 200)}`);
+      return;
+    }
+    const problems = [];
+    if (!Array.isArray(json.stale_tasks)) problems.push("'stale_tasks' is not an array");
+    if (Array.isArray(json.stale_tasks) && json.stale_tasks.length > 0) {
+      for (let i = 0; i < json.stale_tasks.length; i++) {
+        const t = json.stale_tasks[i];
+        if (!isObject(t)) {
+          problems.push(`stale_tasks[${i}] is not an object`);
+          continue;
+        }
+        if (typeof t.explanation !== "string" || t.explanation.length === 0) {
+          problems.push(`stale_tasks[${i}] missing 'explanation' string`);
+        }
+        if (typeof t.next_action !== "string" || t.next_action.length === 0) {
+          problems.push(`stale_tasks[${i}] missing 'next_action' string`);
+        }
+        if (typeof t.reason_code !== "string") {
+          problems.push(`stale_tasks[${i}] missing 'reason_code' string`);
+        }
+      }
+    }
+    if (problems.length === 0) {
+      record(name, true);
+    } else {
+      record(name, false, problems.join("; "));
+    }
+  } catch (err) {
+    record(name, false, `error: ${err.message}`);
+  }
+}
+
+// ── Test 26: POST /api/tasks/:taskId/hide-stale token gate + valid response ──
+async function testHideStaleNoToken() {
+  const name = "Test 26: POST /api/tasks/:taskId/hide-stale without token -> 403";
+  try {
+    const res = await httpPost(`${BASE_URL}/api/tasks/nonexistent/hide-stale`, {});
+    if (res.status !== 403) {
+      record(name, false, `status ${res.status} (expected 403 — token gate must fire before hide-stale runs)`);
+      return;
+    }
+    const json = tryJson(res.body);
+    if (!json || typeof json.error !== "string") {
+      record(name, false, `response body missing 'error' field: ${res.body.slice(0, 200)}`);
+      return;
+    }
+    record(name, true);
+  } catch (err) {
+    record(name, false, `error: ${err.message}`);
+  }
+}
+
+async function testHideStaleWithToken(token) {
+  const name = "Test 27: POST /api/tasks/:taskId/hide-stale with token returns valid JSON";
+  try {
+    const res = await httpPost(`${BASE_URL}/api/tasks/nonexistent/hide-stale`, {
+      "X-PatchWarden-Control-Token": token,
+    });
+    if (res.status !== 200) {
+      record(name, false, `status ${res.status} (expected 200)`);
+      return;
+    }
+    const json = tryJson(res.body);
+    if (!json || !isObject(json)) {
+      record(name, false, `body is not a JSON object: ${res.body.slice(0, 200)}`);
+      return;
+    }
+    if (json.ok !== true) {
+      record(name, false, `expected ok=true, got: ${res.body.slice(0, 200)}`);
+      return;
+    }
+    if (json.hidden !== "nonexistent") {
+      record(name, false, `expected hidden='nonexistent', got: ${json.hidden}`);
+      return;
+    }
+    record(name, true);
+  } catch (err) {
+    record(name, false, `error: ${err.message}`);
+  }
+}
+
+// ── Test 28: GET /api/warnings returns valid JSON ───────────────
+async function testWarningsApi() {
+  const name = "Test 28: /api/warnings returns valid JSON with warnings array";
+  try {
+    const res = await httpGet(`${BASE_URL}/api/warnings`);
+    if (res.status !== 200) {
+      record(name, false, `status ${res.status} (expected 200)`);
+      return;
+    }
+    const json = tryJson(res.body);
+    if (!json || !isObject(json)) {
+      record(name, false, `body is not a JSON object: ${res.body.slice(0, 200)}`);
+      return;
+    }
+    const problems = [];
+    if (!Array.isArray(json.warnings)) problems.push("'warnings' is not an array");
+    if (typeof json.total !== "number") problems.push("'total' is not a number");
+    if (Array.isArray(json.warnings)) {
+      for (let i = 0; i < json.warnings.length; i++) {
+        const w = json.warnings[i];
+        if (!isObject(w)) {
+          problems.push(`warnings[${i}] is not an object`);
+          continue;
+        }
+        if (typeof w.type !== "string") problems.push(`warnings[${i}].type is not a string`);
+        if (typeof w.severity !== "string") problems.push(`warnings[${i}].severity is not a string`);
+        if (typeof w.affected_tasks_count !== "number") problems.push(`warnings[${i}].affected_tasks_count is not a number`);
+        if (typeof w.recommended_action !== "string") problems.push(`warnings[${i}].recommended_action is not a string`);
+      }
+    }
+    if (problems.length === 0) {
+      record(name, true);
+    } else {
+      record(name, false, problems.join("; "));
+    }
+  } catch (err) {
+    record(name, false, `error: ${err.message}`);
+  }
+}
+
+// ── Test 29: GET /api/diagnostics returns valid JSON with redaction ─
+async function testDiagnosticsApi() {
+  const name = "Test 29: /api/diagnostics returns valid JSON with required fields and redaction";
+  try {
+    const res = await httpGet(`${BASE_URL}/api/diagnostics`);
+    if (res.status !== 200) {
+      record(name, false, `status ${res.status} (expected 200)`);
+      return;
+    }
+    const json = tryJson(res.body);
+    if (!json || !isObject(json)) {
+      record(name, false, `body is not a JSON object: ${res.body.slice(0, 200)}`);
+      return;
+    }
+    const problems = [];
+    if (typeof json.server_version !== "string") problems.push("'server_version' is not a string");
+    if (typeof json.schema_epoch !== "string") problems.push("'schema_epoch' is not a string");
+    if (typeof json.watcher_status !== "string") problems.push("'watcher_status' is not a string");
+    if (typeof json.workspace_root !== "string" && json.workspace_root !== null) {
+      problems.push("'workspace_root' is neither string nor null");
+    }
+    if (typeof json.direct_profile_enabled !== "boolean") problems.push("'direct_profile_enabled' is not a boolean");
+    // Redaction: response body must not contain sensitive keywords
+    const lower = res.body.toLowerCase();
+    const forbidden = ["token", "password", "secret", "credential", "api_key"];
+    for (const word of forbidden) {
+      if (lower.includes(word)) {
+        problems.push(`response body contains forbidden word '${word}' (redaction failure)`);
+      }
+    }
+    if (problems.length === 0) {
+      record(name, true);
+    } else {
+      record(name, false, problems.join("; "));
+    }
+  } catch (err) {
+    record(name, false, `error: ${err.message}`);
+  }
+}
+
 async function main() {
   // Sanity: ensure the compiled server exists before spawning.
   if (!existsSync(serverPath) || !statSync(serverPath).isFile()) {
@@ -1159,6 +1504,17 @@ async function main() {
     await testControlCenterLogApi();
     await testRestartAllNoToken();
     await testControlCenterStatusApi();
+    // v1.5.1 Dashboard UI optimization coverage
+    await testWorkspaceReposApi();
+    await testReleaseStatusFields();
+    await testSafeTaskEndpoints();
+    await testTasksFilter();
+    await testStaleTasksExplanation();
+    await testHideStaleNoToken();
+    if (token) await testHideStaleWithToken(token);
+    // P1 Task 10/11 coverage
+    await testWarningsApi();
+    await testDiagnosticsApi();
 
     // Use token to silence unused-var linters and confirm we actually fetched it.
     if (token) {

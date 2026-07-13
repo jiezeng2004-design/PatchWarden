@@ -27,9 +27,9 @@ export interface CreateDirectSessionOutput {
 
 // ── Tool implementation ────────────────────────────────────────────
 
-export function createDirectSession(
+export async function createDirectSession(
   input: CreateDirectSessionInput
-): CreateDirectSessionOutput {
+): Promise<CreateDirectSessionOutput> {
   const config = getConfig();
 
   // ── Validate repo_path ───────────────────────────────────────────
@@ -88,7 +88,7 @@ export function createDirectSession(
 
   // ── Capture repo snapshot ────────────────────────────────────────
 
-  const snapshot = captureRepoSnapshot(resolvedRepoPath);
+  const snapshot = await captureRepoSnapshot(resolvedRepoPath);
 
   // ── Create session record ────────────────────────────────────────
 

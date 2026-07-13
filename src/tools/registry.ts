@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Shared tool registry for PatchWarden MCP server.
  * Used by both stdio (index.ts) and HTTP (httpServer.ts) transports.
  */
@@ -9,69 +9,8 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { getAllConfiguredTestCommands, getAllConfiguredDirectCommands, getConfig } from "../config.js";
-import { savePlan } from "../tools/savePlan.js";
-import { getPlan } from "../tools/getPlan.js";
-import { createTask } from "../tools/createTask.js";
-import { getTaskStatus } from "../tools/getTaskStatus.js";
-import { getResult, getResultJson, getDiff, getTestLog, getTaskLogTail } from "../tools/taskOutputs.js";
-import { listWorkspace } from "../tools/listWorkspace.js";
-import { readWorkspaceFile } from "../tools/readWorkspaceFile.js";
-import { listTasks } from "../tools/listTasks.js";
-import { cancelTask } from "../tools/cancelTask.js";
-import { killTask } from "../tools/killTask.js";
-import { retryTask } from "../tools/retryTask.js";
-import { getTaskStdoutTail } from "../tools/getTaskStdoutTail.js";
-import { getTaskProgress } from "../tools/getTaskProgress.js";
-import { listAgents } from "../tools/listAgents.js";
-import { healthCheck } from "../tools/healthCheck.js";
-import { getTaskSummary } from "../tools/getTaskSummary.js";
-import { waitForTask } from "../tools/waitForTask.js";
-import { runTaskLoop } from "./runTaskLoop.js";
-import { getTaskLineage } from "./taskLineage.js";
-import { exportTaskEvidencePack } from "./evidencePack.js";
-import { recommendAgentForTask } from "./recommendAgentForTask.js";
 import { errorPayload, PatchWardenError } from "../errors.js";
-import { auditTask } from "../tools/auditTask.js";
-import { safeStatus } from "../tools/safeStatus.js";
-import {
-  safeAudit,
-  safeAuditDirectSession,
-  safeDiffSummary,
-  safeDirectSummary,
-  safeFinalizeDirectSession,
-  safeResult,
-  safeTestSummary,
-} from "../tools/safeViews.js";
-import { diagnoseTask } from "../tools/diagnoseTask.js";
-import { reconcileTasks } from "../tools/reconcileTasks.js";
-import { discoverTools } from "../tools/discoverTools.js";
-import { explainTool } from "../tools/explainTool.js";
-import { invokeDiscoveredTool } from "./invokeDiscoveredTool.js";
 import { logger } from "../logging.js";
-import { runTask } from "../runner/runTask.js";
-import { createDirectSession } from "../tools/createDirectSession.js";
-import { searchWorkspace } from "../tools/searchWorkspace.js";
-import { applyPatch } from "../tools/applyPatch.js";
-import { runVerification } from "../tools/runVerification.js";
-import { runDirectVerificationBundle } from "../tools/runDirectVerificationBundle.js";
-import { finalizeDirectSession } from "../tools/finalizeDirectSession.js";
-import { auditSession } from "../tools/auditSession.js";
-import { syncFile } from "../tools/syncFile.js";
-import { createGoal, listGoals, readGoal, readGoalStatus } from "../goal/goalStore.js";
-import { suggestNextSubgoal } from "../goal/goalGraph.js";
-import { exportHandoff } from "../goal/handoffExport.js";
-import { acceptSubgoal, rejectSubgoal, summarizeGoalProgress } from "../goal/goalProgress.js";
-import { createSubgoalTask } from "./goalSubgoalTask.js";
-import { checkReleaseGate } from "./checkReleaseGate.js";
-import {
-  getProjectPolicyTool,
-  releaseCheck,
-  releaseCleanup,
-  releasePrepare,
-  releaseVerify,
-} from "./releaseMode.js";
-import { mergeWorktreeTool } from "./mergeWorktree.js";
-import { discardWorktreeTool } from "./discardWorktree.js";
 import { TASK_TEMPLATE_NAMES } from "./taskTemplates.js";
 import {
   buildToolCatalogSnapshot,
@@ -80,6 +19,12 @@ import {
   selectToolsForProfile,
   type ToolCatalogSnapshot,
 } from "./toolCatalog.js";
+import { coreHandlers, runTaskHandler } from "./dispatch/coreDispatch.js";
+import { goalHandlers } from "./dispatch/goalDispatch.js";
+import { directHandlers } from "./dispatch/directDispatch.js";
+import { releaseHandlers } from "./dispatch/releaseDispatch.js";
+import { diagnosticHandlers } from "./dispatch/diagnosticDispatch.js";
+import type { ToolHandlerMap } from "./dispatch/types.js";
 
 // ── Tool definitions ──────────────────────────────────────────────
 
@@ -955,6 +900,29 @@ export function getToolDefs(): ToolDef[] {
       },
     },
     {
+      name: "export_goal_report",
+      description: "Export a structured final report for a Goal session, aggregating subgoal completion, task evidence, and risk summary.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          goal_id: { type: "string", description: "The goal id to export report for." },
+        },
+        required: ["goal_id"],
+      },
+    },
+    {
+      name: "import_speckit_tasks",
+      description: "Import Spec Kit tasks into a Goal session as subgoals, mapping task files to scope hints and acceptance criteria.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          goal_id: { type: "string", description: "The goal id to import tasks into." },
+          spec_kit_json: { type: "string", description: "Spec Kit JSON text containing spec, tasks[], and acceptance[] fields." },
+        },
+        required: ["goal_id", "spec_kit_json"],
+      },
+    },
+    {
       name: "check_release_gate",
       description:
         "v1.0.0: Verify release readiness across five sequential stages: local_ready → packed_ready → published_verified → github_release_verified → ci_verified. Remote stages (published/github/ci) query npm registry and GitHub API via node:https read-only GET; network errors return 'not_checked' (not 'failed'). Never claims release complete before published_verified passes. Does not execute shell commands for remote queries.",
@@ -1287,7 +1255,7 @@ export function getToolDefs(): ToolDef[] {
   });
 
   // run_task: only available when explicitly enabled
-  if ((config as any).enableRunTaskTool === true) {
+  if (config.enableRunTaskTool === true) {
     tools.push({
       name: "run_task",
       description:
@@ -1314,20 +1282,31 @@ export function getToolCatalogSnapshot(): ToolCatalogSnapshot {
   return buildToolCatalogSnapshot(tools, resolveToolProfile(config.toolProfile));
 }
 
-// ── Request handler ───────────────────────────────────────────────
+// ── Dispatch map ─────────────────────────────────────────────────
 
-function guardDirectProfileEnabled(): void {
+/**
+ * Combined dispatch map assembled from all domain handler maps.
+ * run_task is conditionally added when enableRunTaskTool is true,
+ * mirroring the conditional registration in getToolDefs().
+ */
+function buildDispatchMap(): ToolHandlerMap {
   const config = getConfig();
-  if (!config.enableDirectProfile) {
-    throw new PatchWardenError(
-      "direct_profile_disabled",
-      "Direct profile is disabled by local config.",
-      "Set enableDirectProfile: true in patchwarden.config.json to use Direct session tools.",
-      true,
-      { operation: "direct_tool_call" }
-    );
+  const map: ToolHandlerMap = {
+    ...coreHandlers,
+    ...goalHandlers,
+    ...directHandlers,
+    ...releaseHandlers,
+    ...diagnosticHandlers,
+  };
+  if (config.enableRunTaskTool === true) {
+    map.run_task = runTaskHandler;
   }
+  return map;
 }
+
+const dispatchMap: ToolHandlerMap = buildDispatchMap();
+
+// ── Request handler ───────────────────────────────────────────────
 
 export async function handleToolCall(name: string, args: Record<string, unknown> | undefined) {
   const startTime = Date.now();
@@ -1344,562 +1323,11 @@ export async function handleToolCall(name: string, args: Record<string, unknown>
 }
 
 async function handleToolCallInternal(name: string, args: Record<string, unknown> | undefined) {
-  switch (name) {
-    case "save_plan": {
-      return toResult(
-        savePlan({
-          title: String(args?.title ?? ""),
-          content: args?.content !== undefined ? String(args.content) : "",
-          plan_ref: args?.plan_ref ? String(args.plan_ref) : undefined,
-        })
-      );
-    }
-
-    case "get_plan": {
-      return toResult(
-        getPlan({ plan_id: String(args?.plan_id ?? "") })
-      );
-    }
-
-    case "create_task": {
-      return toResult(
-        createTask({
-          plan_id: args?.plan_id ? String(args.plan_id) : undefined,
-          inline_plan: args?.inline_plan ? String(args.inline_plan) : undefined,
-          plan_title: args?.plan_title ? String(args.plan_title) : undefined,
-          template: args?.template ? String(args.template) as any : undefined,
-          goal: args?.goal ? String(args.goal) : undefined,
-          source_task_id: args?.source_task_id ? String(args.source_task_id) : undefined,
-          agent: String(args?.agent ?? ""),
-          repo_path: args?.repo_path ? String(args.repo_path) : undefined,
-          test_command: args?.test_command ? String(args.test_command) : undefined,
-          verify_commands: Array.isArray(args?.verify_commands)
-            ? args.verify_commands.map((command) => String(command))
-            : undefined,
-          timeout_seconds: args?.timeout_seconds !== undefined
-            ? Number(args.timeout_seconds)
-            : undefined,
-          execution_mode: args?.execution_mode === "assess_only" ? "assess_only" : "execute",
-          assessment_id: args?.assessment_id ? String(args.assessment_id) : undefined,
-        })
-      );
-    }
-
-    case "run_task_loop": {
-      return toResult(await runTaskLoop({
-        repo_path: String(args?.repo_path ?? ""),
-        goal: String(args?.goal ?? ""),
-        verify_commands: Array.isArray(args?.verify_commands)
-          ? args.verify_commands.map((command) => String(command))
-          : [],
-        agent: args?.agent ? String(args.agent) : undefined,
-        template:
-          args?.template === "inspect_only" || args?.template === "release_check"
-            ? args.template
-            : "feature_small",
-        max_iterations: args?.max_iterations !== undefined ? Number(args.max_iterations) : undefined,
-        task_timeout_seconds: args?.task_timeout_seconds !== undefined ? Number(args.task_timeout_seconds) : undefined,
-        auto_fix_tests: args?.auto_fix_tests !== undefined ? Boolean(args.auto_fix_tests) : undefined,
-        auto_cleanup_artifacts: args?.auto_cleanup_artifacts !== undefined ? Boolean(args.auto_cleanup_artifacts) : undefined,
-        stop_on_high_risk: args?.stop_on_high_risk !== undefined ? Boolean(args.stop_on_high_risk) : undefined,
-        direct_verify: args?.direct_verify !== undefined ? Boolean(args.direct_verify) : undefined,
-        direct_verify_commands: Array.isArray(args?.direct_verify_commands)
-          ? args.direct_verify_commands.map((command) => String(command))
-          : undefined,
-        direct_verify_timeout_seconds: args?.direct_verify_timeout_seconds !== undefined ? Number(args.direct_verify_timeout_seconds) : undefined,
-        scope_files: Array.isArray(args?.scope_files)
-          ? args.scope_files.map((entry) => String(entry))
-          : undefined,
-        isolation_mode: args?.isolation_mode === "worktree" ? "worktree" : "current_repo",
-        worktree_base_branch: args?.worktree_base_branch ? String(args.worktree_base_branch) : undefined,
-        worktree_cleanup:
-          args?.worktree_cleanup === "archive" || args?.worktree_cleanup === "delete_ignored_only"
-            ? args.worktree_cleanup
-            : "keep",
-      }));
-    }
-
-    case "recommend_agent_for_task": {
-      return toResult(recommendAgentForTask({
-        repo_path: String(args?.repo_path ?? ""),
-        goal: String(args?.goal ?? ""),
-        scope_files: Array.isArray(args?.scope_files) ? args.scope_files.map((entry) => String(entry)) : undefined,
-        template: args?.template ? String(args.template) : undefined,
-        risk_hint: args?.risk_hint ? String(args.risk_hint) : undefined,
-      }));
-    }
-
-    case "get_task_lineage": {
-      return toResult(getTaskLineage(String(args?.lineage_id ?? ""), {
-        max_items: args?.max_items !== undefined ? Number(args.max_items) : undefined,
-      }));
-    }
-
-    case "export_task_evidence_pack": {
-      return toResult(exportTaskEvidencePack({
-        lineage_id: String(args?.lineage_id ?? ""),
-        max_items: args?.max_items !== undefined ? Number(args.max_items) : undefined,
-      }));
-    }
-
-    case "get_project_policy": {
-      return toResult(getProjectPolicyTool(String(args?.repo_path ?? "")));
-    }
-
-    case "get_task_status": {
-      return toResult(getTaskStatus(String(args?.task_id ?? "")));
-    }
-
-    case "get_result": {
-      return toResult(getResult(String(args?.task_id ?? "")));
-    }
-
-    case "get_result_json": {
-      return toResult(getResultJson(String(args?.task_id ?? "")));
-    }
-
-    case "get_diff": {
-      return toResult(getDiff(String(args?.task_id ?? "")));
-    }
-
-    case "get_test_log": {
-      return toResult(getTestLog(String(args?.task_id ?? "")));
-    }
-
-    case "list_workspace": {
-      return toResult(
-        listWorkspace(args?.path ? String(args.path) : undefined)
-      );
-    }
-
-    case "read_workspace_file": {
-      const sessionId = args?.session_id ? String(args.session_id) : undefined;
-      return toResult(readWorkspaceFile({
-        path: String(args?.path ?? ""),
-        session_id: sessionId,
-      }));
-    }
-
-    case "list_tasks": {
-      return toResult(listTasks({
-        status: args?.status ? String(args.status) : undefined,
-        repo_path: args?.repo_path ? String(args.repo_path) : undefined,
-        active_only: args?.active_only !== undefined ? Boolean(args.active_only) : undefined,
-        limit: args?.limit ? Number(args.limit) : undefined,
-      }));
-    }
-
-    case "list_agents": {
-      return toResult(listAgents());
-    }
-
-    case "health_check": {
-      return toResult(healthCheck(getToolCatalogSnapshot(), {
-        detail: args?.detail === "self_diagnostic" ? "self_diagnostic" : "standard",
-      }));
-    }
-
-    case "cancel_task": {
-      return toResult(cancelTask(String(args?.task_id ?? "")));
-    }
-
-    case "kill_task": {
-      return toResult(killTask(String(args?.task_id ?? "")));
-    }
-
-    case "retry_task": {
-      return toResult(retryTask(String(args?.task_id ?? "")));
-    }
-
-    case "get_task_stdout_tail": {
-      return toResult(getTaskStdoutTail(
-        String(args?.task_id ?? ""),
-        args?.lines ? Number(args.lines) : undefined
-      ));
-    }
-
-    case "get_task_log_tail": {
-      return toResult(getTaskLogTail(
-        String(args?.task_id ?? ""),
-        (args?.file as "stdout" | "stderr" | "test" | "verify") || "stdout",
-        {
-          lines: args?.lines ? Number(args.lines) : undefined,
-          redact: args?.redact !== undefined ? Boolean(args.redact) : undefined,
-        }
-      ));
-    }
-
-    case "get_task_progress": {
-      return toResult(getTaskProgress(String(args?.task_id ?? "")));
-    }
-
-    case "wait_for_task": {
-      const waitSeconds = normalizeWaitSeconds(args);
-      return toResult(await waitForTask(
-        String(args?.task_id ?? ""),
-        waitSeconds
-      ));
-    }
-
-    case "get_task_summary": {
-      return toResult(getTaskSummary(String(args?.task_id ?? ""), {
-        view: normalizeSummaryView(args?.view),
-        max_items: args?.max_items !== undefined ? Number(args.max_items) : undefined,
-      }));
-    }
-
-    case "audit_task": {
-      return toResult(auditTask(String(args?.task_id ?? "")));
-    }
-
-    case "safe_status": {
-      return toResult(safeStatus(String(args?.task_id ?? "")));
-    }
-
-    case "safe_result": {
-      return toResult(safeResult(String(args?.task_id ?? ""), {
-        max_items: args?.max_items !== undefined ? Number(args.max_items) : undefined,
-      }));
-    }
-
-    case "safe_audit": {
-      return toResult(safeAudit(String(args?.task_id ?? ""), {
-        max_items: args?.max_items !== undefined ? Number(args.max_items) : undefined,
-      }));
-    }
-
-    case "safe_test_summary": {
-      return toResult(safeTestSummary(String(args?.task_id ?? "")));
-    }
-
-    case "safe_diff_summary": {
-      return toResult(safeDiffSummary(String(args?.task_id ?? ""), {
-        max_items: args?.max_items !== undefined ? Number(args.max_items) : undefined,
-      }));
-    }
-    case "diagnose_task": {
-      return toResult(diagnoseTask({
-        task_id: String(args?.task_id ?? ""),
-        include_logs: args?.include_logs !== undefined ? Boolean(args.include_logs) : undefined,
-      }));
-    }
-
-    case "reconcile_tasks": {
-      return toResult(reconcileTasks({
-        mode: args?.mode === "safe_fix" ? "safe_fix" : "report_only",
-        max_age_minutes: args?.max_age_minutes !== undefined ? Number(args.max_age_minutes) : undefined,
-        include_done_candidates: args?.include_done_candidates !== undefined ? Boolean(args.include_done_candidates) : undefined,
-      }));
-    }
-
-    case "discover_tools": {
-      const profile = args?.profile === "full" || args?.profile === "chatgpt_core" || args?.profile === "chatgpt_direct" || args?.profile === "chatgpt_search"
-        ? args.profile : undefined;
-      const mode = args?.mode === "delegate" || args?.mode === "direct" || args?.mode === "audit" || args?.mode === "release" || args?.mode === "diagnostic"
-        ? args.mode : undefined;
-      const riskCeiling = ["readonly", "workspace_read_sensitive", "workspace_write", "command", "release", "credential_sensitive"]
-        .includes(String(args?.riskCeiling ?? "")) ? String(args?.riskCeiling) as any : undefined;
-      return toResult(discoverTools({
-        query: String(args?.query ?? ""),
-        profile,
-        mode,
-        maxResults: args?.maxResults !== undefined ? Number(args.maxResults) : undefined,
-        riskCeiling,
-        includeHighRisk: args?.includeHighRisk !== undefined ? Boolean(args.includeHighRisk) : undefined,
-      }, getToolDefs()));
-    }
-
-    case "explain_tool": {
-      return toResult(explainTool({
-        name: String(args?.name ?? ""),
-        includeSchema: args?.includeSchema !== undefined ? Boolean(args.includeSchema) : undefined,
-      }, getToolDefs()));
-    }
-
-    case "invoke_discovered_tool": {
-      const profile = resolveToolProfile(getConfig().toolProfile);
-      const result = await invokeDiscoveredTool({
-        toolName: String(args?.toolName ?? ""),
-        arguments: (args?.arguments && typeof args.arguments === "object" ? args.arguments : {}) as Record<string, unknown>,
-        discoveryToken: String(args?.discoveryToken ?? ""),
-        assessmentId: args?.assessmentId ? String(args.assessmentId) : undefined,
-      }, {
-        tools: getToolDefs(),
-        profile,
-        dispatch: async (name, dispatchArgs) => {
-          return handleToolCall(name, dispatchArgs);
-        },
-      });
-      return toResult(result);
-    }
-
-    case "run_task": {
-      const config = getConfig();
-      if ((config as any).enableRunTaskTool !== true) {
-        throw new Error(
-          "run_task is disabled. Set enableRunTaskTool: true in config to enable. Prefer using the local watcher (npm run watch)."
-        );
-      }
-      const taskId = String(args?.task_id ?? "");
-      const result = await runTask(taskId);
-      return toResult(result);
-    }
-
-    case "create_direct_session": {
-      guardDirectProfileEnabled();
-      return toResult(createDirectSession({
-        repo_path: String(args?.repo_path ?? ""),
-        title: args?.title ? String(args.title) : undefined,
-      }));
-    }
-
-    case "search_workspace": {
-      guardDirectProfileEnabled();
-      return toResult(searchWorkspace({
-        session_id: String(args?.session_id ?? ""),
-        query: String(args?.query ?? ""),
-        max_results: args?.max_results ? Number(args.max_results) : undefined,
-        case_sensitive: args?.case_sensitive !== undefined ? Boolean(args.case_sensitive) : undefined,
-        max_preview_chars: args?.max_preview_chars ? Number(args.max_preview_chars) : undefined,
-        include_globs: Array.isArray(args?.include_globs) ? args.include_globs.map(String) : undefined,
-      }));
-    }
-
-    case "apply_patch": {
-      guardDirectProfileEnabled();
-      return toResult(applyPatch({
-        session_id: String(args?.session_id ?? ""),
-        path: String(args?.path ?? ""),
-        expected_sha256: String(args?.expected_sha256 ?? ""),
-        operations: Array.isArray(args?.operations) ? args.operations as any : [],
-      }));
-    }
-
-    case "run_verification": {
-      guardDirectProfileEnabled();
-      return toResult(await runVerification({
-        session_id: String(args?.session_id ?? ""),
-        command: String(args?.command ?? ""),
-        timeout_seconds: args?.timeout_seconds ? Number(args.timeout_seconds) : undefined,
-      }));
-    }
-
-    case "run_direct_verification_bundle": {
-      guardDirectProfileEnabled();
-      return toResult(await runDirectVerificationBundle({
-        session_id: String(args?.session_id ?? ""),
-        commands: Array.isArray(args?.commands) ? args.commands.map((command) => String(command)) : [],
-        timeout_seconds: args?.timeout_seconds ? Number(args.timeout_seconds) : undefined,
-      }));
-    }
-
-    case "finalize_direct_session": {
-      guardDirectProfileEnabled();
-      return toResult(finalizeDirectSession({
-        session_id: String(args?.session_id ?? ""),
-      }));
-    }
-
-    case "audit_session": {
-      guardDirectProfileEnabled();
-      return toResult(auditSession({
-        session_id: String(args?.session_id ?? ""),
-      }));
-    }
-
-    case "safe_direct_summary": {
-      guardDirectProfileEnabled();
-      return toResult(safeDirectSummary(String(args?.session_id ?? ""), {
-        max_items: args?.max_items !== undefined ? Number(args.max_items) : undefined,
-      }));
-    }
-
-    case "safe_finalize_direct_session": {
-      guardDirectProfileEnabled();
-      return toResult(safeFinalizeDirectSession(String(args?.session_id ?? ""), {
-        max_items: args?.max_items !== undefined ? Number(args.max_items) : undefined,
-      }));
-    }
-
-    case "safe_audit_direct_session": {
-      guardDirectProfileEnabled();
-      return toResult(safeAuditDirectSession(String(args?.session_id ?? ""), {
-        max_items: args?.max_items !== undefined ? Number(args.max_items) : undefined,
-      }));
-    }
-    case "sync_file": {
-      guardDirectProfileEnabled();
-      return toResult(syncFile(
-        String(args?.session_id ?? ""),
-        String(args?.source_path ?? ""),
-        String(args?.target_path ?? ""),
-        {
-          expected_source_sha256: args?.expected_source_sha256 ? String(args.expected_source_sha256) : undefined,
-          expected_target_sha256: args?.expected_target_sha256 ? String(args.expected_target_sha256) : undefined,
-        }
-      ));
-    }
-
-    case "create_goal": {
-      return toResult(createGoal(
-        String(args?.repo_path ?? ""),
-        String(args?.title ?? ""),
-        String(args?.goal_description ?? "")
-      ));
-    }
-
-    case "list_goals": {
-      return toResult({ goals: listGoals() });
-    }
-
-    case "read_goal": {
-      return toResult(readGoal(String(args?.goal_id ?? "")));
-    }
-
-    case "create_subgoal_task": {
-      return toResult(createSubgoalTask({
-        goal_id: String(args?.goal_id ?? ""),
-        subgoal_title: String(args?.subgoal_title ?? ""),
-        depends_on: Array.isArray(args?.depends_on) ? args.depends_on.map(String) : undefined,
-        plan_id: args?.plan_id ? String(args.plan_id) : undefined,
-        inline_plan: args?.inline_plan ? String(args.inline_plan) : undefined,
-        plan_title: args?.plan_title ? String(args.plan_title) : undefined,
-        template: args?.template ? String(args.template) as any : undefined,
-        goal: args?.goal ? String(args.goal) : undefined,
-        agent: args?.agent ? String(args.agent) : undefined,
-        repo_path: String(args?.repo_path ?? ""),
-        test_command: args?.test_command ? String(args.test_command) : undefined,
-        verify_commands: Array.isArray(args?.verify_commands) ? args.verify_commands.map(String) : undefined,
-        timeout_seconds: args?.timeout_seconds ? Number(args.timeout_seconds) : undefined,
-        scope: Array.isArray(args?.scope) ? args.scope.map(String) : undefined,
-        forbidden: Array.isArray(args?.forbidden) ? args.forbidden.map(String) : undefined,
-        verification: Array.isArray(args?.verification) ? args.verification.map(String) : undefined,
-        done_evidence: Array.isArray(args?.done_evidence) ? args.done_evidence.map(String) : undefined,
-        isolate_worktree: args?.isolate_worktree === undefined ? undefined : Boolean(args.isolate_worktree),
-      }));
-    }
-
-    case "accept_subgoal": {
-      return toResult(acceptSubgoal(
-        String(args?.goal_id ?? ""),
-        String(args?.subgoal_id ?? "")
-      ));
-    }
-
-    case "reject_subgoal": {
-      return toResult(rejectSubgoal(
-        String(args?.goal_id ?? ""),
-        String(args?.subgoal_id ?? ""),
-        String(args?.reason ?? "")
-      ));
-    }
-
-    case "suggest_next_subgoal": {
-      const goalStatus = readGoalStatus(String(args?.goal_id ?? ""));
-      return toResult(suggestNextSubgoal(goalStatus));
-    }
-
-    case "summarize_goal_progress": {
-      return toResult(summarizeGoalProgress(String(args?.goal_id ?? "")));
-    }
-
-    case "export_handoff": {
-      const goalId = String(args?.goal_id ?? "");
-      const goalStatus = readGoalStatus(goalId);
-      return toResult(exportHandoff(goalId, goalStatus));
-    }
-
-    case "check_release_gate": {
-      return toResult(await checkReleaseGate({
-        repo_path: String(args?.repo_path ?? ""),
-        target_stage: String(args?.target_stage ?? "local_ready") as any,
-        package_name: args?.package_name ? String(args.package_name) : undefined,
-        version: args?.version ? String(args.version) : undefined,
-        github_repo: args?.github_repo ? String(args.github_repo) : undefined,
-        branch: args?.branch ? String(args.branch) : undefined,
-      }));
-    }
-
-    case "release_check": {
-      return toResult(await releaseCheck({
-        repo_path: String(args?.repo_path ?? ""),
-        target_stage: String(args?.target_stage ?? "local_ready") as any,
-        package_name: args?.package_name ? String(args.package_name) : undefined,
-        version: args?.version ? String(args.version) : undefined,
-        github_repo: args?.github_repo ? String(args.github_repo) : undefined,
-        branch: args?.branch ? String(args.branch) : undefined,
-      }));
-    }
-
-    case "release_prepare": {
-      return toResult(releasePrepare({
-        repo_path: String(args?.repo_path ?? ""),
-        required_commands: Array.isArray(args?.required_commands)
-          ? args.required_commands.map(String)
-          : undefined,
-        timeout_seconds: args?.timeout_seconds !== undefined ? Number(args.timeout_seconds) : undefined,
-      }));
-    }
-
-    case "release_verify": {
-      return toResult(await releaseVerify({
-        repo_path: String(args?.repo_path ?? ""),
-        package_name: args?.package_name ? String(args.package_name) : undefined,
-        version: args?.version ? String(args.version) : undefined,
-        github_repo: args?.github_repo ? String(args.github_repo) : undefined,
-        branch: args?.branch ? String(args.branch) : undefined,
-      }));
-    }
-
-    case "release_cleanup": {
-      return toResult(releaseCleanup({
-        repo_path: String(args?.repo_path ?? ""),
-        dry_run: args?.dry_run !== undefined ? Boolean(args.dry_run) : undefined,
-        patterns: Array.isArray(args?.patterns) ? args.patterns.map(String) : undefined,
-      }));
-    }
-
-    case "merge_worktree": {
-      return toResult(mergeWorktreeTool({
-        worktree_id: String(args?.worktree_id ?? ""),
-        repo_path: String(args?.repo_path ?? ""),
-      }));
-    }
-
-    case "discard_worktree": {
-      return toResult(discardWorktreeTool({
-        worktree_id: String(args?.worktree_id ?? ""),
-        repo_path: String(args?.repo_path ?? ""),
-      }));
-    }
-
-    default:
-      throw new Error(`Unknown tool: ${name}`);
+  const handler = dispatchMap[name];
+  if (!handler) {
+    throw new Error(`Unknown tool: ${name}`);
   }
-}
-
-function normalizeWaitSeconds(args: Record<string, unknown> | undefined): number | undefined {
-  const legacy = args?.wait_seconds;
-  const preferred = args?.timeout_seconds;
-  if (legacy !== undefined && preferred !== undefined && Number(legacy) !== Number(preferred)) {
-    throw new Error("wait_seconds and timeout_seconds must match when both are supplied.");
-  }
-  const value = preferred ?? legacy;
-  return value === undefined ? undefined : Number(value);
-}
-
-function normalizeSummaryView(value: unknown): "compact" | "standard" {
-  if (value === undefined) return "standard";
-  if (value !== "compact" && value !== "standard") {
-    throw new Error('view must be "compact" or "standard".');
-  }
-  return value;
-}
-
-function toResult(data: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-  };
+  return handler(args);
 }
 
 // ── Register on MCP Server ────────────────────────────────────────
@@ -1910,6 +1338,18 @@ export function registerTools(server: Server) {
   // tools/list and tools/call when the profile is reconfigured at runtime.
   const activeTools = getToolDefs();
   const activeNames = new Set(activeTools.map((tool) => tool.name));
+
+  // Verify every registered tool has a dispatch handler.
+  // The dispatch map may contain extra handlers for tools exposed under
+  // other profiles (e.g. get_plan is only in the "full" profile), so we
+  // only check the subset direction: every active tool must have a handler.
+  for (const tool of activeTools) {
+    if (!dispatchMap[tool.name]) {
+      throw new Error(
+        `Dispatch map is missing handler for registered tool "${tool.name}".`,
+      );
+    }
+  }
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     const catalog = getLastToolCatalogSnapshot();

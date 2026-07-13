@@ -293,6 +293,55 @@ html.dark {
         </div>
       </section>
 
+      <!-- ===== 1b. Warnings Aggregation ===== -->
+      <section class="rounded-lg overflow-hidden mb-6" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border); border-left: 3px solid var(--pw-state-warning);">
+        <div class="flex items-center justify-between px-5 py-4" style="border-bottom: 1px solid var(--pw-border-subtle);">
+          <div class="flex items-center gap-2 flex-wrap">
+            <i data-lucide="alert-triangle" class="w-4 h-4 shrink-0" style="color: var(--pw-state-warning);"></i>
+            <h2 class="text-sm font-semibold" style="color: var(--pw-text-primary);" data-zh="警告聚合" data-en="Warnings Aggregation">警告聚合</h2>
+            <span id="warnings-count" class="text-xs px-2 py-0.5 rounded-md whitespace-nowrap" style="font-family: var(--pw-font-mono); color: var(--pw-text-tertiary); background-color: var(--pw-bg-hover);">—</span>
+          </div>
+        </div>
+
+        <!-- Warnings Loading State -->
+        <div id="warningsLoadingState" class="py-10 text-center">
+          <svg class="pw-spin inline-block mb-2" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--pw-text-tertiary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="2" x2="12" y2="6"/>
+            <line x1="12" y1="18" x2="12" y2="22"/>
+            <line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/>
+            <line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/>
+            <line x1="2" y1="12" x2="6" y2="12"/>
+            <line x1="18" y1="12" x2="22" y2="12"/>
+            <line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/>
+            <line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/>
+          </svg>
+          <p class="text-xs" style="color: var(--pw-text-tertiary);" data-zh="加载警告中..." data-en="Loading warnings...">加载警告中...</p>
+        </div>
+
+        <!-- Warnings Error State -->
+        <div id="warningsErrorState" class="hidden py-10 text-center">
+          <svg class="inline-block mb-2" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--pw-state-error)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <p class="text-xs font-medium" style="color: var(--pw-state-error);" data-zh="警告加载失败" data-en="Warnings Load Failed">警告加载失败</p>
+          <p id="warningsErrorMessage" class="text-xs mt-2 px-6 break-words" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-mono);"></p>
+        </div>
+
+        <!-- Warnings Empty State -->
+        <div id="warningsEmptyState" class="hidden py-10 text-center">
+          <svg class="inline-block mb-2" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--pw-state-success)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+            <polyline points="22 4 12 14.01 9 11.01"/>
+          </svg>
+          <p class="text-xs" style="color: var(--pw-text-tertiary);" data-zh="暂无警告" data-en="No Warnings">暂无警告</p>
+        </div>
+
+        <!-- Warnings Cards Container -->
+        <div id="warningsBody" class="hidden px-5 py-4 space-y-3"></div>
+      </section>
+
       <!-- ===== 2. Audit Log Table ===== -->
       <section class="rounded-lg overflow-hidden mb-6" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border); border-left: 3px solid var(--pw-accent);">
 
@@ -438,8 +487,10 @@ html.dark {
       'use strict';
 
       var API_URL = '/api/audit';
+      var WARNINGS_URL = '/api/warnings';
 
       var allAudits = [];
+      var allWarnings = [];
       var selectedTaskId = null;
 
       // ---- DOM helpers ----
@@ -724,16 +775,154 @@ html.dark {
           });
       }
 
+      // ---- Warnings aggregation ----
+      function showWarningsLoading() {
+        show($('warningsLoadingState'));
+        hide($('warningsErrorState'));
+        hide($('warningsEmptyState'));
+        hide($('warningsBody'));
+      }
+
+      function showWarningsError(msg) {
+        hide($('warningsLoadingState'));
+        show($('warningsErrorState'));
+        hide($('warningsEmptyState'));
+        hide($('warningsBody'));
+        var errEl = $('warningsErrorMessage');
+        if (errEl) errEl.textContent = msg || '未知错误';
+      }
+
+      function showWarningsEmpty() {
+        hide($('warningsLoadingState'));
+        hide($('warningsErrorState'));
+        show($('warningsEmptyState'));
+        hide($('warningsBody'));
+      }
+
+      function showWarningsBody() {
+        hide($('warningsLoadingState'));
+        hide($('warningsErrorState'));
+        hide($('warningsEmptyState'));
+        show($('warningsBody'));
+      }
+
+      // Map a warning type to a display label + icon + accent color.
+      function warningTypeMeta(type) {
+        var map = {
+          failed_verification: { label: 'Failed verification', color: 'var(--pw-state-error)' },
+          stale_task: { label: 'Stale task', color: 'var(--pw-state-warning)' },
+          manual_verification_required: { label: 'Manual verification required', color: 'var(--pw-state-warning)' },
+          unrecorded_command_execution: { label: 'Unrecorded command execution', color: 'var(--pw-state-info)' },
+          release_publish_claim: { label: 'Release/publish claim', color: 'var(--pw-state-error)' },
+          artifact_hygiene: { label: 'Artifact hygiene', color: 'var(--pw-state-info)' },
+          scope_changes: { label: 'Scope changes', color: 'var(--pw-state-info)' }
+        };
+        return map[type] || { label: type || 'Unknown', color: 'var(--pw-text-tertiary)' };
+      }
+
+      function severityBadge(severity) {
+        var v = String(severity || '').toLowerCase();
+        var bg, color;
+        if (v === 'error') {
+          bg = 'var(--pw-state-error-bg)';
+          color = 'var(--pw-state-error)';
+        } else if (v === 'warning') {
+          bg = 'var(--pw-state-warning-bg)';
+          color = 'var(--pw-state-warning)';
+        } else {
+          bg = 'var(--pw-state-info-bg)';
+          color = 'var(--pw-state-info)';
+        }
+        return '<span class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium whitespace-nowrap" style="background-color: ' + bg + '; color: ' + color + ';">' + escapeHtml(v || 'info') + '</span>';
+      }
+
+      function flagLabel(active, label, activeColor) {
+        if (!active) return '';
+        return '<span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs whitespace-nowrap" style="background-color: ' + activeColor + '_bg; color: ' + activeColor + '; border-left: 2px solid ' + activeColor + ';">' + escapeHtml(label) + '</span>';
+      }
+
+      function renderWarnings() {
+        var countEl = $('warnings-count');
+        if (allWarnings.length === 0) {
+          if (countEl) countEl.textContent = '0';
+          showWarningsEmpty();
+          return;
+        }
+        if (countEl) countEl.textContent = String(allWarnings.length);
+        var html = '';
+        for (var i = 0; i < allWarnings.length; i++) {
+          var w = allWarnings[i];
+          var meta = warningTypeMeta(w.type);
+          var tasks = Array.isArray(w.affected_tasks) ? w.affected_tasks : [];
+          var taskLinksHtml = '';
+          for (var j = 0; j < tasks.length; j++) {
+            var tid = tasks[j];
+            var href = '/pages/task-detail.html?id=' + encodeURIComponent(tid);
+            taskLinksHtml += '<a href="' + href + '" class="inline-block hover:underline px-1.5 py-0.5 rounded text-xs" style="font-family: var(--pw-font-mono); color: var(--pw-text-accent); background-color: var(--pw-accent-subtle);" title="' + escapeAttr(tid) + '">' + escapeHtml(truncate(tid, 18)) + '</a>';
+          }
+          var flagsHtml = ''
+            + flagLabel(w.likely_false_positive === true, 'likely false positive', 'var(--pw-state-warning)')
+            + flagLabel(w.needs_fix === true, 'needs fix', 'var(--pw-state-error)')
+            + flagLabel(w.blocked === true, 'blocked', 'var(--pw-state-error)');
+          html += ''
+            + '<div class="rounded-md p-3" style="background-color: var(--pw-bg-hover); border-left: 3px solid ' + meta.color + ';">'
+            +   '<div class="flex items-center gap-2 mb-2 flex-wrap">'
+            +     '<span class="text-sm font-semibold truncate" style="color: var(--pw-text-primary);">' + escapeHtml(meta.label) + '</span>'
+            +     severityBadge(w.severity)
+            +     '<span class="text-xs whitespace-nowrap" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-mono);">' + escapeHtml(String(w.affected_tasks_count || 0)) + ' task' + (w.affected_tasks_count === 1 ? '' : 's') + '</span>'
+            +     (flagsHtml ? '<span class="flex items-center gap-1 flex-wrap">' + flagsHtml + '</span>' : '')
+            +   '</div>'
+            +   (w.recommended_action ? '<div class="text-xs mb-2" style="color: var(--pw-text-secondary);">' + escapeHtml(w.recommended_action) + '</div>' : '')
+            +   (taskLinksHtml ? '<div class="flex flex-wrap gap-1.5">' + taskLinksHtml + '</div>' : '')
+            + '</div>';
+        }
+        $('warningsBody').innerHTML = html;
+        showWarningsBody();
+      }
+
+      function fetchWarnings() {
+        showWarningsLoading();
+        fetch(WARNINGS_URL, {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' },
+          cache: 'no-store'
+        })
+          .then(function (res) {
+            if (!res.ok) {
+              return res.text().then(function (body) {
+                throw new Error('HTTP ' + res.status + (body ? (': ' + body.slice(0, 200)) : ''));
+              });
+            }
+            return res.json();
+          })
+          .then(function (data) {
+            allWarnings = (data && Array.isArray(data.warnings)) ? data.warnings : [];
+            renderWarnings();
+          })
+          .catch(function (err) {
+            var msg = (err && err.message) ? err.message : '未知错误';
+            if (err && err.name === 'TypeError' && /fetch/i.test(msg)) {
+              msg = '无法连接到 ' + WARNINGS_URL + '（请确认 PatchWarden 服务正在运行）';
+            }
+            showWarningsError(msg);
+          });
+      }
+
+      function refreshAll() {
+        fetchWarnings();
+        fetchAudits();
+      }
+
       // ---- Event wiring ----
-      $('refreshBtn').addEventListener('click', fetchAudits);
+      $('refreshBtn').addEventListener('click', refreshAll);
 
       var retryBtn = $('retryBtn');
       if (retryBtn) {
-        retryBtn.addEventListener('click', fetchAudits);
+        retryBtn.addEventListener('click', refreshAll);
       }
 
       // Initial load
-      fetchAudits();
+      refreshAll();
     })();
   </script>
 

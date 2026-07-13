@@ -25,6 +25,7 @@ import { guardAgentCommand, guardTestCommand } from "../security/commandGuard.js
 import { validateAssessmentFreshness } from "../assessments/assessmentStore.js";
 import { captureRepoSnapshot } from "./changeCapture.js";
 import { runTask } from "./runTask.js";
+import { logger } from "../logging.js";
 
 // ── Bootstrap ─────────────────────────────────────────────────────
 
@@ -42,10 +43,10 @@ const WATCHER_LAUNCHER_PID = Number.isInteger(Number(process.env.PATCHWARDEN_WAT
   : null;
 mkdirSync(dirname(WATCHER_HEARTBEAT_FILE), { recursive: true });
 
-console.error(`[watcher] Workspace: ${wsRoot}`);
-console.error(`[watcher] Tasks:    ${tasksDir}`);
-console.error(`[watcher] Polling every ${POLL_INTERVAL_MS / 1000}s`);
-console.error(`[watcher] Press Ctrl+C to stop`);
+logger.info(`[watcher] Workspace: ${wsRoot}`);
+logger.info(`[watcher] Tasks:    ${tasksDir}`);
+logger.info(`[watcher] Polling every ${POLL_INTERVAL_MS / 1000}s`);
+logger.info(`[watcher] Press Ctrl+C to stop`);
 
 // Track executed tasks to prevent re-execution
 const executedTasks = new Set<string>();
@@ -110,7 +111,7 @@ async function tick() {
 
         // Assessment freshness revalidation
         if (statusData.assessment_id) {
-          const preExecSnapshot = captureRepoSnapshot(resolvedRepoPath);
+          const preExecSnapshot = await captureRepoSnapshot(resolvedRepoPath);
           const validation = validateAssessmentFreshness(String(statusData.assessment_id), preExecSnapshot);
           if (!validation.valid) {
             throw new Error(`assessment validation failed: ${validation.failure_reason}`);
@@ -118,7 +119,7 @@ async function tick() {
         }
       } catch (err) {
         const errMsg = `[watcher] Safety check failed for ${taskId}: ${err instanceof Error ? err.message : String(err)}`;
-        console.error(errMsg);
+        logger.error(errMsg);
 
         // Write error and mark as failed so it doesn't get re-picked
         try {
@@ -128,30 +129,32 @@ async function tick() {
           data.error = errMsg;
           data.updated_at = new Date().toISOString();
           writeFileSync(statusFile, JSON.stringify(data, null, 2), "utf-8");
-        } catch {}
+        } catch (err) {
+          logger.warn("watcher error-log write failed", { error: err instanceof Error ? err.message : String(err) });
+        }
         executedTasks.add(taskId);
         continue;
       }
 
       // ── Execute ──
-      console.error(`[watcher] Executing: ${taskId}`);
+      logger.info(`[watcher] Executing: ${taskId}`);
       executedTasks.add(taskId);
 
       try {
         const result = await runTask(taskId);
-        console.error(`[watcher] ${taskId} → ${result.status}`);
+        logger.info(`[watcher] ${taskId} → ${result.status}`);
       } catch (err) {
-        console.error(`[watcher] ${taskId} → error: ${err instanceof Error ? err.message : String(err)}`);
+        logger.error(`[watcher] ${taskId} → error: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   } catch (err) {
-    console.error(`[watcher] Tick error: ${err instanceof Error ? err.message : String(err)}`);
+    logger.error(`[watcher] Tick error: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
 // ── Start ─────────────────────────────────────────────────────────
 
-console.error("[watcher] Started");
+logger.info("[watcher] Started");
 setInterval(tick, POLL_INTERVAL_MS);
 
 // Run first tick immediately
@@ -159,10 +162,10 @@ tick();
 
 // Graceful shutdown
 process.on("SIGINT", () => {
-  console.error("[watcher] Stopped");
+  logger.info("[watcher] Stopped");
   process.exit(0);
 });
 process.on("SIGTERM", () => {
-  console.error("[watcher] Stopped");
+  logger.info("[watcher] Stopped");
   process.exit(0);
 });
