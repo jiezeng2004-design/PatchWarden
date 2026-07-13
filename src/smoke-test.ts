@@ -24,7 +24,7 @@ import {
 } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { loadConfig, getConfig, getTasksDir, reloadConfig } from "./config.js";
 import { savePlan } from "./tools/savePlan.js";
@@ -128,7 +128,7 @@ async function testReject(name: string, fn: () => void | Promise<void>) {
 
 // ── Setup ────────────────────────────────────────────────────────
 
-loadConfig();
+reloadConfig(smokeConfigPath);
 const config = getConfig();
 const wsRoot = config.workspaceRoot;
 
@@ -446,8 +446,8 @@ await testReject("B4. listWorkspace blocks ../ path escape", () => {
 });
 
 // Cleanup
-try { rmSync(wsTestFile); } catch {}
-try { rmSync(cwdTestFile); } catch {}
+try { rmSync(wsTestFile); } catch {} // cleanup failure is safe to ignore
+try { rmSync(cwdTestFile); } catch {} // cleanup failure is safe to ignore
 
 // ════════════════════════════════════════════════════════════════
 // Section C: Sensitive file rejection
@@ -670,18 +670,20 @@ await test("D11. repository-scoped allowlist keys cannot escape workspaceRoot", 
     workspaceRoot: smokeWorkspace,
     repoAllowedTestCommands: { "../outside": ["npm test"] },
   }), "utf-8");
-  const configModuleUrl = pathToFileURL(resolve(projectRoot, "dist/config.js")).href;
-  const script = [
-    "const [moduleUrl, configPath] = process.argv.slice(1);",
-    "process.env.PATCHWARDEN_CONFIG = configPath;",
-    "import(moduleUrl).then((module) => module.loadConfig()).then(() => process.exit(0)).catch((error) => { console.error(error.message); process.exit(2); });",
-  ].join("");
-  const result = spawnSync(nodeBin, ["--input-type=module", "-e", script, configModuleUrl, invalidConfigPath], {
-    encoding: "utf-8",
-    timeout: 30_000,
-  });
-  if (result.status === 0 || !String(result.stderr).includes("must stay inside workspaceRoot")) {
-    throw new Error(`Escaping repository allowlist key was not rejected: ${result.stderr}`);
+  const previousConfigPath = process.env.PATCHWARDEN_CONFIG;
+  try {
+    try {
+      reloadConfig(invalidConfigPath);
+      throw new Error("Escaping repository allowlist key was not rejected");
+    } catch (error) {
+      if (!String(error instanceof Error ? error.message : error).includes("must stay inside workspaceRoot")) {
+        throw error;
+      }
+    }
+  } finally {
+    if (previousConfigPath === undefined) delete process.env.PATCHWARDEN_CONFIG;
+    else process.env.PATCHWARDEN_CONFIG = previousConfigPath;
+    reloadConfig();
   }
 });
 
@@ -697,7 +699,7 @@ await testReject("E0. createTask rejects missing repo_path", async () => {
 
 await test("E1. createTask accepts repo_path inside workspace", async () => {
   const subDir = resolve(wsRoot, "sub-project");
-  try { mkdirSync(subDir, { recursive: true }); } catch {}
+  try { mkdirSync(subDir, { recursive: true }); } catch {} // cleanup failure is safe to ignore
   const result = await createTask({
     plan_id: planId,
     agent: "codex",
@@ -708,7 +710,7 @@ await test("E1. createTask accepts repo_path inside workspace", async () => {
   if (status.workspace_root !== wsRoot || status.repo_path !== "sub-project" || status.resolved_repo_path !== subDir) {
     throw new Error(`Path metadata mismatch: ${JSON.stringify(status)}`);
   }
-  try { rmSync(subDir, { recursive: true }); } catch {}
+  try { rmSync(subDir, { recursive: true }); } catch {} // cleanup failure is safe to ignore
 });
 
 await test("E1b. createTask accepts an absolute repo_path inside workspace", async () => {
@@ -1119,7 +1121,7 @@ console.log("\n── J. audit_task enhanced tests ──");
 
 const testProjDir = resolve(wsRoot, "test-proj");
 const testDocsDir = join(testProjDir, "docs");
-try { mkdirSync(testProjDir, { recursive: true }); mkdirSync(testDocsDir, { recursive: true }); } catch {}
+try { mkdirSync(testProjDir, { recursive: true }); mkdirSync(testDocsDir, { recursive: true }); } catch {} // cleanup failure is safe to ignore
 
 writeFileSync(join(testProjDir, "package.json"), JSON.stringify({
   name: "test-proj", scripts: { test: "echo ok", build: "echo build" }
@@ -1195,7 +1197,7 @@ await test("J5. get_task_stdout_tail on pending task does not throw", async () =
   if (tail.source !== "none") throw new Error(`Source should be 'none', got ${tail.source}`);
 });
 
-try { rmSync(testProjDir, { recursive: true }); } catch {}
+try { rmSync(testProjDir, { recursive: true }); } catch {} // cleanup failure is safe to ignore
 
 // ════════════════════════════════════════════════════════════════
 // Section K: Assessment (v0.5.0)
@@ -1816,7 +1818,7 @@ await test("L26 (K26). agentAssessor read-only violation → blocked", async () 
   if (!result.agent_assessment) throw new Error("Missing agent_assessment field");
   if (!result.agent_assessment.read_only_violation) throw new Error("Expected read_only_violation to be true");
   // Clean up vandalized file
-  try { rmSync(join(agentAssessRepo, "assessment-vandalized.txt"), { force: true }); } catch {}
+  try { rmSync(join(agentAssessRepo, "assessment-vandalized.txt"), { force: true }); } catch {} // cleanup failure is safe to ignore
 });
 
 await test("L27 (K27). agentAssessor absolute/outside paths sanitized", async () => {
@@ -1871,7 +1873,7 @@ await test("L29 (K29). deterministic medium/high skips agent", async () => {
 process.env.PATCHWARDEN_CONFIG = originalConfigEnv;
 reloadConfig();
 
-try { rmSync(agentAssessRoot, { recursive: true, force: true }); } catch {}
+try { rmSync(agentAssessRoot, { recursive: true, force: true }); } catch {} // cleanup failure is safe to ignore
 
 // ════════════════════════════════════════════════════════════════
 // Section M: chatgpt_direct profile and session tests
@@ -2351,7 +2353,7 @@ await test("M22. binary detection blocks extensionless files with null bytes", a
 process.env.PATCHWARDEN_CONFIG = originalConfigEnv;
 reloadConfig();
 
-try { rmSync(directRoot, { recursive: true, force: true }); } catch {}
+try { rmSync(directRoot, { recursive: true, force: true }); } catch {} // cleanup failure is safe to ignore
 
 // ════════════════════════════════════════════════════════════════
 // Summary
@@ -2363,7 +2365,7 @@ console.log(`${"=".repeat(50)}\n`);
 
 try {
   rmSync(smokeRoot, { recursive: true, force: true });
-} catch {}
+} catch {} // cleanup failure is safe to ignore
 
 if (failed > 0) {
   console.error("❌ SOME TESTS FAILED");

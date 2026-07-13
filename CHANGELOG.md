@@ -1,6 +1,6 @@
 # PatchWarden CHANGELOG
 
-## v1.5.1 (2026-07-06)
+## v1.5.1 (2026-07-13)
 
 ### Theme: Dashboard UI Optimization
 
@@ -11,6 +11,31 @@ safe_diff_summary, safe_direct_summary, safe_finalize_direct_session,
 safe_audit_direct_session) are now the default UI entry points. Full result,
 diff, and test log are only available in collapsed "advanced" sections and
 never auto-loaded.
+
+### Evidence Pack v2 and Goal workflows
+
+- Expanded Evidence Pack exports with reviewable structured artifacts,
+  bounded redaction, schema documentation, and stronger unit coverage.
+- Added Goal final report export so completed goal sessions can produce a
+  durable, review-oriented summary without exposing raw logs or credentials.
+- Added Spec Kit task import for turning approved specification tasks into
+  guarded PatchWarden subgoals while preserving workspace and command policy.
+
+### Maintainability
+
+- Split the Control Center server into focused route, middleware, runtime, and
+  shared modules while preserving the existing entry point and HTTP behavior.
+- Split MCP tool dispatch into core, diagnostic, direct, goal, and release
+  dispatch modules without weakening profile checks or invocation guards.
+- Added a source-oriented code wiki covering architecture, safety boundaries,
+  runtime entry points, tools, and common maintenance flows.
+
+### Verification coverage
+
+- Added unit coverage for patch application, task creation, task status and
+  summary reads, and bounded task waiting behavior.
+- Kept the full security smoke, unit, lifecycle, doctor, supervisor, MCP,
+  Windows control, and Control Center checks in the release gate.
 
 ### Dashboard
 

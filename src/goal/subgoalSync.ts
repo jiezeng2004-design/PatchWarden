@@ -11,6 +11,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readGoalStatus, writeGoalStatus } from "./goalStore.js";
 import { updateSubgoalStatus } from "./goalStatus.js";
+import { logger } from "../logging.js";
 
 // ── 同步函数 ──────────────────────────────────────────────────────
 
@@ -47,8 +48,9 @@ export function syncSubgoalOnTaskDone(
     writeGoalStatus(goalId, updated, workspaceRoot);
   } catch (err) {
     // subgoal 同步失败不应影响任务完成流程，只记录到 stderr
-    console.error(
-      `[goal] syncSubgoalOnTaskDone failed for task ${taskId}: ${err instanceof Error ? err.message : String(err)}`
+    logger.error(
+      `[goal] syncSubgoalOnTaskDone failed for task ${taskId}`,
+      { error: err instanceof Error ? err.message : String(err) },
     );
   }
 }

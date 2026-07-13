@@ -295,7 +295,7 @@ async function buildFileStats(
       try {
         const content = readFileSync(resolve(repoPath, file.path), "utf-8");
         additions = countLines(content);
-      } catch {}
+      } catch {} // probe failure handled by return value (additions stays 0)
     }
 
     return { path: file.path, status: file.change, additions, deletions };

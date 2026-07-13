@@ -243,7 +243,7 @@ export async function createTask(input: CreateTaskInput): Promise<CreateTaskResu
 
   // Resolve repo alias if configured
   let resolvedRepoPath = effectiveInput.repo_path?.trim() || "";
-  const aliases = (config as any).repoAliases as Record<string, string> | undefined;
+  const aliases = config.repoAliases;
   if (aliases && resolvedRepoPath && aliases[resolvedRepoPath]) {
     resolvedRepoPath = aliases[resolvedRepoPath];
   }

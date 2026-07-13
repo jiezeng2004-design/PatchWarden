@@ -56,13 +56,13 @@ evidence packs.
 
 ## Current Public Evidence
 
-Snapshot checked on 2026-07-09:
+Snapshot checked on 2026-07-12:
 
 - GitHub repository: `jiezeng2004-design/PatchWarden`
 - Stars: 2
 - Forks: 0
-- Open issues: 0
-- Open pull requests: 0
+- Open issues: 9 (`#25`, `#26`, `#28`–`#34`)
+- Open pull requests: 2 (`#24`, `#37`, both draft)
 - GitHub latest release: `v1.5.0`
 - npm latest dist-tag: `patchwarden@1.5.0`
 - Local source version in `package.json`: `1.5.1`

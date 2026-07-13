@@ -9,6 +9,7 @@
 
 import { runTask } from "./runTask.js";
 import { loadConfig } from "../config.js";
+import { logger } from "../logging.js";
 
 // Load config early
 loadConfig();
@@ -16,19 +17,19 @@ loadConfig();
 const taskId = process.argv[2] || process.env.PATCHWARDEN_TASK_ID;
 
 if (!taskId) {
-  console.error("Usage: node dist/runner/cli.js <task_id>");
-  console.error("   or: npm run runner -- <task_id>");
+  logger.info("Usage: node dist/runner/cli.js <task_id>");
+  logger.info("   or: npm run runner -- <task_id>");
   process.exit(1);
 }
 
-console.error(`[runner] Starting task: ${taskId}`);
+logger.info(`[runner] Starting task: ${taskId}`);
 
 const result = await runTask(taskId);
 
-console.error(`[runner] Task ${result.task_id}: ${result.status}`);
+logger.info(`[runner] Task ${result.task_id}: ${result.status}`);
 if (result.error) {
-  console.error(`[runner] Error: ${result.error}`);
+  logger.fatal(`[runner] Error: ${result.error}`);
   process.exit(1);
 }
 
-console.error("[runner] Done.");
+logger.info("[runner] Done.");

@@ -1,5 +1,3 @@
-// @ts-nocheck
-
 interface AuditCheck {
   name: string;
   result: "pass" | "warn" | "fail";
@@ -40,6 +38,43 @@ import { guardReadPath, guardWorkspacePath } from "../security/pathGuard.js";
 import { guardSensitivePath, isSensitivePath } from "../security/sensitiveGuard.js";
 import { evaluateAcceptance } from "../goal/acceptanceEngine.js";
 import { renderAcceptanceMarkdown } from "../goal/acceptanceTemplate.js";
+import type { ChangedFile } from "../runner/changeCapture.js";
+
+interface ExtractedCommand {
+  type: "npm-run" | "npm-bare" | "node" | "npx" | "python";
+  name: string;
+}
+
+interface TaskStatusData {
+  status?: string;
+  resolved_repo_path?: string;
+  repo_path?: string;
+  new_out_of_scope_changes?: Array<{ path: string; change: string }>;
+  out_of_scope_changes?: Array<{ path: string; change: string }>;
+  test_command?: string;
+  verify_commands?: string[];
+  forbidden?: string[];
+  done_evidence?: string[];
+  scope?: string[];
+  verification?: string[];
+  goal?: string;
+  artifact_status?: string;
+  acceptance_status?: string;
+  updated_at?: string;
+}
+
+interface ChangedFilesEvidence {
+  changed_files?: ChangedFile[];
+  artifact_hygiene?: {
+    counts?: {
+      tracked_build_artifacts?: number | string;
+      ignored_untracked_artifacts?: number | string;
+      runtime_generated_files?: number | string;
+      suspicious_changes?: number | string;
+    };
+  };
+}
+
 // Release claim patterns — anything that claims remote publish/release/deploy
 const RELEASE_PATTERNS = [
     /npm\s+package\s+version\s+published/i,
@@ -51,8 +86,8 @@ const RELEASE_PATTERNS = [
     /npm\s+publish\s+completed/i,
     /deploy(ed|ment)?\s+(to|on)\s+(npm|registry|github)/i,
 ];
-function scanForReleaseClaims(text) {
-    const found = [];
+function scanForReleaseClaims(text: string): string[] {
+    const found: string[] = [];
     for (const pattern of RELEASE_PATTERNS) {
         const match = text.match(pattern);
         if (match)
@@ -60,8 +95,8 @@ function scanForReleaseClaims(text) {
     }
     return found;
 }
-function findMdFiles(dir, maxDepth = 3) {
-    const results = [];
+function findMdFiles(dir: string, maxDepth = 3): string[] {
+    const results: string[] = [];
     if (!existsSync(dir) || maxDepth <= 0)
         return results;
     try {
@@ -86,7 +121,7 @@ function findMdFiles(dir, maxDepth = 3) {
  * `*` matches a single path segment (no `/`).
  * Path separators in the pattern are expected to be `/`.
  */
-function globToRegExp(pattern) {
+function globToRegExp(pattern: string): RegExp {
     // Normalize backslashes to forward slashes for matching consistency.
     const normalized = pattern.replace(/\\/g, "/");
     let re = "^";
@@ -127,7 +162,7 @@ function globToRegExp(pattern) {
  * Returns pass when changed files do not match any forbidden pattern.
  * Returns fail when any changed file path (or old_path) matches a forbidden glob.
  */
-export function checkForbiddenScope(changedFiles, forbidden) {
+export function checkForbiddenScope(changedFiles: ChangedFile[], forbidden: string[] | null): AuditCheck | null {
     if (!forbidden || forbidden.length === 0)
         return null;
     if (changedFiles.length === 0) {
@@ -161,7 +196,7 @@ export function checkForbiddenScope(changedFiles, forbidden) {
  * Returns pass when all listed files exist in the task directory.
  * Returns warn when any listed file is missing.
  */
-export function checkDoneEvidenceMissing(taskDir, doneEvidence) {
+export function checkDoneEvidenceMissing(taskDir: string, doneEvidence: string[] | null): AuditCheck | null {
     if (!doneEvidence || doneEvidence.length === 0)
         return null;
     const missing = [];
@@ -189,7 +224,7 @@ const CODE_EXTENSIONS = new Set([
  * Returns pass when README.md or CHANGELOG.md (basename, case-insensitive) is also changed.
  * Returns warn when code changed but neither documentation file was updated.
  */
-export function checkReadmeChangelogSync(changedFiles) {
+export function checkReadmeChangelogSync(changedFiles: ChangedFile[]): AuditCheck | null {
     const paths = changedFiles.map((f) => f.path);
     const hasCodeChange = paths.some((p) => {
         const lower = p.toLowerCase();
@@ -223,14 +258,14 @@ export function checkReadmeChangelogSync(changedFiles) {
  * Returns pass when package.json parses as JSON and has non-empty name and version strings.
  * Returns warn otherwise.
  */
-export function checkPackageManifestConsistency(changedFiles, repoPathSafe) {
+export function checkPackageManifestConsistency(changedFiles: ChangedFile[], repoPathSafe: string): AuditCheck | null {
     const includesPackageJson = changedFiles.some((f) => basename(f.path).toLowerCase() === "package.json");
     if (!includesPackageJson)
         return null;
     try {
         const pkgPath = join(repoPathSafe, "package.json");
         const raw = readFileSync(pkgPath, "utf-8");
-        const parsed = JSON.parse(raw);
+        const parsed = JSON.parse(raw) as { name?: unknown; version?: unknown };
         const hasName = typeof parsed.name === "string" && parsed.name.length > 0;
         const hasVersion = typeof parsed.version === "string" && parsed.version.length > 0;
         if (hasName && hasVersion) {
@@ -256,7 +291,7 @@ export function checkPackageManifestConsistency(changedFiles, repoPathSafe) {
  * Returns pass when no changed file path (or old_path) is sensitive.
  * Returns fail when any changed file path is flagged by isSensitivePath.
  */
-export function checkSensitivePathAccess(changedFiles) {
+export function checkSensitivePathAccess(changedFiles: ChangedFile[]): AuditCheck | null {
     if (changedFiles.length === 0)
         return null;
     const hits = [];
@@ -287,8 +322,8 @@ const HIGH_RISK_COMMAND_PATTERNS = [
     /\bRemove-Item\b[\s\S]{0,80}\b-Recurse\b/i,
     /\brm\s+-rf\b/i,
 ];
-function extractCommands(text) {
-    const found = [];
+function extractCommands(text: string): ExtractedCommand[] {
+    const found: ExtractedCommand[] = [];
     const runRe = /npm(?:\.cmd)?\s+run\s+([a-zA-Z0-9:_-]+)/gi;
     let m;
     while ((m = runRe.exec(text)) !== null) found.push({ type: "npm-run", name: m[1] });
@@ -302,31 +337,34 @@ function extractCommands(text) {
     while ((m = pythonRe.exec(text)) !== null) found.push({ type: "python", name: normalizeCommandName(m[1]) });
     return found;
 }
-function normalizeCommandName(value) {
+function normalizeCommandName(value: string): string {
     return value.replace(/\\/g, "/").replace(/^\.\//, "");
 }
-function commandKey(command) {
+function commandKey(command: ExtractedCommand): string {
     return command.name;
 }
-function readPackageScripts(repoPath) {
+function readPackageScripts(repoPath: string | null): Record<string, string> {
     if (!repoPath) return {};
     const pkgJsonPath = join(repoPath, "package.json");
     if (!existsSync(pkgJsonPath)) return {};
     try {
         guardSensitivePath(pkgJsonPath);
-        const parsed = JSON.parse(readFileSync(pkgJsonPath, "utf-8"));
-        if (!parsed.scripts || typeof parsed.scripts !== "object" || Array.isArray(parsed.scripts)) return {};
-        return Object.fromEntries(Object.entries(parsed.scripts).filter(([, value]) => typeof value === "string"));
+        const parsed = JSON.parse(readFileSync(pkgJsonPath, "utf-8")) as { scripts?: Record<string, unknown> };
+        const scripts = parsed.scripts;
+        if (!scripts || typeof scripts !== "object" || Array.isArray(scripts)) return {};
+        return Object.fromEntries(
+            Object.entries(scripts).filter(([, value]) => typeof value === "string")
+        ) as Record<string, string>;
     }
     catch {
         return {};
     }
 }
-function buildCommandWhitelist(verifyCommands, testCommand, repoPath) {
+function buildCommandWhitelist(verifyCommands: string[], testCommand: string | null, repoPath: string | null): { allowed: Set<string>; transitive: Set<string> } {
     const scripts = readPackageScripts(repoPath);
-    const allowed = new Set();
-    const transitive = new Set();
-    const queue = [];
+    const allowed = new Set<string>();
+    const transitive = new Set<string>();
+    const queue: Array<{ command: ExtractedCommand; depth: number }> = [];
     const sources = [...verifyCommands];
     if (testCommand) sources.push(testCommand);
     for (const src of sources) {
@@ -336,9 +374,9 @@ function buildCommandWhitelist(verifyCommands, testCommand, repoPath) {
         }
     }
     let inspectedFiles = 0;
-    const seen = new Set();
+    const seen = new Set<string>();
     while (queue.length > 0) {
-        const { command, depth } = queue.shift();
+        const { command, depth } = queue.shift()!;
         if (depth > 4) continue;
         const key = `${command.type}:${command.name}`;
         if (seen.has(key)) continue;
@@ -365,7 +403,7 @@ function buildCommandWhitelist(verifyCommands, testCommand, repoPath) {
     }
     return { allowed, transitive };
 }
-function readLocalScript(repoPath, scriptPath) {
+function readLocalScript(repoPath: string, scriptPath: string): string | null {
     const resolvedRepo = resolve(repoPath);
     const resolvedScript = resolve(resolvedRepo, scriptPath);
     const rel = relative(resolvedRepo, resolvedScript);
@@ -380,17 +418,17 @@ function readLocalScript(repoPath, scriptPath) {
         return null;
     }
 }
-function findHighRiskCommandEvidence(text) {
-    const found = [];
+function findHighRiskCommandEvidence(text: string): string[] {
+    const found: string[] = [];
     for (const pattern of HIGH_RISK_COMMAND_PATTERNS) {
         const match = text.match(pattern);
         if (match) found.push(match[0]);
     }
     return [...new Set(found)];
 }
-export function checkUnrecordedCommandExecution(testLogContent: string | null, resultMdContent: string | null, verifyCommands: string[], testCommand: string | null, repoPath: string | null = null) {
-    const hasLog = testLogContent && testLogContent.length > 0;
-    const hasResult = resultMdContent && resultMdContent.length > 0;
+export function checkUnrecordedCommandExecution(testLogContent: string | null, resultMdContent: string | null, verifyCommands: string[], testCommand: string | null, repoPath: string | null = null): AuditCheck | null {
+    const hasLog = !!testLogContent && testLogContent.length > 0;
+    const hasResult = !!resultMdContent && resultMdContent.length > 0;
     if (!hasLog && !hasResult) return null;
     const combined = `${testLogContent || ""}\n${resultMdContent || ""}`;
     const highRisk = findHighRiskCommandEvidence(combined);
@@ -398,10 +436,10 @@ export function checkUnrecordedCommandExecution(testLogContent: string | null, r
         return { name: "unrecorded_command_execution", result: "fail", detail: `High-risk command evidence: ${highRisk.join(", ")}` };
     }
     const whitelist = buildCommandWhitelist(verifyCommands, testCommand, repoPath);
-    const discovered = [];
-    if (hasLog) discovered.push(...extractCommands(testLogContent));
-    if (hasResult) discovered.push(...extractCommands(resultMdContent));
-    const unrecorded = new Set();
+    const discovered: ExtractedCommand[] = [];
+    if (hasLog && testLogContent) discovered.push(...extractCommands(testLogContent));
+    if (hasResult && resultMdContent) discovered.push(...extractCommands(resultMdContent));
+    const unrecorded = new Set<string>();
     for (const cmd of discovered) {
         if (!whitelist.allowed.has(commandKey(cmd))) unrecorded.add(commandKey(cmd));
     }
@@ -415,7 +453,7 @@ export function checkUnrecordedCommandExecution(testLogContent: string | null, r
         detail: transitive.length > 0 ? `All commands are whitelisted; transitive_verified_command: ${transitive.join(", ")}` : "All commands in whitelist.",
     };
 }
-export function auditTask(taskId) {
+export function auditTask(taskId: string): AuditTaskOutput {
     const config = getConfig();
     const tasksDir = getTasksDir(config);
     const taskDir = join(tasksDir, taskId);
@@ -424,17 +462,17 @@ export function auditTask(taskId) {
     if (!existsSync(statusFile)) {
         throw new Error(`Task not found: "${taskId}"`);
     }
-    const statusData = JSON.parse(readFileSync(statusFile, "utf-8"));
-    const checks = [];
-    const risks = [];
-    const actions = [];
-    const possibleFalsePositives = [];
-    const manualVerificationItems = [];
-    const addManualVerification = (item) => {
+    const statusData = JSON.parse(readFileSync(statusFile, "utf-8")) as TaskStatusData;
+    const checks: AuditCheck[] = [];
+    const risks: AuditRisk[] = [];
+    const actions: string[] = [];
+    const possibleFalsePositives: Array<{ check: string; reason: string }> = [];
+    const manualVerificationItems: string[] = [];
+    const addManualVerification = (item: string) => {
         if (!manualVerificationItems.includes(item))
             manualVerificationItems.push(item);
     };
-    const addPossibleFalsePositive = (check, reason) => {
+    const addPossibleFalsePositive = (check: string, reason: string) => {
         if (!possibleFalsePositives.some((item) => item.check === check && item.reason === reason)) {
             possibleFalsePositives.push({ check, reason });
         }
@@ -478,7 +516,7 @@ export function auditTask(taskId) {
     }
     if (existsSync(verifyJsonFile)) {
         try {
-            const verify = JSON.parse(readFileSync(verifyJsonFile, "utf-8"));
+            const verify = JSON.parse(readFileSync(verifyJsonFile, "utf-8")) as { status?: string };
             checks.push({
                 name: "verify_status",
                 result: verify.status === "passed" ? "pass" : verify.status === "failed" ? "fail" : "warn",
@@ -504,11 +542,11 @@ export function auditTask(taskId) {
             : "No new out-of-scope changes recorded.",
     });
     // Extract changed_files from change evidence (used by several v0.7.2 checks).
-    let changedFiles = [];
+    let changedFiles: ChangedFile[] = [];
     const changedFilesFile = join(taskDir, "changed-files.json");
     if (existsSync(changedFilesFile)) {
         try {
-            const changeEvidence = JSON.parse(readFileSync(changedFilesFile, "utf-8"));
+            const changeEvidence = JSON.parse(readFileSync(changedFilesFile, "utf-8")) as ChangedFilesEvidence;
             if (Array.isArray(changeEvidence.changed_files)) {
                 changedFiles = changeEvidence.changed_files;
             }
@@ -596,11 +634,11 @@ export function auditTask(taskId) {
         risks.push({ severity: "high", description: "repo_path inconsistent with workspace." });
     // ── 6. package.json scripts ──
     const pkgJsonPath = join(repoPathSafe, "package.json");
-    let pkgScripts = [];
+    let pkgScripts: string[] = [];
     if (existsSync(pkgJsonPath)) {
         try {
             guardSensitivePath(pkgJsonPath);
-            const pkgData = JSON.parse(readFileSync(pkgJsonPath, "utf-8"));
+            const pkgData = JSON.parse(readFileSync(pkgJsonPath, "utf-8")) as { scripts?: Record<string, unknown> };
             pkgScripts = Object.keys(pkgData.scripts || {});
             checks.push({
                 name: "package_json_scripts",
@@ -625,10 +663,10 @@ export function auditTask(taskId) {
         docsToScan.push(...findMdFiles(docsDir));
     }
     // Collect all npm run references from all docs
-    const allNpmRunRefs = new Set();
-    const allReleaseClaims = [];
+    const allNpmRunRefs = new Set<string>();
+    const allReleaseClaims: string[] = [];
     for (const docPath of docsToScan) {
-        let content;
+        let content: string;
         try {
             if (docPath !== resultFile) {
                 guardReadPath(docPath, config.workspaceRoot);
@@ -693,9 +731,9 @@ export function auditTask(taskId) {
         addManualVerification("Verify remote npm, GitHub Release, and Git tag claims against authoritative remote services.");
     }
     // ── 9. test.log Exit code check ──
-    let testLogContent = null;
+    let testLogContent: string | null = null;
     if (hasTestLog) {
-        let logContent;
+        let logContent: string;
         try {
             logContent = readFileSync(testLogFile, "utf-8");
         }
@@ -732,7 +770,7 @@ export function auditTask(taskId) {
     }
     // ── v0.7.2: New audit checks ──
     // Read result.md content (guarded) for the unrecorded_command_execution check.
-    let resultMdContent = null;
+    let resultMdContent: string | null = null;
     if (hasResult) {
         try {
             resultMdContent = readFileSync(resultFile, "utf-8");
@@ -818,8 +856,10 @@ export function auditTask(taskId) {
             if (!existsSync(verifyJsonFile))
                 return null;
             try {
-                const v = JSON.parse(readFileSync(verifyJsonFile, "utf-8"));
-                return v.status === "passed" ? "passed" : v.status === "failed" ? "failed" : "skipped";
+                const v = JSON.parse(readFileSync(verifyJsonFile, "utf-8")) as { status?: string };
+                if (v.status === "passed") return "passed" as const;
+                if (v.status === "failed") return "failed" as const;
+                return "skipped" as const;
             }
             catch {
                 return null;
