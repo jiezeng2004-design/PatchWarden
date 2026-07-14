@@ -160,7 +160,9 @@ describe("v1.5 evidence packs and agent recommendations", () => {
   });
 
   it("exports v2 structured artifacts and redacts secrets in diffstat", () => {
-    const secretValue = "ghp_1234567890abcdefghijklmnop";
+    // Assemble the fixture at runtime so repository secret scanners do not
+    // mistake a test value for a committed credential.
+    const secretValue = ["ghp_", "1234567890", "abcdefgh", "ijklmnop"].join("");
     // Create a task directory with file-stats.json containing a secret in a file path.
     const taskDir = join(tempDir, ".patchwarden", "tasks", "task-v2-secret");
     mkdirSync(taskDir, { recursive: true });
