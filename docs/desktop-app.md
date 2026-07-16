@@ -7,11 +7,12 @@ isolated Electron window, and keeps quick controls in the system tray.
 
 ## Install
 
-1. Download `PatchWarden-Setup-<version>-x64.exe` and
+1. Download `PatchWarden-Setup-<version>-x64.exe` (installed) or
+   `PatchWarden-Portable-<version>-x64.zip` (no install), plus
    `PatchWarden-Desktop-SHA256SUMS.txt` from the matching GitHub Release.
 2. Verify the SHA256 value before running the installer.
 3. Install for the current Windows user. Administrator access is not required.
-4. Select a dedicated workspace, review detected Codex/OpenCode CLIs, and let
+4. Select a dedicated workspace, review detected local CLIs and models, and let
    the read-only doctor finish.
 
 ## First-run routes
@@ -51,6 +52,20 @@ requirements.
 The first unsigned desktop release may show Windows SmartScreen. Verify the
 checksum and GitHub Release source before choosing to continue. No updater or
 login startup entry is installed in v1.
+
+## Local agents and models
+
+Desktop supports Codex, OpenCode, Claude Code, Gemini CLI, GitHub Copilot CLI,
+Qwen Code, Kimi Code, and Aider. Settings detects only verified native
+executables or known npm package entry points and never launches Windows shell
+shims through a command shell.
+
+Model discovery reads only allowlisted model fields from each agent's normal
+JSON/JSONC, TOML, or YAML settings. It does not read `.env`, API keys, browser
+state, provider secrets, or session history. Online model listing is never run
+automatically; the user must select the refresh control for an agent that
+supports a bounded model-list command. Choosing **Follow agent default** omits
+the model argument so the agent retains its own precedence rules.
 
 ## Local state
 

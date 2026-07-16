@@ -1,7 +1,7 @@
 # PatchWarden Code Wiki
 
 > 本文档是对 PatchWarden 仓库的结构化代码导览，覆盖项目整体架构、主要模块职责、关键类与函数说明、依赖关系、运行方式，以及现有缺陷分析。
-> 源码版本：**v1.5.1** · Schema Epoch：`2026-07-05-v13` · License：MIT
+> 源码版本：**v1.6.0** · Schema Epoch：`2026-07-16-v14` · License：MIT
 > 文档基线：基于 `src/` 源码静态审查生成，工具数量与 Profile 定义已与 `registry.ts` / `toolCatalog.ts` 核对。
 
 ## 目录
@@ -46,8 +46,8 @@ PatchWarden 是一个面向本地编程 Agent 的**安全 MCP（Model Context Pr
 | 项 | 值 |
 | --- | --- |
 | npm 包名 | `patchwarden` |
-| 当前版本 | `1.5.1` |
-| Schema Epoch | `2026-07-05-v13` |
+| 当前版本 | `1.6.0` |
+| Schema Epoch | `2026-07-16-v14` |
 | 可执行入口 | `patchwarden`、`patchwarden-confirm`、`patchwarden-runner` |
 | 运行时依赖 | `@modelcontextprotocol/sdk ^1.0.0`（唯一） |
 | devDependencies | `@types/node ^20`、`typescript ^6` |
@@ -263,7 +263,7 @@ v1.5 将原 `controlCenter.ts` 拆分为模块化子目录，`controlCenter.ts` 
 | --- | --- |
 | [src/config.ts](../src/config.ts) | 加载并校验 `patchwarden.config.json`，提供 `loadConfig`/`getConfig`/`reloadConfig`/`getTasksDir`/`getPlansDir` 等路径解析；`normalizeConfig` 近 200 行严格校验 `workspaceRoot`、`agents`、`allowedTestCommands`、`watcherStaleSeconds`、`toolProfile`、`tunnelProxy`、`directAllowedCommands` 等 25+ 字段；查找顺序：`PATCHWARDEN_CONFIG` → `{cwd}/patchwarden.config.json` → `{cwd}/.patchwarden.json`；支持 BOM 剥离 |
 | [src/errors.ts](../src/errors.ts) | 定义 `PatchWardenError`（含 `reason`/`suggestion`/`blocked`/`details`）与 `errorPayload` 序列化 |
-| [src/version.ts](../src/version.ts) | 导出 `PATCHWARDEN_VERSION = "1.5.1"` 与 `TOOL_SCHEMA_EPOCH = "2026-07-05-v13"` |
+| [src/version.ts](../src/version.ts) | 导出 `PATCHWARDEN_VERSION = "1.6.0"` 与 `TOOL_SCHEMA_EPOCH = "2026-07-16-v14"` |
 | [src/logging.ts](../src/logging.ts) | `Logger` 类输出 stderr JSON 日志，记录 `audit`/`info`/`warn`/`error`/`fatal`；`logToolInvocation` 仅写参数 digest，不写原参数；`installGlobalHandlers` 捕获未处理异常但不吞错 |
 
 ### 4.4 安全模块（src/security/）

@@ -8,7 +8,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-当前源码版本：**v1.5.1**。查看
+当前源码版本：**v1.6.0**。查看
 [CHANGELOG](CHANGELOG.md)、[迁移指南](docs/migration-from-safe-bifrost.md)和
 [发布检查清单](docs/release-checklist.md)。GitHub Release / npm 发布状态需要在发布前单独核对。
 
@@ -681,7 +681,7 @@ Direct 两种模式的启动、停止、重启与状态。也可以在 PowerShel
 
 ### Windows 安装版
 
-公开分发可以构建独立的 PatchWarden Desktop 安装包。它提供 Electron
+公开分发可以构建 PatchWarden Desktop 安装包和免安装 ZIP。它提供 Electron
 独立窗口、首次工作区引导、系统托盘和设置页，同时继续复用相同的
 loopback Control Center 与安全控制 API。桌面依赖隔离在私有的
 `desktop/` 子包中，不进入 `patchwarden` npm 包。
@@ -692,6 +692,8 @@ loopback Control Center 与安全控制 API。桌面依赖隔离在私有的
 应用不会自动下载或运行新软件。设置页还提供 Direct 显式开关，以及环境代理、
 无代理、手动代理三种模式；手动代理只接受不含凭据的 http/https/socks5 URL。
 启动和重启只有在 health/ready 与 Core Watcher 验证通过后才会报告成功。
+桌面端支持 Codex、OpenCode、Claude Code、Gemini CLI、GitHub Copilot CLI、
+Qwen Code、Kimi Code 和 Aider；只读取各 Agent 配置中的模型字段，不读取凭据。
 
 ```powershell
 npm.cmd install --prefix desktop --cache .\.npm-cache
@@ -699,7 +701,7 @@ npm.cmd run desktop:test
 npm.cmd run desktop:package
 ```
 
-安装包与 SHA256 文件输出到 `release\desktop`。首版不包含自动更新或
+安装包、免安装 ZIP 与 SHA256 文件输出到 `release\desktop`。首版不包含自动更新或
 代码签名，Windows SmartScreen 可能提示未知发布者；发布前必须核对
 GitHub Release 来源和 SHA256。完整安装、运行与卸载说明见
 [docs/desktop-app.md](docs/desktop-app.md)。

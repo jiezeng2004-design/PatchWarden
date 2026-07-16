@@ -104,7 +104,9 @@ jobs:
         shell: pwsh
         run: |
           $installer = @(Get-ChildItem -LiteralPath release\desktop -Filter 'PatchWarden-Setup-*-x64.exe')
+          $portable = @(Get-ChildItem -LiteralPath release\desktop -Filter 'PatchWarden-Portable-*-x64.zip')
           if ($installer.Count -ne 1) { throw "Expected exactly one desktop installer." }
+          if ($portable.Count -ne 1) { throw "Expected exactly one portable desktop ZIP." }
           if (-not (Test-Path -LiteralPath release\desktop\PatchWarden-Desktop-SHA256SUMS.txt)) { throw "Desktop checksum file is missing." }
 
   gate:

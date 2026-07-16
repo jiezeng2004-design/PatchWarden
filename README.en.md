@@ -8,7 +8,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Current source version: **v1.5.1**. See the
+Current source version: **v1.6.0**. See the
 [CHANGELOG](CHANGELOG.md), [migration guide](docs/migration-from-safe-bifrost.md), and
 [release checklist](docs/release-checklist.md). Verify GitHub Release / npm publication separately before release.
 
@@ -800,7 +800,7 @@ For daily desktop use, start with `PatchWarden-Desktop.cmd`; it starts the tray 
 
 ### Windows installer
 
-The installable PatchWarden Desktop build provides an Electron window,
+PatchWarden Desktop ships as an installer and a no-install ZIP. It provides an Electron window,
 first-run workspace setup, a system tray, and desktop settings while reusing
 the same loopback Control Center and bounded control APIs. Electron and builder
 dependencies remain isolated in the private `desktop/` package and are not
@@ -815,6 +815,9 @@ automatically. Settings also exposes the explicit Direct switch and
 environment, none, or manual proxy modes; manual URLs support only http,
 https, or socks5 without embedded credentials. Start/restart reports success
 only after health/ready and the Core watcher have been verified.
+Desktop supports Codex, OpenCode, Claude Code, Gemini CLI, GitHub Copilot CLI,
+Qwen Code, Kimi Code, and Aider. It reads only model fields from agent settings,
+never credentials.
 
 ```powershell
 npm.cmd install --prefix desktop --cache .\.npm-cache
@@ -822,7 +825,7 @@ npm.cmd run desktop:test
 npm.cmd run desktop:package
 ```
 
-The installer and SHA256 file are written to `release\desktop`. The first
+The installer, portable ZIP, and SHA256 file are written to `release\desktop`. The first
 release is unsigned and has no automatic updater, so Windows SmartScreen may
 show an unknown-publisher warning. Verify the GitHub Release source and SHA256.
 See [docs/desktop-app.md](docs/desktop-app.md) for installation, runtime, and

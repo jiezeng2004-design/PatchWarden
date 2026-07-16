@@ -51,6 +51,21 @@
       "settings.title": "设置",
       "settings.pageTitle": "设置 — PatchWarden",
       "settings.appearance": "外观与窗口",
+      "settings.localAgents": "本地 Agent 与模型",
+      "settings.localAgentsHelp": "只注册检测到的受支持 CLI；模型来自本地安全配置字段，联网刷新需手动触发。",
+      "settings.detectAgents": "重新检测",
+      "settings.loadingAgents": "正在读取本地 Agent…",
+      "settings.detectingAgents": "正在重新检测本地 Agent…",
+      "settings.saveAgents": "保存 Agent 设置",
+      "settings.savingAgents": "正在保存 Agent 设置…",
+      "settings.agentAvailable": "CLI 可用",
+      "settings.agentMissing": "未找到 CLI",
+      "settings.followAgentDefault": "跟随 Agent 默认",
+      "settings.customModel": "自定义模型 ID",
+      "settings.modelIdPlaceholder": "provider/model",
+      "settings.refreshModels": "刷新模型列表",
+      "settings.refreshingModels": "正在刷新 {agent} 模型…",
+      "settings.modelsRefreshed": "已发现 {count} 个模型",
       "settings.theme": "主题",
       "settings.themeHelp": "跟随 Windows，或固定使用浅色、深色。",
       "settings.themeSystem": "跟随系统",
@@ -195,6 +210,21 @@
       "settings.title": "Settings",
       "settings.pageTitle": "Settings — PatchWarden",
       "settings.appearance": "Appearance and window",
+      "settings.localAgents": "Local agents and models",
+      "settings.localAgentsHelp": "Only detected supported CLIs are registered. Models come from safe local config fields; online refresh is always manual.",
+      "settings.detectAgents": "Detect again",
+      "settings.loadingAgents": "Loading local agents…",
+      "settings.detectingAgents": "Detecting local agents…",
+      "settings.saveAgents": "Save agent settings",
+      "settings.savingAgents": "Saving agent settings…",
+      "settings.agentAvailable": "CLI available",
+      "settings.agentMissing": "CLI not found",
+      "settings.followAgentDefault": "Follow agent default",
+      "settings.customModel": "Custom model ID",
+      "settings.modelIdPlaceholder": "provider/model",
+      "settings.refreshModels": "Refresh model list",
+      "settings.refreshingModels": "Refreshing {agent} models…",
+      "settings.modelsRefreshed": "Found {count} models",
       "settings.theme": "Theme",
       "settings.themeHelp": "Follow Windows or always use the light or dark theme.",
       "settings.themeSystem": "Use system theme",
@@ -393,6 +423,7 @@
   }
   async function setLanguage(value) {
     selected = value === "zh-CN" || value === "en" ? value : "system";
+    localStorage.setItem(STORAGE_KEY, selected);
     if (window.patchwardenDesktop) {
       var prefs = await window.patchwardenDesktop.setPreferences({ language: selected });
       var state = await window.patchwardenDesktop.getState();
@@ -407,9 +438,14 @@
   }
   async function initialize() {
     if (window.patchwardenDesktop) {
+      selected = localStorage.getItem(STORAGE_KEY) || "system";
+      language = resolve(selected);
+      addLanguageSwitcher();
+      applyTranslations(document);
       var state = await window.patchwardenDesktop.getState();
       selected = state.preferences.language || "system";
       language = resolve(selected, state.resolvedLanguage);
+      localStorage.setItem(STORAGE_KEY, selected);
     } else {
       selected = localStorage.getItem(STORAGE_KEY) || "system";
       language = resolve(selected);

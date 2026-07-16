@@ -13,16 +13,19 @@ import {
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { detectAgents } from "./agent-detection.mjs";
+import { detectAgents, getAgentAdapter, refreshAgentModels } from "./agent-detection.mjs";
+import { discoverModelsForAgent } from "./model-discovery.mjs";
 import {
   atomicWriteJson,
   buildConfig,
+  readAgentSettings,
   readJson,
   readPreferences,
   readRuntimeSettings,
   resolveDesktopLanguage,
   resolveDesktopPaths,
   updatePreferences,
+  updateAgentSettings,
   updateRuntimeSettings,
 } from "./config-store.mjs";
 import { mayStopBackend, probeControlCenter } from "./backend-probe.mjs";
@@ -125,6 +128,34 @@ function currentState() {
     resolvedLanguage: resolveLanguage(preferences?.language),
     runtimeSettings: activeConfigPath ? readRuntimeSettings(activeConfigPath) : null,
   };
+}
+
+function configuredWorkspaceRoot() {
+  const config = activeConfigPath ? readJson(activeConfigPath) : null;
+  return config && typeof config.workspaceRoot === "string" ? config.workspaceRoot : process.cwd();
+}
+
+function publicAgentCatalog() {
+  const configured = new Map((activeConfigPath ? readAgentSettings(activeConfigPath) : []).map((agent) => [agent.id, agent]));
+  const workspaceRoot = configuredWorkspaceRoot();
+  return detectedAgents.map((agent) => {
+    const local = discoverModelsForAgent(agent.id, workspaceRoot);
+    const setting = configured.get(agent.id);
+    return {
+      id: agent.id,
+      name: agent.id,
+      displayName: agent.displayName,
+      available: agent.available,
+      enabled: setting ? true : false,
+      selectedModel: setting?.model || null,
+      models: local.models,
+      modelSources: local.sources,
+      commandLabel: agent.command ? `${agent.displayName} (${agent.source})` : null,
+      supportsModelOverride: agent.supportsModelOverride,
+      supportsModelRefresh: agent.supportsModelRefresh,
+      reason: agent.reason,
+    };
+  });
 }
 
 function resolveLanguage(language) {
@@ -412,7 +443,21 @@ function registerDesktopIpc() {
   });
   registerIpc("desktop:detect-agents", async () => {
     detectedAgents = await detectAgents();
-    return detectedAgents;
+    return publicAgentCatalog();
+  });
+  registerIpc("desktop:get-agent-settings", async () => {
+    if (detectedAgents.length === 0) detectedAgents = await detectAgents();
+    return publicAgentCatalog();
+  });
+  registerIpc("desktop:discover-agent-models", async (id) => {
+    if (!getAgentAdapter(id)) throw new Error("不支持的 Agent");
+    return discoverModelsForAgent(id, configuredWorkspaceRoot());
+  });
+  registerIpc("desktop:refresh-agent-models", async (id) => {
+    if (!getAgentAdapter(id)) throw new Error("不支持的 Agent");
+    if (detectedAgents.length === 0) detectedAgents = await detectAgents();
+    const detection = detectedAgents.find((agent) => agent.id === id);
+    return { agentId: id, models: await refreshAgentModels(id, detection) };
   });
   registerIpc("desktop:save-setup", async (value) => {
     if (!value || typeof value.workspaceRoot !== "string" || !Array.isArray(value.enabledAgents)) {
@@ -420,15 +465,33 @@ function registerDesktopIpc() {
     }
     const validation = await validateWorkspace(value.workspaceRoot);
     if (!validation.ok) return { ok: false, error: validation.reason, validation };
-    const enabledNames = new Set(value.enabledAgents.filter((name) => name === "codex" || name === "opencode"));
-    const selected = detectedAgents.filter((agent) => enabledNames.has(agent.name) && agent.available);
-    atomicWriteJson(activeConfigPath, buildConfig(validation.path, selected), true);
+    const enabledNames = new Set(value.enabledAgents.filter((name) => getAgentAdapter(name)));
+    const selections = [...enabledNames].map((id) => ({ id, enabled: true, model: value.agentModels?.[id] || null }));
+    const selected = detectedAgents.filter((agent) => enabledNames.has(agent.id) && agent.available);
+    const generated = buildConfig(validation.path, selected, selections);
+    const existing = readJson(activeConfigPath);
+    if (existing && existing.agents && typeof existing.agents === "object") {
+      const customAgents = Object.fromEntries(Object.entries(existing.agents).filter(([id, agent]) => !getAgentAdapter(agent?.adapter || id)));
+      generated.agents = { ...customAgents, ...generated.agents };
+    }
+    const nextConfig = existing && typeof existing.workspaceRoot === "string"
+      ? { ...existing, ...generated, workspaceRoot: validation.path, agents: generated.agents }
+      : generated;
+    atomicWriteJson(activeConfigPath, nextConfig, true);
     if (appMode === "ready") {
       setTimeout(() => { void restartOwnedBackendAndLoad(); }, 300);
     } else {
       appMode = "setup-check";
     }
     return { ok: true, workspaceRoot: validation.path, agentCount: selected.length };
+  });
+  registerIpc("desktop:save-agent-settings", async (value) => {
+    if (!value || !Array.isArray(value.agents)) throw new Error("Agent 设置数据无效");
+    if (detectedAgents.length === 0) detectedAgents = await detectAgents();
+    const settings = updateAgentSettings(activeConfigPath, detectedAgents, value.agents);
+    const restartRequired = !ownedBackend;
+    if (ownedBackend) setTimeout(() => { void restartOwnedBackendAndLoad(); }, 250);
+    return { ok: true, settings, restartRequired };
   });
   registerIpc("desktop:run-doctor", runDoctor);
   registerIpc("desktop:get-preferences", async () => preferences);

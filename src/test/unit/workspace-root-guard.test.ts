@@ -12,6 +12,9 @@ describe("workspaceRootGuard", () => {
     assert.equal(unsafeWorkspaceRootLabel("C:\\Users\\student\\Desktop", "C:\\Users\\student"), "Desktop");
     assert.equal(unsafeWorkspaceRootLabel("C:\\Users\\student\\Downloads", "C:\\Users\\student"), "Downloads");
     assert.equal(unsafeWorkspaceRootLabel("C:\\Users\\student\\Documents", "C:\\Users\\student"), "Documents");
+    assert.equal(unsafeWorkspaceRootLabel("\\\\server\\share\\Desktop", "C:\\Users\\student"), "Desktop");
+    assert.equal(unsafeWorkspaceRootLabel("/home/student/Downloads", "/home/student"), "Downloads");
+    assert.equal(unsafeWorkspaceRootLabel("/work/project", "/home/student"), null);
   });
 
   it("accepts an existing project directory", () => {

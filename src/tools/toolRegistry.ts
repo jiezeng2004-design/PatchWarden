@@ -109,7 +109,7 @@ const STATIC_TOOL_META: Record<string, StaticToolMeta> = {
     summary: "列出已配置的本地 agent 及其可用性",
     profiles: ["full", "chatgpt_core"],
     modes: ["delegate", "diagnostic"],
-    tags: ["agent", "list", "config", "codex", "opencode"],
+    tags: ["agent", "list", "config", "local-cli", "model"],
     aliases: ["agents", "list_agent"],
     risk: "readonly",
     requiresConfirmation: false,

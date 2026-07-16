@@ -1,6 +1,12 @@
 /* Shared responsive shell plus desktop-only theme refinements. */
 .desktop-only-nav { display: none !important; }
 
+@view-transition { navigation: auto; }
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: 120ms; animation-timing-function: ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0s; }
+}
+
 html, body { max-width: 100%; overflow-x: hidden; }
 .pw-dashboard-toolbar {
   display: grid !important;

@@ -6,6 +6,8 @@ import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 export interface AgentConfig {
   command: string;
   args: string[];
+  adapter?: string;
+  model?: string;
 }
 
 export interface PatchWardenConfig {

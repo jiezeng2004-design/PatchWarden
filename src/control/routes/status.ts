@@ -131,7 +131,7 @@ export function buildSuggestions(s: StatusSnapshotForSuggestions): Suggestion[] 
     out.push({
       code: "agent_missing",
       severity: "info",
-      message: "Agent 未就绪：" + missingAgents.map((a) => a.name).join(", ") + "（请检查 opencode/claude 路径）",
+      message: "Agent 未就绪：" + missingAgents.map((a) => a.name).join(", ") + "（请检查对应 CLI 安装与路径）",
     });
   }
 

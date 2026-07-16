@@ -12,6 +12,7 @@ import {
   readRuntimeSettings,
   resolveDesktopPaths,
   updatePreferences,
+  updateAgentSettings,
   updateRuntimeSettings,
 } from "../src/config-store.mjs";
 
@@ -85,5 +86,29 @@ describe("desktop config store", () => {
     assert.throws(() => updateRuntimeSettings(path, {
       tunnelProxy: { scope: "shared", core: { mode: "manual", url: "file:///tmp/proxy" }, direct: { mode: "environment" } },
     }), /仅支持/);
+  });
+
+  it("merges managed agents while preserving custom registrations", () => {
+    const root = mkdtempSync(join(tmpdir(), "patchwarden-desktop-agents-"));
+    const path = join(root, "patchwarden.config.json");
+    const config = buildConfig("C:\\workspace", []);
+    config.agents.custom = { command: "custom-agent", args: ["{prompt}"] };
+    atomicWriteJson(path, config, false);
+    const settings = updateAgentSettings(path, [{ id: "codex", available: true, command: "C:\\tools\\codex.exe", prefixArgs: [] }], [{ id: "codex", enabled: true, model: "gpt-codex" }]);
+    const updated = readJson(path);
+    assert.ok(updated.agents.custom);
+    assert.equal(updated.agents.codex.model, "gpt-codex");
+    assert.ok(settings.some((item) => item.id === "custom" && item.managed === false));
+  });
+
+  it("preserves an existing managed registration while its CLI is temporarily unavailable", () => {
+    const root = mkdtempSync(join(tmpdir(), "patchwarden-desktop-agents-offline-"));
+    const path = join(root, "patchwarden.config.json");
+    const config = buildConfig("C:\\workspace", [
+      { id: "codex", available: true, command: "C:\\tools\\codex.exe", prefixArgs: [] },
+    ]);
+    atomicWriteJson(path, config, false);
+    updateAgentSettings(path, [{ id: "codex", available: false, command: null }], [{ id: "codex", enabled: true, model: null }]);
+    assert.deepEqual(readJson(path).agents.codex, config.agents.codex);
   });
 });

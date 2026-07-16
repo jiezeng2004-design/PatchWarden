@@ -20,7 +20,8 @@ function comparable(value: string): string {
 export function unsafeWorkspaceRootLabel(value: string, userHome = homedir()): string | null {
   const resolved = normalizeInput(value);
   const trimmed = resolved.replace(/[\\/]+$/, "");
-  const leaf = basename(trimmed).toLowerCase();
+  const windowsStyle = /^[a-z]:[\\/]/i.test(value) || /^\\\\/.test(value);
+  const leaf = (windowsStyle ? win32.basename(trimmed) : basename(trimmed)).toLowerCase();
 
   if (/^[a-z]:$/i.test(trimmed) || trimmed === "" || trimmed === "/") return "drive root";
   if (comparable(trimmed) === comparable(userHome)) return "user home directory";

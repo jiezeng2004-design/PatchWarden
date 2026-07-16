@@ -9,6 +9,9 @@ export interface AgentAvailability {
   command: string;
   reason: string | null;
   checked_at: string;
+  adapter: string | null;
+  model: string | null;
+  capabilities: { model_override: boolean };
 }
 
 export function listAgents(): { agents: AgentAvailability[]; total: number } {
@@ -25,6 +28,9 @@ export function listAgents(): { agents: AgentAvailability[]; total: number } {
         command: basename(agent.command),
         reason: available ? null : "Configured executable was not found on disk or PATH.",
         checked_at: checkedAt,
+        adapter: typeof agent.adapter === "string" ? agent.adapter : ["codex", "opencode"].includes(name) ? name : null,
+        model: typeof agent.model === "string" ? agent.model : null,
+        capabilities: { model_override: typeof agent.adapter === "string" || ["codex", "opencode"].includes(name) },
       };
     });
   return { agents, total: agents.length };

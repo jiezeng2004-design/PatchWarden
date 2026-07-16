@@ -16,7 +16,7 @@
     const list = byId("agentList");
     list.replaceChildren();
     for (const agent of agents) {
-      const row = document.createElement("label");
+      const row = document.createElement("div");
       row.className = "agent-row";
       const checkbox = document.createElement("input");
       checkbox.type = "checkbox";
@@ -27,15 +27,24 @@
       const details = document.createElement("div");
       const title = document.createElement("div");
       title.className = "agent-name";
-      title.textContent = agent.name === "codex" ? "Codex CLI" : "OpenCode";
+      title.textContent = agent.displayName || agent.name;
       const path = document.createElement("div");
       path.className = "agent-detail";
-      path.textContent = agent.executablePath || agent.reason || "未找到";
+      path.textContent = agent.commandLabel || agent.reason || "未找到";
       details.append(title, path);
+      const model = document.createElement("select");
+      model.className = "agent-model";
+      model.dataset.agentId = agent.id || agent.name;
+      const defaultOption = document.createElement("option"); defaultOption.value = ""; defaultOption.textContent = "跟随 Agent 默认"; model.append(defaultOption);
+      for (const item of agent.models || []) { const option = document.createElement("option"); option.value = item.id; option.textContent = item.label; model.append(option); }
+      const customOption = document.createElement("option"); customOption.value = "__custom__"; customOption.textContent = "自定义模型 ID"; model.append(customOption);
+      const custom = document.createElement("input"); custom.className = "agent-custom-model hidden"; custom.placeholder = "provider/model"; custom.spellcheck = false;
+      model.addEventListener("change", () => custom.classList.toggle("hidden", model.value !== "__custom__"));
       const badge = document.createElement("span");
       badge.className = `badge${agent.available ? "" : " missing"}`;
       badge.textContent = agent.available ? "可用" : "未找到";
-      row.append(checkbox, details, badge);
+      const controls = document.createElement("div"); controls.className = "agent-model-controls"; controls.append(model, custom);
+      row.append(checkbox, details, controls, badge);
       list.append(row);
     }
   }
@@ -90,7 +99,12 @@
 
   byId("saveSetup").addEventListener("click", async () => {
     const enabledAgents = Array.from(document.querySelectorAll("input[name='agent']:checked")).map((input) => input.value);
-    const result = await api.saveSetup({ workspaceRoot, enabledAgents });
+    const agentModels = {};
+    document.querySelectorAll(".agent-model").forEach((select) => {
+      const custom = select.parentElement.querySelector(".agent-custom-model");
+      agentModels[select.dataset.agentId] = select.value === "__custom__" ? custom.value.trim() : select.value || null;
+    });
+    const result = await api.saveSetup({ workspaceRoot, enabledAgents, agentModels });
     if (!result.ok) {
       showStep(1);
       byId("workspaceError").textContent = result.error || "无法保存配置";

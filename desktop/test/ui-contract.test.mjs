@@ -63,4 +63,15 @@ describe("desktop UI contracts", () => {
     assert.match(dashboard, /ok: true,\s+detail: directProfileEnabled \? '已启用' : '可选，未启用'/);
     assert.doesNotMatch(dashboard, /\|\| !directProfileEnabled \|\| !releaseReady/);
   });
+
+  it("boots the desktop theme before CSS and keeps desktop navigation static", () => {
+    for (const file of ["audit", "dashboard", "direct-sessions", "getting-started", "logs", "settings", "task-detail", "tasks", "workspace"]) {
+      const html = read(`ui/pages/${file}.html`);
+      assert.ok(html.indexOf("/desktop-bootstrap.js") < html.indexOf("/desktop.css"), `${file} must bootstrap before desktop CSS`);
+      assert.match(html, /data-nav-key="getting-started"/);
+      assert.match(html, /data-nav-key="settings"/);
+    }
+    const bridge = read("ui/desktop-bridge.js");
+    assert.doesNotMatch(bridge, /addSettingsNavigation/);
+  });
 });

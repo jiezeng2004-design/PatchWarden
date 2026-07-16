@@ -1,5 +1,6 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { AGENT_ADAPTERS, buildAgentRegistration, getAgentAdapter, validateModelId } from "./agent-adapters.mjs";
 
 export const DEFAULT_PREFERENCES = Object.freeze({ theme: "system", closeBehavior: "tray", language: "system", connectionMode: "chatgpt" });
 export const DEFAULT_RUNTIME_SETTINGS = Object.freeze({
@@ -64,15 +65,16 @@ export function updatePreferences(path, patch) {
   return next;
 }
 
-export function buildConfig(workspaceRoot, detectedAgents) {
+export function buildConfig(workspaceRoot, detectedAgents, selections = []) {
   const agents = {};
+  const selectedById = new Map(selections.map((selection) => [selection.id, selection]));
   for (const agent of detectedAgents) {
-    if (!agent.available || !agent.executablePath) continue;
-    if (agent.name === "codex") {
-      agents.codex = { command: agent.executablePath, args: ["exec", "--cd", "{repo}", "{prompt}"] };
-    } else if (agent.name === "opencode") {
-      agents.opencode = { command: agent.executablePath, args: ["run", "{prompt}"] };
-    }
+    const id = agent.id || agent.name;
+    const normalizedAgent = { ...agent, command: agent.command || agent.executablePath, prefixArgs: agent.prefixArgs || [] };
+    if (!getAgentAdapter(id) || !normalizedAgent.available || !normalizedAgent.command) continue;
+    const selection = selectedById.get(id);
+    if (selection && selection.enabled === false) continue;
+    agents[id] = buildAgentRegistration(id, normalizedAgent, selection?.model);
   }
   return {
     workspaceRoot,
@@ -96,6 +98,48 @@ export function buildConfig(workspaceRoot, detectedAgents) {
       direct: { mode: "environment" }
     }
   };
+}
+
+export function readAgentSettings(configPath) {
+  const config = readJson(configPath) || {};
+  const configured = config.agents && typeof config.agents === "object" ? config.agents : {};
+  return Object.entries(configured).map(([id, agent]) => {
+    const adapterId = getAgentAdapter(agent?.adapter) ? agent.adapter : getAgentAdapter(id) ? id : null;
+    const modelArg = Array.isArray(agent?.args) ? agent.args.findIndex((arg) => arg === "--model" || arg === "-m") : -1;
+    const inferredModel = modelArg >= 0 ? agent.args[modelArg + 1] : null;
+    return {
+      id,
+      adapter: adapterId,
+      managed: Boolean(adapterId),
+      enabled: true,
+      model: typeof agent?.model === "string" ? agent.model : inferredModel || null,
+    };
+  });
+}
+
+export function updateAgentSettings(configPath, detections, selections) {
+  const config = readJson(configPath);
+  if (!config || typeof config.workspaceRoot !== "string") throw new Error("PatchWarden 配置尚未完成");
+  if (!Array.isArray(selections)) throw new Error("Agent 设置数据无效");
+  const detectionById = new Map(detections.map((agent) => [agent.id || agent.name, agent]));
+  const nextAgents = { ...(config.agents || {}) };
+  for (const adapter of AGENT_ADAPTERS) {
+    const selection = selections.find((item) => item && item.id === adapter.id);
+    if (!selection) continue;
+    if (selection.enabled === false) {
+      delete nextAgents[adapter.id];
+      continue;
+    }
+    validateModelId(selection.model);
+    const detection = detectionById.get(adapter.id);
+    if ((!detection?.available || !detection.command) && nextAgents[adapter.id]) {
+      continue;
+    }
+    nextAgents[adapter.id] = buildAgentRegistration(adapter.id, detection, selection.model);
+  }
+  const updated = { ...config, agents: nextAgents };
+  atomicWriteJson(configPath, updated, true);
+  return readAgentSettings(configPath);
 }
 
 function normalizeProxyEndpoint(value) {
