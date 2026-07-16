@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { delimiter, basename, dirname, isAbsolute, join } from "node:path";
+import { basename, win32 } from "node:path";
 import { PatchWardenConfig } from "../config.js";
 import { guardAgentCommand, sanitizePromptArg, type AllowedCommand } from "../security/commandGuard.js";
 
@@ -26,16 +26,16 @@ export function resolveAgentExecutable(
 ): string {
   if (platform !== "win32" || agentName !== "opencode") return command;
 
-  const commandName = basename(command).toLowerCase();
+  const commandName = win32.basename(command).toLowerCase();
   if (!new Set(["opencode", "opencode.cmd", "opencode.ps1", "opencode.bat"]).has(commandName)) {
     return command;
   }
 
-  const roots = isAbsolute(command)
-    ? [dirname(command)]
-    : pathValue.split(delimiter).filter(Boolean);
+  const roots = win32.isAbsolute(command)
+    ? [win32.dirname(command)]
+    : pathValue.split(win32.delimiter).filter(Boolean);
   for (const root of roots) {
-    const nativeExecutable = join(root, "node_modules", "opencode-ai", "bin", "opencode.exe");
+    const nativeExecutable = win32.join(root, "node_modules", "opencode-ai", "bin", "opencode.exe");
     if (fileExists(nativeExecutable)) return nativeExecutable;
   }
   return command;
