@@ -24,6 +24,7 @@ import { runAllSchemaDriftChecks } from "./tools/schemaDriftCheck.js";
 import { runReleaseGateCheck } from "./release/releaseGate.js";
 import { PATCHWARDEN_VERSION } from "./version.js";
 import { logger } from "./logging.js";
+import { unsafeWorkspaceRootLabel } from "./security/workspaceRootGuard.js";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -109,7 +110,7 @@ const checkNpmAvailable: DoctorCheck = {
   id: "npm-available",
   description: "npm available",
   run() {
-    const npmVer = cmd("npm --version");
+    const npmVer = cmd(process.platform === "win32" ? "npm.cmd --version" : "npm --version");
     return [checkResult("npm available", npmVer !== "", npmVer || "npm not found in PATH")];
   },
 };
@@ -199,18 +200,9 @@ const checkWorkspaceRoot: DoctorCheck = {
     try { isDir = statSync(ws).isDirectory(); } catch {}
     results.push(checkResult("workspaceRoot is directory", isDir, ws));
 
-    const dangerousRoots = [
-      { pattern: /^[A-Za-z]:\\?$/, label: "drive root" },
-      { pattern: /\\Users\\[^\\]+$/, label: "user home directory" },
-      { pattern: /\\Desktop$/, label: "Desktop" },
-      { pattern: /\\Downloads$/, label: "Downloads" },
-      { pattern: /\\Documents$/, label: "Documents" },
-    ];
-
-    for (const { pattern, label } of dangerousRoots) {
-      if (pattern.test(ws)) {
-        results.push(warnResult(`workspaceRoot is ${label}: ${ws} — consider narrowing to a project directory`));
-      }
+    const unsafeLabel = unsafeWorkspaceRootLabel(ws);
+    if (unsafeLabel) {
+      results.push(warnResult(`workspaceRoot is ${unsafeLabel}: ${ws} — consider narrowing to a project directory`));
     }
     return results;
   },
@@ -312,11 +304,13 @@ const checkServerVersion: DoctorCheck = {
         packageJson.version === PATCHWARDEN_VERSION,
         `${PATCHWARDEN_VERSION} vs ${packageJson.version}`,
       ),
-      checkResult(
-        "Manifest preflight script exists",
-        existsSync(resolve(process.cwd(), "scripts/checks/mcp-manifest-check.js")),
-        "scripts/checks/mcp-manifest-check.js",
-      ),
+      process.env.PATCHWARDEN_DESKTOP_RUNTIME === "1"
+        ? okResult("Manifest preflight covered by compiled desktop runtime checks")
+        : checkResult(
+            "Manifest preflight script exists",
+            existsSync(resolve(process.cwd(), "scripts/checks/mcp-manifest-check.js")),
+            "scripts/checks/mcp-manifest-check.js",
+          ),
     ];
   },
 };

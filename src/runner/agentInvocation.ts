@@ -1,4 +1,5 @@
-import { basename } from "node:path";
+import { existsSync } from "node:fs";
+import { delimiter, basename, dirname, isAbsolute, join } from "node:path";
 import { PatchWardenConfig } from "../config.js";
 import { guardAgentCommand, sanitizePromptArg, type AllowedCommand } from "../security/commandGuard.js";
 
@@ -9,6 +10,35 @@ export interface AgentInvocation {
   commandLabel: string;
   promptMode: "inline" | "file";
   promptFilePath?: string;
+}
+
+/**
+ * Resolve the Windows npm shim used by OpenCode to its native executable.
+ * Node cannot spawn .cmd/.ps1 shims directly with shell disabled (EINVAL), and
+ * enabling a shell would make the task prompt part of shell parsing.
+ */
+export function resolveAgentExecutable(
+  agentName: string,
+  command: string,
+  platform = process.platform,
+  pathValue = process.env.PATH || "",
+  fileExists: (path: string) => boolean = existsSync,
+): string {
+  if (platform !== "win32" || agentName !== "opencode") return command;
+
+  const commandName = basename(command).toLowerCase();
+  if (!new Set(["opencode", "opencode.cmd", "opencode.ps1", "opencode.bat"]).has(commandName)) {
+    return command;
+  }
+
+  const roots = isAbsolute(command)
+    ? [dirname(command)]
+    : pathValue.split(delimiter).filter(Boolean);
+  for (const root of roots) {
+    const nativeExecutable = join(root, "node_modules", "opencode-ai", "bin", "opencode.exe");
+    if (fileExists(nativeExecutable)) return nativeExecutable;
+  }
+  return command;
 }
 
 /**
@@ -24,6 +54,7 @@ export function buildAgentInvocation(
   promptFilePath?: string
 ): AgentInvocation {
   const agentCmd = guardAgentCommand(agentName, config);
+  const executable = resolveAgentExecutable(agentName, agentCmd.command);
   const sanitizedPrompt = sanitizePromptArg(prompt);
 
   const hasPromptFilePlaceholder = agentCmd.args.includes("{prompt_file}");
@@ -37,10 +68,10 @@ export function buildAgentInvocation(
   });
 
   return {
-    command: agentCmd.command,
+    command: executable,
     args: resolvedArgs,
     cwd: repoPath,
-    commandLabel: `${basename(agentCmd.command)} (configured agent command)`,
+    commandLabel: `${basename(executable)} (configured agent command)`,
     promptMode,
     ...(promptMode === "file" && promptFilePath ? { promptFilePath } : {}),
   };

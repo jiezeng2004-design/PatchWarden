@@ -369,6 +369,21 @@ PATCHWARDEN_TOOL_PROFILE = "full"
 
 ## 接入 ChatGPT Connector
 
+> 当前 ChatGPT 术语为 **developer-mode app / Plugins**；旧版文档与部分界面曾称为 Connector。新配置请以 Plugins 为准。
+
+### 桌面版八步新手流程
+
+1. 确认 OpenAI Platform 账号具有 Tunnel 权限，并在目标 ChatGPT workspace 开启 developer mode。
+2. 打开 [Platform Tunnel 设置](https://platform.openai.com/settings/organization/tunnels)，创建 Tunnel，并关联目标 ChatGPT workspace。
+3. 启动 PatchWarden Desktop，在“设置 → MCP 与隧道”检测或选择现有的 `tunnel-client.exe`；应用不会自动下载或执行新软件。
+4. 输入 Core Tunnel ID 与专用 Tunnel runtime API key。该凭据对应 `CONTROL_PLANE_API_KEY`，**不是**普通应用使用的 `OPENAI_API_KEY`。
+5. 配置环境代理、无代理或不含凭据的 HTTP/HTTPS/SOCKS5（Mixed）代理，并先确认代理端口可达。
+6. 点击“配置并验证 Core”。桌面端初始化 `patchwarden` profile，运行 `tunnel-client doctor --explain --json`，验证成功后才用 Windows DPAPI 保存凭据；随后启动 Core。
+7. 在“开始使用”确认 Tunnel ready、Watcher healthy，并确认 `chatgpt_core` 发现固定的 26 个工具。Direct 是设置页中的可选高级能力，未启用时“全部启动”只启动 Core。
+8. 在 ChatGPT **Settings → Plugins** 创建 developer-mode app，选择刚创建的 Tunnel；重新连接后新建对话，调用 `health_check` 验证。
+
+首次引导也可选择“本地 MCP”。该路线只配置安全工作区和本地 MCP 客户端，可以跳过第 1、2、4、5、7、8 步中的 Platform/ChatGPT Tunnel 操作。
+
 推荐的 Windows 链路：
 
 ```text
@@ -663,6 +678,31 @@ Direct 两种模式的启动、停止、重启与状态。也可以在 PowerShel
 ```
 
 日常桌面入口：`PatchWarden-Desktop.cmd` 启动托盘并确保 Control Center 可用，不自动打开额外浏览器窗口。只有调试托盘时才使用 `PatchWarden-Control-Tray.cmd --foreground`；需要完整 Web 控制台时打开 `PatchWarden-Control.cmd`；需要一键收尾时使用 `Stop-PatchWarden.cmd` 关闭 Core/Direct、Control Center 和托盘。
+
+### Windows 安装版
+
+公开分发可以构建独立的 PatchWarden Desktop 安装包。它提供 Electron
+独立窗口、首次工作区引导、系统托盘和设置页，同时继续复用相同的
+loopback Control Center 与安全控制 API。桌面依赖隔离在私有的
+`desktop/` 子包中，不进入 `patchwarden` npm 包。
+
+安装版仍要求 Windows x64、Node.js 18+ 和 tunnel-client。首次启动会在
+`PATH`、当前用户目录和工作区附近做有界检测；未找到时可进入只读控制台，
+再从“设置 -> MCP 与隧道”选择 `tunnel-client.exe` 并查看 SHA256 校验步骤。
+应用不会自动下载或运行新软件。设置页还提供 Direct 显式开关，以及环境代理、
+无代理、手动代理三种模式；手动代理只接受不含凭据的 http/https/socks5 URL。
+启动和重启只有在 health/ready 与 Core Watcher 验证通过后才会报告成功。
+
+```powershell
+npm.cmd install --prefix desktop --cache .\.npm-cache
+npm.cmd run desktop:test
+npm.cmd run desktop:package
+```
+
+安装包与 SHA256 文件输出到 `release\desktop`。首版不包含自动更新或
+代码签名，Windows SmartScreen 可能提示未知发布者；发布前必须核对
+GitHub Release 来源和 SHA256。完整安装、运行与卸载说明见
+[docs/desktop-app.md](docs/desktop-app.md)。
 
 旧的单用途入口保留在 `scripts/launchers/` 作为兼容层；个人入口位于
 `.local/launchers/`，并继续被 Git 和发布包排除。`stop` / `restart` 会同时检查

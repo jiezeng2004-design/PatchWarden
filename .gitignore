@@ -10,6 +10,7 @@ dist/
 patchwarden.config.json
 safe-bifrost.config.json
 /release/
+/desktop/.stage/
 patchwarden-release.zip
 patchwarden-release.tar.gz
 patchwarden-*.tgz

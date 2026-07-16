@@ -89,6 +89,58 @@ function Read-FileLineSafe {
   }
 }
 
+function Write-JsonFileAtomic {
+  param([string]$Path, [object]$Payload)
+  $directory = Split-Path -Parent $Path
+  New-Item -ItemType Directory -Force -Path $directory | Out-Null
+  $temporary = "$Path.tmp"
+  $Payload | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $temporary -Encoding UTF8
+  Move-Item -LiteralPath $temporary -Destination $Path -Force
+}
+
+function Write-BackgroundStartingState {
+  param($Definition)
+  $statusPath = Join-Path $Definition.RuntimeDirectory "tunnel-status.json"
+  $previous = Read-JsonFileSafe -Path $statusPath
+  $payload = [ordered]@{
+    status = "starting"
+    reason_code = $null
+    ready = $false
+    attempt = 0
+    pid = $null
+    checked_at = (Get-Date).ToUniversalTime().ToString("o")
+    next_retry_at = $null
+    last_error = $null
+    last_exit_code = $null
+    stdout_tail = @()
+    stderr_tail = @()
+    stdout_log = Join-Path $Definition.RuntimeDirectory "tunnel-client.stdout.log"
+    stderr_log = Join-Path $Definition.RuntimeDirectory "tunnel-client.stderr.log"
+    server_version = if ($previous) { $previous.server_version } else { $null }
+    schema_epoch = if ($previous) { $previous.schema_epoch } else { $null }
+    tool_profile = $Definition.ToolProfile
+    tool_count = if ($previous) { $previous.tool_count } else { $null }
+    tool_names = if ($previous -and $previous.tool_names) { @($previous.tool_names) } else { @() }
+    tool_manifest_sha256 = if ($previous) { $previous.tool_manifest_sha256 } else { $null }
+    tools_ready = [bool]($previous -and $previous.tools_ready)
+    core_tools_ready = [bool]($Definition.Key -eq "core" -and $previous -and $previous.core_tools_ready)
+  }
+  Write-JsonFileAtomic -Path $statusPath -Payload $payload
+}
+
+function Write-BackgroundSupervisorState {
+  param($Definition, [string]$Status, [Nullable[int]]$ProcessId, [string]$ReasonCode = $null)
+  $payload = [ordered]@{
+    status = $Status
+    reason_code = $ReasonCode
+    pid = $ProcessId
+    checked_at = (Get-Date).ToUniversalTime().ToString("o")
+    stdout_log = Join-Path $Definition.RuntimeDirectory "supervisor.stdout.log"
+    stderr_log = Join-Path $Definition.RuntimeDirectory "supervisor.stderr.log"
+  }
+  Write-JsonFileAtomic -Path (Join-Path $Definition.RuntimeDirectory "supervisor-status.json") -Payload $payload
+}
+
 function Test-TunnelHealthEndpoint {
   param([string]$HealthUrl)
   if (-not $HealthUrl) { return $null }
@@ -522,20 +574,33 @@ function Start-Mode {
   if ($Background) {
     $launcherScript = Join-Path $PSScriptRoot "start-patchwarden-tunnel.ps1"
     if (-not (Test-Path -LiteralPath $launcherScript)) { throw "Launcher script not found: $launcherScript" }
+    $backgroundWrapper = Join-Path $PSScriptRoot "run-background-supervisor.ps1"
+    if (-not (Test-Path -LiteralPath $backgroundWrapper)) { throw "Background wrapper not found: $backgroundWrapper" }
     $healthListenAddr = ([Uri]$Definition.HealthBaseUrl).Authority
     $arguments = @(
-      "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $launcherScript,
+      "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $backgroundWrapper,
       "-ToolProfile", $Definition.ToolProfile,
       "-Profile", $Definition.Profile,
-      "-HealthListenAddr", $healthListenAddr,
-      "-NoTunnelWebUi"
+      "-HealthListenAddr", $healthListenAddr
     )
     if (-not $Definition.HasWatcher) { $arguments += "-SkipWatcher" }
     if ($WhatIf) {
       Write-Host "[start:$($Definition.Key)] WHAT-IF: start hidden supervisor for $($Definition.Profile)" -ForegroundColor Magenta
       return
     }
-    $process = Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -WorkingDirectory $ProjectRoot -PassThru -WindowStyle Hidden
+    New-Item -ItemType Directory -Force -Path $Definition.RuntimeDirectory | Out-Null
+    $supervisorStdout = Join-Path $Definition.RuntimeDirectory "supervisor.stdout.log"
+    $supervisorStderr = Join-Path $Definition.RuntimeDirectory "supervisor.stderr.log"
+    Write-BackgroundStartingState -Definition $Definition
+    Set-Content -LiteralPath $supervisorStdout -Value "" -Encoding UTF8 -NoNewline
+    Set-Content -LiteralPath $supervisorStderr -Value "" -Encoding UTF8 -NoNewline
+    try {
+      $process = Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -WorkingDirectory $ProjectRoot -PassThru -WindowStyle Hidden
+      Write-BackgroundSupervisorState -Definition $Definition -Status "running" -ProcessId $process.Id
+    } catch {
+      Write-BackgroundSupervisorState -Definition $Definition -Status "failed" -ProcessId $null -ReasonCode "supervisor_launch_failed"
+      throw
+    }
     Write-Host "[start:$($Definition.Key)] Started hidden supervisor PID $($process.Id). Logs: $($Definition.RuntimeDirectory)" -ForegroundColor Green
     return
   }

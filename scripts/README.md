@@ -11,6 +11,11 @@ desktop use should start from the root entrypoints:
 .\PatchWarden.cmd status all
 ```
 
+The installable Windows desktop shell is built separately with
+`npm.cmd run desktop:package`. It preserves these source/npm entrypoints and
+uses the same Control Center API rather than adding another process-management
+surface. See `docs/desktop-app.md`.
+
 ## Control Scripts
 
 - `control/manage-patchwarden.ps1`: backing implementation for `PatchWarden.cmd`.
