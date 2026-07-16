@@ -1,0 +1,61 @@
+{
+  "name": "patchwarden-desktop",
+  "version": "1.6.0",
+  "description": "Windows desktop shell for the PatchWarden local Control Center.",
+  "author": "PatchWarden contributors",
+  "private": true,
+  "type": "module",
+  "main": "src/main.mjs",
+  "dependencies": {
+    "jsonc-parser": "3.3.1",
+    "smol-toml": "1.3.4",
+    "yaml": "2.8.1"
+  },
+  "scripts": {
+    "stage": "node scripts/stage.mjs",
+    "predev": "npm run stage",
+    "dev": "electron .",
+    "test": "node scripts/test.mjs",
+    "prebuild:dir": "npm run stage",
+    "build:dir": "electron-builder --win dir --x64",
+    "prebuild": "npm run stage",
+    "build": "electron-builder --win nsis zip --x64 && node scripts/checksum.mjs"
+  },
+  "devDependencies": {
+    "electron": "43.1.1",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "io.github.jiezeng2004design.patchwarden",
+    "productName": "PatchWarden",
+    "asar": true,
+    "directories": {
+      "output": "../release/desktop"
+    },
+    "files": [
+      "src/**",
+      "onboarding/**",
+      "assets/**",
+      "package.json"
+    ],
+    "extraResources": [
+      { "from": ".stage/core", "to": "core" },
+      { "from": ".stage/core/node_modules", "to": "core/node_modules", "filter": ["**/*"] },
+      { "from": ".stage/icon.ico", "to": "icon.ico" },
+      { "from": ".stage/icon.png", "to": "icon.png" }
+    ],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": ".stage/icon.ico",
+      "artifactName": "PatchWarden-Setup-${version}-x64.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": false
+    }
+  }
+}

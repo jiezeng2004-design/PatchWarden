@@ -8,7 +8,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Current source version: **v1.5.1**. See the
+Current source version: **v1.6.0**. See the
 [CHANGELOG](CHANGELOG.md), [migration guide](docs/migration-from-safe-bifrost.md), and
 [release checklist](docs/release-checklist.md). Verify GitHub Release / npm publication separately before release.
 
@@ -463,11 +463,26 @@ configured under `agents` is available.
 
 ## Connect ChatGPT
 
+> The current ChatGPT terms are **developer-mode app / Plugins**. Older docs and UI builds called this a Connector.
+
+### Eight-step desktop setup
+
+1. Confirm that the OpenAI Platform account has Tunnel access and enable developer mode in the target ChatGPT workspace.
+2. Open [Platform Tunnel settings](https://platform.openai.com/settings/organization/tunnels), create a Tunnel, and associate the target ChatGPT workspace.
+3. Start PatchWarden Desktop and detect or choose an existing `tunnel-client.exe` under **Settings → MCP and Tunnel**. The app never downloads or executes new software automatically.
+4. Enter the Core Tunnel ID and the dedicated Tunnel runtime API key. This credential is used as `CONTROL_PLANE_API_KEY`; it is **not** the `OPENAI_API_KEY` used by ordinary applications.
+5. Select environment proxy, no proxy, or a credential-free HTTP/HTTPS/SOCKS5 (Mixed) proxy, then confirm that its port is reachable.
+6. Choose **Configure and verify Core**. Desktop initializes the `patchwarden` profile, runs `tunnel-client doctor --explain --json`, and saves the credential with Windows DPAPI only after validation succeeds; then start Core.
+7. On **Getting Started**, confirm Tunnel ready and Watcher healthy, and verify that `chatgpt_core` exposes the fixed 26-tool catalog. Direct is optional; when disabled, Start All starts Core and reports Direct as skipped.
+8. In ChatGPT **Settings → Plugins**, create a developer-mode app and choose the Tunnel. Reconnect it, open a new chat, and call `health_check`.
+
+The first-run wizard also offers **Local MCP**. That route configures the safe workspace and a local MCP client, and can skip the Platform/ChatGPT Tunnel portions of steps 1, 2, 4, 5, 7, and 8.
+
 Recommended Windows path:
 
 ```text
 ChatGPT Web
-→ ChatGPT Connector
+→ ChatGPT developer-mode app / Plugins (formerly Connector)
 → OpenAI Secure MCP Tunnel
 → PatchWarden stdio MCP
 → Watcher
@@ -512,7 +527,7 @@ Runtime status is stored under:
 This directory contains PIDs, health state, and redacted diagnostics. It must
 not contain the API key or Tunnel ID.
 
-When creating the ChatGPT Connector:
+When creating the ChatGPT developer-mode app in Plugins:
 
 - Select the tunnel **Channel**.
 - Choose **None** for authentication unless you implemented OAuth.
@@ -782,6 +797,39 @@ available from PowerShell:
 ```
 
 For daily desktop use, start with `PatchWarden-Desktop.cmd`; it starts the tray and keeps Control Center available without opening extra browser windows. Use `PatchWarden-Control-Tray.cmd --foreground` only for tray debugging, `PatchWarden-Control.cmd` for the full local Web dashboard, and `Stop-PatchWarden.cmd` for one-click shutdown of Core/Direct, Control Center, and the tray.
+
+### Windows installer
+
+PatchWarden Desktop ships as an installer and a no-install ZIP. It provides an Electron window,
+first-run workspace setup, a system tray, and desktop settings while reusing
+the same loopback Control Center and bounded control APIs. Electron and builder
+dependencies remain isolated in the private `desktop/` package and are not
+included in the public `patchwarden` npm package.
+
+The installer still requires Windows x64, Node.js 18+, and tunnel-client. The
+first run performs bounded discovery through `PATH`, current-user locations,
+and the area next to the workspace. If it is missing, the read-only console
+remains available and **Settings > MCP and tunnel** provides a dedicated file
+picker plus SHA256 guidance. The app never downloads or runs new software
+automatically. Settings also exposes the explicit Direct switch and
+environment, none, or manual proxy modes; manual URLs support only http,
+https, or socks5 without embedded credentials. Start/restart reports success
+only after health/ready and the Core watcher have been verified.
+Desktop supports Codex, OpenCode, Claude Code, Gemini CLI, GitHub Copilot CLI,
+Qwen Code, Kimi Code, and Aider. It reads only model fields from agent settings,
+never credentials.
+
+```powershell
+npm.cmd install --prefix desktop --cache .\.npm-cache
+npm.cmd run desktop:test
+npm.cmd run desktop:package
+```
+
+The installer, portable ZIP, and SHA256 file are written to `release\desktop`. The first
+release is unsigned and has no automatic updater, so Windows SmartScreen may
+show an unknown-publisher warning. Verify the GitHub Release source and SHA256.
+See [docs/desktop-app.md](docs/desktop-app.md) for installation, runtime, and
+uninstall details.
 
 The old single-purpose launchers remain under `scripts/launchers/` as a
 compatibility layer. Personal launchers live under `.local/launchers/` and
@@ -1153,6 +1201,7 @@ and release-asset checksums independently.
 
 ## Related documentation
 
+- [Windows Desktop installer](docs/desktop-app.md)
 - [v0.6.4 release notes](docs/release-v0.6.4.md)
 - [v0.6.1 release notes](docs/release-v0.6.1.md)
 - [v0.6.0 release notes](docs/release-v0.6.0.md)

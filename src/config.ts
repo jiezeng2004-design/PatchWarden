@@ -1,11 +1,13 @@
 import { readFileSync, existsSync } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 
 // ── Type definitions ──────────────────────────────────────────────
 
 export interface AgentConfig {
   command: string;
   args: string[];
+  adapter?: string;
+  model?: string;
 }
 
 export interface PatchWardenConfig {
@@ -31,6 +33,12 @@ export interface PatchWardenConfig {
   agentAssessmentMaxOutputBytes?: number;
   agentAssessmentAgentName?: string;
   enableDirectProfile?: boolean;
+  tunnelClientPath?: string;
+  tunnelProxy?: {
+    scope: "shared" | "separate";
+    core: { mode: "environment" | "none" | "manual"; url?: string };
+    direct: { mode: "environment" | "none" | "manual"; url?: string };
+  };
   directSessionsDir: string;
   directSessionTtlSeconds: number;
   directMaxPatchBytes: number;
@@ -288,6 +296,36 @@ function normalizeConfig(config: PatchWardenConfig): PatchWardenConfig {
   }
   if (config.enableDirectProfile !== undefined && typeof config.enableDirectProfile !== "boolean") {
     throw new Error("enableDirectProfile must be a boolean");
+  }
+  if (config.tunnelClientPath !== undefined) {
+    if (typeof config.tunnelClientPath !== "string" || !isAbsolute(config.tunnelClientPath)) {
+      throw new Error("tunnelClientPath must be an absolute path");
+    }
+    if (basename(config.tunnelClientPath).toLowerCase() !== "tunnel-client.exe") {
+      throw new Error("tunnelClientPath must point to tunnel-client.exe");
+    }
+  }
+  if (config.tunnelProxy !== undefined) {
+    if (!config.tunnelProxy || typeof config.tunnelProxy !== "object" || !["shared", "separate"].includes(config.tunnelProxy.scope)) {
+      throw new Error("tunnelProxy.scope must be shared or separate");
+    }
+    for (const key of ["core", "direct"] as const) {
+      const endpoint = config.tunnelProxy[key];
+      if (!endpoint || typeof endpoint !== "object" || !["environment", "none", "manual"].includes(endpoint.mode)) {
+        throw new Error(`tunnelProxy.${key}.mode must be environment, none, or manual`);
+      }
+      if (endpoint.mode === "manual") {
+        if (typeof endpoint.url !== "string") throw new Error(`tunnelProxy.${key}.url is required in manual mode`);
+        let parsed: URL;
+        try { parsed = new URL(endpoint.url); } catch { throw new Error(`tunnelProxy.${key}.url must be a valid URL`); }
+        if (!["http:", "https:", "socks5:"].includes(parsed.protocol)) {
+          throw new Error(`tunnelProxy.${key}.url must use http, https, or socks5`);
+        }
+        if (parsed.username || parsed.password) throw new Error(`tunnelProxy.${key}.url must not contain credentials`);
+      } else if (endpoint.url !== undefined) {
+        throw new Error(`tunnelProxy.${key}.url is only allowed in manual mode`);
+      }
+    }
   }
   if (!config.directSessionsDir || typeof config.directSessionsDir !== "string") {
     throw new Error("directSessionsDir must be a non-empty string");

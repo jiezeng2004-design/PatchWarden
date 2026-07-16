@@ -133,6 +133,8 @@ html.dark {
         background-color: currentColor;
       }
     </style>
+<script src="/desktop-bootstrap.js"></script>
+<link rel="stylesheet" href="/desktop.css">
 </head>
 <body class="flex h-screen overflow-hidden">
 
@@ -150,6 +152,10 @@ html.dark {
 
     <!-- Navigation -->
     <nav class="flex-1 flex flex-col gap-1 px-3 pt-4 overflow-y-auto">
+      <a href="/pages/getting-started.html" data-nav-key="getting-started" class="desktop-only-nav flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors truncate" style="color: var(--pw-text-secondary); font-family: var(--pw-font-sans);">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="shrink-0"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.87 12.87 0 0 1 22 2c0 2.72-.78 7.5-6.05 11a22.35 22.35 0 0 1-3.95 2z"/></svg>
+        <span class="truncate" data-i18n="nav.gettingStarted">开始使用</span>
+      </a>
 
       <a href="/pages/dashboard.html" data-nav-key="dashboard" data-active="true" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors truncate" style="color: var(--pw-text-secondary); font-family: var(--pw-font-sans);">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0">
@@ -205,6 +211,10 @@ html.dark {
         <span class="truncate" data-zh="日志" data-en="Logs">日志</span>
       </a>
 
+      <a href="/pages/settings.html" data-nav-key="settings" class="desktop-only-nav flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors truncate" style="color: var(--pw-text-secondary); font-family: var(--pw-font-sans);">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="shrink-0"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9A1.7 1.7 0 0 0 21 10h.2v4H21a1.7 1.7 0 0 0-1.6 1z"/></svg>
+        <span class="truncate" data-i18n="nav.settings">设置</span>
+      </a>
     </nav>
 
     <!-- Bottom Section -->
@@ -238,42 +248,45 @@ html.dark {
     <main class="flex-1 overflow-y-auto p-6" style="background-color: var(--pw-bg-elevated);">
 
       <!-- ===== TOP TOOLBAR ===== -->
-      <div class="flex flex-wrap items-center gap-2 mb-4">
+      <div class="pw-dashboard-toolbar mb-4">
+        <div class="pw-toolbar-actions">
         <button data-action="start-all" class="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap" style="background-color: var(--pw-state-success); color: var(--pw-text-inverse); font-family: var(--pw-font-sans);">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-          <span>Start All</span>
+          <span data-zh="全部启动" data-en="Start All">全部启动</span>
         </button>
         <button data-action="stop-all" class="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap" style="background-color: var(--pw-state-error); color: #fff; font-family: var(--pw-font-sans);">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
-          <span>Stop All</span>
+          <span data-zh="全部停止" data-en="Stop All">全部停止</span>
         </button>
         <button data-action="restart-all" class="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap" style="background-color: var(--pw-state-warning); color: var(--pw-text-inverse); font-family: var(--pw-font-sans);">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
-          <span>Restart All</span>
+          <span data-zh="全部重启" data-en="Restart All">全部重启</span>
         </button>
         <button data-action="refresh" class="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap" style="background-color: var(--pw-bg-surface); color: var(--pw-text-primary); border: 1px solid var(--pw-border); font-family: var(--pw-font-sans);">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
-          <span>Refresh</span>
+          <span data-zh="刷新" data-en="Refresh">刷新</span>
         </button>
-        <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border); font-family: var(--pw-font-sans);">
+        </div>
+        <div class="pw-toolbar-repo flex items-center gap-2 px-3 py-1.5 rounded-lg" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border); font-family: var(--pw-font-sans);">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--pw-text-tertiary);"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2z"/></svg>
           <select id="repo-selector" class="bg-transparent text-sm outline-none cursor-pointer" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans); min-width: 180px;">
-            <option value=".">workspace root</option>
+            <option value=".">工作区根目录</option>
           </select>
         </div>
-        <div class="flex-1 min-w-0"></div>
+        <div class="pw-toolbar-links">
         <button data-action="open-core-tunnel" class="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap" style="background-color: transparent; color: var(--pw-accent); border: 1px solid var(--pw-accent); font-family: var(--pw-font-sans);">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-          <span>Open Core Tunnel UI</span>
+          <span data-zh="Core 隧道" data-en="Open Core Tunnel UI">Core 隧道</span>
         </button>
         <button data-action="open-direct-tunnel" class="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap" style="background-color: transparent; color: var(--pw-accent); border: 1px solid var(--pw-accent); font-family: var(--pw-font-sans);">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-          <span>Open Direct Tunnel UI</span>
+          <span data-zh="Direct 隧道" data-en="Open Direct Tunnel UI">Direct 隧道</span>
         </button>
         <button data-action="open-logs-folder" class="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap" style="background-color: var(--pw-bg-surface); color: var(--pw-text-primary); border: 1px solid var(--pw-border); font-family: var(--pw-font-sans);">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2z"/></svg>
-          <span>Open Logs Folder</span>
+          <span data-zh="日志目录" data-en="Open Logs Folder">日志目录</span>
         </button>
+        </div>
       </div>
 
       <!-- ===== ERROR BANNER ===== -->
@@ -286,15 +299,15 @@ html.dark {
           <span id="health-score-badge" class="text-xs font-semibold px-2.5 py-1 rounded-full whitespace-nowrap" style="color: var(--pw-text-tertiary); background-color: var(--pw-bg-hover);">—</span>
         </div>
         <div id="health-score-body" class="px-4 py-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2">
-          <div class="text-xs" style="color: var(--pw-text-tertiary);">loading…</div>
+          <div class="text-xs" style="color: var(--pw-text-tertiary);">正在加载…</div>
         </div>
       </div>
 
       <!-- ===== SETUP CHECKLIST ===== -->
       <div id="setup-checklist-card" class="rounded-lg mb-4" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
         <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
-          <h2 class="text-sm font-semibold truncate" style="color: var(--pw-text-primary);">Setup checklist</h2>
-          <span id="setup-checklist-summary" class="text-xs whitespace-nowrap" style="color: var(--pw-text-tertiary);">checking</span>
+          <h2 class="text-sm font-semibold truncate" style="color: var(--pw-text-primary);">启动准备</h2>
+          <span id="setup-checklist-summary" class="text-xs whitespace-nowrap" style="color: var(--pw-text-tertiary);">正在检查</span>
         </div>
         <div id="setup-checklist-body" class="grid grid-cols-1 md:grid-cols-3 gap-0"></div>
       </div>
@@ -325,41 +338,41 @@ html.dark {
       <div class="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-6">
         <div class="rounded-lg" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
           <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
-            <h2 class="text-sm font-semibold truncate" style="color: var(--pw-text-primary);">Lineage</h2>
+            <h2 class="text-sm font-semibold truncate" style="color: var(--pw-text-primary);">任务链路</h2>
             <span id="lineage-count" class="text-xs whitespace-nowrap" style="color: var(--pw-text-tertiary);">...</span>
           </div>
-          <div id="lineage-overview-body" class="px-4 py-3 text-sm" style="color: var(--pw-text-tertiary);">Loading</div>
+          <div id="lineage-overview-body" class="px-4 py-3 text-sm" style="color: var(--pw-text-tertiary);">正在加载…</div>
         </div>
         <div class="rounded-lg" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
           <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
-            <h2 class="text-sm font-semibold truncate" style="color: var(--pw-text-primary);">Project Policy</h2>
+            <h2 class="text-sm font-semibold truncate" style="color: var(--pw-text-primary);">项目策略</h2>
             <span id="policy-status" class="text-xs whitespace-nowrap" style="color: var(--pw-text-tertiary);">...</span>
           </div>
-          <div id="policy-overview-body" class="px-4 py-3 text-sm" style="color: var(--pw-text-tertiary);">Loading</div>
+          <div id="policy-overview-body" class="px-4 py-3 text-sm" style="color: var(--pw-text-tertiary);">正在加载…</div>
         </div>
         <div class="rounded-lg" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
           <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
-            <h2 class="text-sm font-semibold truncate" style="color: var(--pw-text-primary);">Release</h2>
+            <h2 class="text-sm font-semibold truncate" style="color: var(--pw-text-primary);">发布检查</h2>
             <span id="release-status" class="text-xs whitespace-nowrap" style="color: var(--pw-text-tertiary);">...</span>
           </div>
-          <div id="release-overview-body" class="px-4 py-3 text-sm" style="color: var(--pw-text-tertiary);">Loading</div>
+          <div id="release-overview-body" class="px-4 py-3 text-sm" style="color: var(--pw-text-tertiary);">正在加载…</div>
         </div>
         <div id="evidence-pack-card" class="rounded-lg" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
           <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
-            <h2 class="text-sm font-semibold truncate" style="color: var(--pw-text-primary);">Evidence Pack</h2>
+            <h2 class="text-sm font-semibold truncate" style="color: var(--pw-text-primary);">证据包</h2>
             <span id="evidence-pack-status" class="text-xs whitespace-nowrap" style="color: var(--pw-text-tertiary);">...</span>
           </div>
-          <div id="evidence-pack-overview-body" class="px-4 py-3 text-sm" style="color: var(--pw-text-tertiary);">Loading</div>
+          <div id="evidence-pack-overview-body" class="px-4 py-3 text-sm" style="color: var(--pw-text-tertiary);">正在加载…</div>
         </div>
       </div>
 
       <!-- ===== STALE TASKS CARD ===== -->
       <div id="stale-tasks-card" class="hidden rounded-lg mb-6" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border); border-left: 3px solid var(--pw-state-warning);">
         <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
-          <h2 class="text-sm font-semibold truncate" data-zh="Stale 任务" data-en="Stale Tasks" style="color: var(--pw-text-primary);">Stale 任务</h2>
+          <h2 class="text-sm font-semibold truncate" data-zh="过期任务" data-en="Stale Tasks" style="color: var(--pw-text-primary);">过期任务</h2>
           <span id="stale-tasks-count" class="text-xs whitespace-nowrap" style="color: var(--pw-text-tertiary);">—</span>
         </div>
-        <div id="stale-tasks-body" class="px-4 py-3 text-sm" style="color: var(--pw-text-tertiary);">Loading</div>
+        <div id="stale-tasks-body" class="px-4 py-3 text-sm" style="color: var(--pw-text-tertiary);">正在加载…</div>
       </div>
 
       <!-- ===== TWO-COLUMN LAYOUT ===== -->
@@ -396,7 +409,7 @@ html.dark {
       <div class="rounded-lg mb-6" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
         <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
           <h2 class="text-sm font-semibold truncate" data-zh="活动日志" data-en="Activity Log" style="color: var(--pw-text-primary);">活动日志</h2>
-          <span class="text-xs whitespace-nowrap" style="color: var(--pw-text-tertiary);">Core + Direct stdout 尾部</span>
+          <span class="text-xs whitespace-nowrap" style="color: var(--pw-text-tertiary);">Core + Direct 输出摘要</span>
         </div>
         <div id="activity-log-body">
           <div class="px-4 py-3 text-xs" style="color: var(--pw-text-tertiary);">加载日志中…</div>
@@ -736,26 +749,26 @@ html.dark {
         {
           label: 'tunnel-client.exe',
           ok: !!tunnel.available,
-          value: tunnel.available ? (tunnel.path || 'available') : 'missing',
-          hint: tunnel.available ? 'Ready for Web UI and tray start/restart.' : 'Expected at TUNNEL_CLIENT_EXE, PATCHWARDEN_TUNNEL_CLIENT_EXE, PATH, or the saved D:\\ai_agent tunnel-client folder.'
+          value: tunnel.available ? (tunnel.path || '已找到') : '未找到',
+          hint: tunnel.available ? '已可供桌面启动和重启使用。' : '请在设置中自动检测或选择 tunnel-client.exe。'
         },
         {
-          label: 'workspaceRoot',
+          label: '工作区',
           ok: !!workspaceRoot,
-          value: workspaceRoot || 'not loaded',
-          hint: 'This is the workspace currently managed by PatchWarden tasks.'
+          value: workspaceRoot || '未加载',
+          hint: 'PatchWarden 任务仅在此工作区内运行。'
         },
         {
-          label: 'Watcher',
+          label: '任务监视器',
           ok: watcher.status === 'healthy',
-          value: watcher.status || 'missing',
-          hint: watcher.status === 'healthy' ? 'Task execution watcher is healthy.' : (watcher.reason || 'Start Core/Watcher when you want queued tasks to execute.')
+          value: watcher.status || '未运行',
+          hint: watcher.status === 'healthy' ? '任务监视器运行正常。' : (watcher.reason || '启动 Core 后，任务监视器会处理排队任务。')
         }
       ];
 
       const missingCount = items.filter(function (item) { return !item.ok; }).length;
       if (summary) {
-        summary.textContent = missingCount === 0 ? 'ready' : (missingCount + ' needs attention');
+        summary.textContent = missingCount === 0 ? '已就绪' : (missingCount + ' 项需要处理');
         summary.style.color = missingCount === 0 ? 'var(--pw-state-success)' : 'var(--pw-state-warning)';
       }
 
@@ -768,7 +781,7 @@ html.dark {
           + '<div class="flex items-center gap-2 mb-1">'
           + dotHtml(kind)
           + '<span class="text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">' + escapeHtml(item.label) + '</span>'
-          + '<span class="ml-auto text-xs px-2 py-0.5 rounded-full" style="color: ' + c.color + '; background-color: ' + c.bg + ';">' + (item.ok ? 'ok' : 'check') + '</span>'
+          + '<span class="ml-auto text-xs px-2 py-0.5 rounded-full" style="color: ' + c.color + '; background-color: ' + c.bg + ';">' + (item.ok ? '正常' : '处理') + '</span>'
           + '</div>'
           + '<div class="text-xs truncate" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);" title="' + escapeHtml(item.value) + '">' + escapeHtml(item.value) + '</div>'
           + '<div class="text-xs mt-1" style="color: var(--pw-text-tertiary);">' + escapeHtml(item.hint) + '</div>'
@@ -946,9 +959,11 @@ html.dark {
         let data = null;
         try { data = await res.json(); } catch (_) { /* ignore */ }
         if (!res.ok) {
-          const msg = (data && (data.error || data.reason || data.message)) || ('HTTP ' + res.status);
+          var msg = (data && (data.error || data.reason || data.message)) || ('HTTP ' + res.status);
+          if (data && Array.isArray(data.next_steps) && data.next_steps.length) msg += ' 下一步：' + data.next_steps.join('；');
           throw new Error(msg);
         }
+        if (data && data.ok === false) throw new Error(data.error || data.reason || '操作未完成');
         return data;
       } finally {
         if (btnEl) {
@@ -1167,11 +1182,12 @@ html.dark {
       const tunnel = (status && status.tunnel) || {};
       const tools = (status && status.tools && status.tools.core) || {};
       const agents = (status && status.agents) || [];
+      const directProfileEnabled = !!(status && status.direct_profile_enabled);
 
       const watcherKind = statusKind(watcher.status);
       const coreReady = !!(tunnel.core && tunnel.core.ready);
       const directReady = !!(tunnel.direct && tunnel.direct.ready);
-      const tunnelReady = coreReady && directReady;
+      const tunnelReady = coreReady && (!directProfileEnabled || directReady);
       const tunnelKind = tunnelReady ? 'success' : (coreReady || directReady ? 'warning' : 'error');
 
       let agentsHtml = '';
@@ -1201,7 +1217,7 @@ html.dark {
         row('Watcher',
           '<span class="text-xs whitespace-nowrap" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">' + watcherText + '</span>',
           watcherKind)
-        + row('Tunnel ready',
+        + row('隧道就绪',
           '<span class="text-xs whitespace-nowrap" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">core ' + (coreReady ? '✓' : '✗') + ' / direct ' + (directReady ? '✓' : '✗') + '</span>',
           tunnelKind)
         + row('schema_epoch',
@@ -1339,7 +1355,7 @@ html.dark {
 
       el.innerHTML =
         '<details class="px-4 py-3">'
-        + '<summary class="cursor-pointer text-xs font-medium" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">Show Core / Direct log tails</summary>'
+        + '<summary class="cursor-pointer text-xs font-medium" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">查看 Core / Direct 本次日志尾部</summary>'
         + '<pre class="mt-3 text-xs overflow-auto m-0" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono); white-space: pre-wrap; word-break: break-all; max-height: 320px;">' + escapeHtml(merged) + '</pre>'
         + '</details>';
     }
@@ -1355,10 +1371,10 @@ html.dark {
         if (count) count.textContent = String(data.total || lineages.length);
         if (!lineages.length) {
           body.innerHTML =
-            '<div class="text-xs mb-2" style="color: var(--pw-text-tertiary);">No loop lineage yet</div>'
+            '<div class="text-xs mb-2" style="color: var(--pw-text-tertiary);">暂无任务链路</div>'
             + '<div class="flex items-center gap-2">'
-            + '<a href="/tasks.html" class="text-xs px-2.5 py-1 rounded whitespace-nowrap" style="background-color: var(--pw-accent-muted); color: var(--pw-accent); border: 1px solid var(--pw-accent);">Start guarded loop</a>'
-            + '<a href="/tasks.html" class="text-xs px-2.5 py-1 rounded whitespace-nowrap" style="background-color: var(--pw-bg-hover); color: var(--pw-text-secondary); border: 1px solid var(--pw-border-subtle);">View recent loop runs</a>'
+            + '<a href="/tasks.html" class="text-xs px-2.5 py-1 rounded whitespace-nowrap" style="background-color: var(--pw-accent-muted); color: var(--pw-accent); border: 1px solid var(--pw-accent);">创建受控任务链</a>'
+            + '<a href="/tasks.html" class="text-xs px-2.5 py-1 rounded whitespace-nowrap" style="background-color: var(--pw-bg-hover); color: var(--pw-text-secondary); border: 1px solid var(--pw-border-subtle);">查看最近运行</a>'
             + '</div>';
           return;
         }
@@ -1504,18 +1520,18 @@ html.dark {
       const watcherHealthy = watcher.status === 'healthy';
       const coreReady = !!(tunnel.core && tunnel.core.ready);
       const directReady = !!(tunnel.direct && tunnel.direct.ready);
-      const tunnelReady = coreReady && directReady;
+      const tunnelReady = coreReady && (!directProfileEnabled || directReady);
       const agentsAvailable = Array.isArray(agents) && agents.some(function (a) { return a && a.available; });
 
       const dimensions = [
-        { key: 'watcher_healthy',    label: 'Watcher healthy',    ok: watcherHealthy,        detail: watcher.status || 'unknown' },
-        { key: 'tunnel_ready',       label: 'Tunnel ready',       ok: tunnelReady,           detail: 'core ' + (coreReady ? '✓' : '✗') + ' / direct ' + (directReady ? '✓' : '✗') },
-        { key: 'agents_available',   label: 'Agents available',   ok: agentsAvailable,       detail: Array.isArray(agents) ? agents.length + ' agent(s)' : '0' },
-        { key: 'stale_tasks',        label: 'Stale tasks',        ok: staleCount === 0,      detail: String(staleCount) },
-        { key: 'failed_tasks',       label: 'Failed tasks',       ok: failedCount === 0,     detail: String(failedCount) },
-        { key: 'policy_valid',       label: 'Policy valid',       ok: policyValid,           detail: policyValid ? 'valid' : 'invalid' },
-        { key: 'release_ready',      label: 'Release ready',      ok: releaseReady,          detail: opts.releaseReadyState || 'unknown' },
-        { key: 'direct_profile',     label: 'Direct profile',     ok: directProfileEnabled,  detail: directProfileEnabled ? 'enabled' : 'disabled' }
+        { key: 'watcher_healthy',    label: '任务监视器',          ok: watcherHealthy,        detail: watcher.status || '未知' },
+        { key: 'tunnel_ready',       label: '隧道就绪',            ok: tunnelReady,           detail: 'Core ' + (coreReady ? '已就绪' : '未就绪') + ' / Direct ' + (directProfileEnabled ? (directReady ? '已就绪' : '未就绪') : '可选，未启用') },
+        { key: 'agents_available',   label: '本地 Agent',          ok: agentsAvailable,       detail: Array.isArray(agents) ? agents.length + ' 个可用' : '0 个' },
+        { key: 'stale_tasks',        label: '过期任务',            ok: staleCount === 0,       detail: String(staleCount) },
+        { key: 'failed_tasks',       label: '失败任务',            ok: failedCount === 0,      detail: String(failedCount) },
+        { key: 'policy_valid',       label: '安全策略',            ok: policyValid,            detail: policyValid ? '有效' : '无效' },
+        { key: 'release_ready',      label: '发布检查',            ok: releaseReady,           detail: opts.releaseReadyState || '未知' },
+        { key: 'direct_profile',     label: 'Direct 配置',         ok: true,                   detail: directProfileEnabled ? '已启用' : '可选，未启用' }
       ];
 
       // Scoring logic (order: blocked > degraded > warning > healthy)
@@ -1526,7 +1542,7 @@ html.dark {
         level = 'blocked';
       } else if (failedCount > 2 || staleCount > 3 || !watcherHealthy) {
         level = 'degraded';
-      } else if (staleCount > 0 || failedCount > 0 || !directProfileEnabled || !releaseReady) {
+      } else if (staleCount > 0 || failedCount > 0 || !releaseReady) {
         level = 'warning';
       }
 
@@ -1615,8 +1631,8 @@ html.dark {
         let directProfileEnabled = false;
         if (diagData && typeof diagData.direct_profile_enabled === 'boolean') {
           directProfileEnabled = diagData.direct_profile_enabled;
-        } else if (status && status.config && typeof status.config.enableDirectProfile === 'boolean') {
-          directProfileEnabled = status.config.enableDirectProfile;
+        } else if (status && typeof status.direct_profile_enabled === 'boolean') {
+          directProfileEnabled = status.direct_profile_enabled;
         }
 
         const score = calculateHealthScore(status, {
@@ -1949,7 +1965,7 @@ html.dark {
       try {
         const data = await fetchJson('/api/workspace/repos');
         const repos = Array.isArray(data.repos) ? data.repos : [];
-        let html = '<option value=".">workspace root</option>';
+        let html = '<option value=".">工作区根目录</option>';
         repos.forEach(function (r) {
           const label = r.name + (r.has_package_json && r.version ? ' (v' + r.version + ')' : '');
           const val = r.path || r.name;
@@ -2135,7 +2151,8 @@ html.dark {
         };
         const url = map[action];
         if (!url) return;
-        await postAction(url, btnEl);
+        const result = await postAction(url, btnEl);
+        if (action !== 'open-logs-folder') showToast('success', '操作完成', result && result.verified ? '服务已通过就绪检查。' : '命令已完成。');
         // Refresh state after state-changing POSTs (open-logs-folder has no state change)
         if (action !== 'open-logs-folder') {
           await Promise.all([refreshStatus(), refreshTasks()]);
@@ -2206,5 +2223,7 @@ html.dark {
   </script>
 
   <script>lucide.createIcons();</script>
+<script src="/i18n.js"></script>
+<script src="/desktop-bridge.js"></script>
 </body>
 </html>

@@ -3,7 +3,10 @@
   [string]$Profile = "patchwarden",
   [ValidateSet("chatgpt_core", "chatgpt_direct")]
   [string]$ToolProfile = "chatgpt_core",
-  [string]$ProxyUrl = $(if ($env:HTTPS_PROXY) { $env:HTTPS_PROXY } else { "http://127.0.0.1:7892" }),
+  [ValidateSet("", "environment", "none", "manual")]
+  [string]$ProxyMode = "",
+  [AllowEmptyString()]
+  [string]$ProxyUrl = "",
   [string]$TunnelClientExe = $(if ($env:TUNNEL_CLIENT_EXE) { $env:TUNNEL_CLIENT_EXE } else { $env:PATCHWARDEN_TUNNEL_CLIENT_EXE }),
   [string]$OpencodeBin = $env:OPENCODE_BIN_DIR,
   [string]$ConfigPath = $env:PATCHWARDEN_CONFIG,
@@ -21,6 +24,47 @@
 )
 
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($ProxyMode)) {
+  $ProxyMode = if ($ToolProfile -eq "chatgpt_direct" -and $env:PATCHWARDEN_DIRECT_PROXY_MODE) {
+    $env:PATCHWARDEN_DIRECT_PROXY_MODE
+  } elseif ($env:PATCHWARDEN_TUNNEL_PROXY_MODE) {
+    $env:PATCHWARDEN_TUNNEL_PROXY_MODE
+  } else {
+    "environment"
+  }
+}
+if ([string]::IsNullOrWhiteSpace($ProxyUrl)) {
+  $ProxyUrl = if ($ToolProfile -eq "chatgpt_direct" -and $env:PATCHWARDEN_DIRECT_PROXY_URL) {
+    $env:PATCHWARDEN_DIRECT_PROXY_URL
+  } else {
+    $env:PATCHWARDEN_TUNNEL_PROXY_URL
+  }
+}
+
+$script:UseProxyArgument = $false
+switch ($ProxyMode) {
+  "manual" {
+    if ([string]::IsNullOrWhiteSpace($ProxyUrl)) { throw "Manual proxy mode requires ProxyUrl." }
+    $proxyUri = $null
+    if (-not [Uri]::TryCreate($ProxyUrl, [UriKind]::Absolute, [ref]$proxyUri) -or $proxyUri.Scheme -notin @("http", "https", "socks5")) {
+      throw "ProxyUrl must use http, https, or socks5."
+    }
+    if (-not [string]::IsNullOrEmpty($proxyUri.UserInfo)) { throw "ProxyUrl must not contain credentials." }
+    $env:HTTP_PROXY = $ProxyUrl
+    $env:HTTPS_PROXY = $ProxyUrl
+    $env:ALL_PROXY = $ProxyUrl
+    $script:UseProxyArgument = $true
+  }
+  "none" {
+    Remove-Item Env:HTTP_PROXY, Env:HTTPS_PROXY, Env:ALL_PROXY -ErrorAction SilentlyContinue
+  }
+  "environment" {
+    $script:UseProxyArgument = -not [string]::IsNullOrWhiteSpace($env:HTTPS_PROXY)
+  }
+  default { throw "Unsupported proxy mode: $ProxyMode" }
+}
+$env:NO_PROXY = "localhost,127.0.0.1,::1"
 
 if ([string]::IsNullOrWhiteSpace($HealthListenAddr)) {
   if ($Profile -eq "patchwarden-direct" -or $ToolProfile -eq "chatgpt_direct") {
@@ -58,8 +102,6 @@ $script:WatcherManaged = $false
 $script:WatcherRestartAttempts = 0
 $script:WatcherHealthySince = $null
 $script:WatcherRestartExhausted = $false
-$DefaultTunnelClientPath = "D:\ai_agent\tunnel-client-v0.0.9--context-conduit-topaz-windows-amd64\tunnel-client.exe"
-
 if ($ToolProfile -eq "chatgpt_direct") {
   $SkipWatcher = $true
 }
@@ -230,7 +272,9 @@ function Get-DiagnosticCode {
 }
 
 function Invoke-TunnelDoctor {
-  $output = (& $TunnelClientExe doctor --profile $Profile --explain --json --http-proxy env:HTTPS_PROXY 2>&1 | Out-String)
+  $doctorArguments = @("doctor", "--profile", $Profile, "--explain", "--json")
+  if ($script:UseProxyArgument) { $doctorArguments += @("--http-proxy", "env:HTTPS_PROXY") }
+  $output = (& $TunnelClientExe @doctorArguments 2>&1 | Out-String)
   return [pscustomobject]@{
     ExitCode = $LASTEXITCODE
     Output = $output
@@ -505,8 +549,7 @@ if (-not $TunnelClientExe) {
 
 # Search common installation locations
 $commonPaths = @(
-  $DefaultTunnelClientPath
-  Join-Path $env:LOCALAPPDATA "patchwarden\tunnel-client.exe"
+  Join-Path $env:LOCALAPPDATA "PatchWarden\tunnel-client.exe"
   Join-Path $env:APPDATA "tunnel-client\tunnel-client.exe"
   Join-Path $env:USERPROFILE "tunnel-client\tunnel-client.exe"
 )
@@ -525,11 +568,8 @@ if (-not $TunnelClientExe) {
   Write-Host "[input] tunnel-client.exe not found on PATH or common locations." -ForegroundColor Yellow
   Write-Host "        Please provide the full path."
   Write-Host ""
-  Write-Host "        To search for it manually, try one of these commands:" -ForegroundColor Cyan
-  Write-Host "          Get-ChildItem -Path `$env:LOCALAPPDATA -Recurse -Filter tunnel-client.exe -ErrorAction SilentlyContinue" -ForegroundColor Gray
-  Write-Host "          Get-ChildItem -Path `$env:APPDATA -Recurse -Filter tunnel-client.exe -ErrorAction SilentlyContinue" -ForegroundColor Gray
-  Write-Host "          Get-ChildItem -Path C:\ -Recurse -Filter tunnel-client.exe -ErrorAction SilentlyContinue" -ForegroundColor Gray
-  Write-Host "        Or download it from: https://platform.openai.com/docs/guides/mcp-connector" -ForegroundColor Cyan
+  Write-Host "        Desktop users can open Settings -> MCP and tunnel -> Auto detect / Choose file." -ForegroundColor Cyan
+  Write-Host "        The desktop guide explains trusted downloads and SHA256 verification." -ForegroundColor Cyan
   Write-Host ""
   $TunnelClientExe = Read-Host "Path to tunnel-client.exe"
 }
@@ -556,7 +596,7 @@ if (-not $TunnelId -and (Test-Path -LiteralPath $ProfilePath)) {
     $profileContent = Get-Content -LiteralPath $ProfilePath -Raw -Encoding UTF8
     if ($profileContent -match 'tunnel_id:\s*"([^"]+)"') {
       $TunnelId = $matches[1]
-      Write-Host "[detect] Tunnel ID read from profile $Profile`: $TunnelId" -ForegroundColor Green
+      Write-Host "[detect] Tunnel ID read from profile $Profile." -ForegroundColor Green
     }
   } catch {
     Write-Host "[warn] Could not read Tunnel ID from $ProfilePath`: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -580,8 +620,15 @@ if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot "dist\index.js"))) {
 New-Item -ItemType Directory -Force -Path $RuntimeDirectory | Out-Null
 $env:PATCHWARDEN_CONFIG = $ConfigPath
 Write-Host "[manifest] Verifying the exact $ToolProfile stdio MCP tool catalog..."
-$manifestOutput = (& node (Join-Path $ProjectRoot "scripts\checks\mcp-manifest-check.js") --profile $ToolProfile --json 2>&1 | Out-String).Trim()
-if ($LASTEXITCODE -ne 0) {
+$previousErrorActionPreference = $ErrorActionPreference
+try {
+  $ErrorActionPreference = "Continue"
+  $manifestOutput = (& node (Join-Path $ProjectRoot "scripts\checks\mcp-manifest-check.js") --profile $ToolProfile --json 2>&1 | Out-String).Trim()
+  $manifestExitCode = $LASTEXITCODE
+} finally {
+  $ErrorActionPreference = $previousErrorActionPreference
+}
+if ($manifestExitCode -ne 0) {
   Write-TunnelStatus -Status "stopped" -ReasonCode "tool_manifest_check_failed" -LastError "The tunnel MCP tool manifest preflight failed."
   throw "Tool manifest preflight failed: $manifestOutput"
 }
@@ -601,10 +648,6 @@ Write-Host "[config] health listen addr: $HealthListenAddr"
 Set-SecretEnvIfMissing
 
 $env:PATCHWARDEN_CONFIG = $ConfigPath
-$env:HTTP_PROXY = $ProxyUrl
-$env:HTTPS_PROXY = $ProxyUrl
-$env:ALL_PROXY = $ProxyUrl
-$env:NO_PROXY = "localhost,127.0.0.1,::1"
 
 $profileNeedsInit = $true
 if (Test-Path -LiteralPath $ProfilePath) {
@@ -628,7 +671,7 @@ if ($profileNeedsInit) {
 $env:PATCHWARDEN_TUNNEL_STATUS_FILE = $StatusFile
 if (-not $SkipWatcher) { Start-PatchWardenWatcher }
 
-Write-Host "[doctor] Checking tunnel-client profile through the configured proxy..."
+Write-Host "[doctor] Checking tunnel-client profile (proxy mode: $ProxyMode)..."
 $preflightAttempt = 0
 $preflightMaxRetries = 3
 $doctor = Invoke-TunnelDoctor
@@ -665,8 +708,7 @@ Write-Host "[run-config] health url file: $HealthUrlFile"
 Write-Host "[run-config] pid file: $PidFile"
 Write-Host "[run-config] stdout log: $StdoutLogFile"
 Write-Host "[run-config] stderr log: $StderrLogFile"
-Write-Host "[run-config] HTTPS_PROXY: $env:HTTPS_PROXY"
-Write-Host "[run-config] HTTP_PROXY: $env:HTTP_PROXY"
+Write-Host "[run-config] proxy mode: $ProxyMode"
 Write-Host "[run-config] CONTROL_PLANE_API_KEY: $(if ($env:CONTROL_PLANE_API_KEY) { 'set' } else { 'missing' })"
 Write-Host "[run-config] cwd: $ProjectRoot"
 Write-Host ""
@@ -681,11 +723,11 @@ try {
     Write-TunnelStatus -Status "starting" -ReasonCode $null -Ready $false -Attempt $attempt
     $runArguments = @(
       "run", "--profile", $Profile,
-      "--http-proxy", "env:HTTPS_PROXY",
       "--health.url-file", $HealthUrlFile,
       "--pid.file", $PidFile,
       "--log.format", "json"
     )
+    if ($script:UseProxyArgument) { $runArguments += @("--http-proxy", "env:HTTPS_PROXY") }
     if ($openUi) { $runArguments += "--open-web-ui"; $openUi = $false }
     $argumentLine = ($runArguments | ForEach-Object { Quote-ProcessArgument $_ }) -join " "
     Write-Host "[run-config] command: tunnel-client $($runArguments -join ' ')"

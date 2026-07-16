@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title data-i18n="settings.pageTitle"></title>
+  <link rel="stylesheet" href="/colors_and_type.css">
+<script src="/desktop-bootstrap.js"></script>
+<link rel="stylesheet" href="/desktop.css">
+  <script src="/vendor/tailwindcss-browser.js"></script>
+  <script src="/vendor/lucide.js"></script>
+</head>
+<body class="flex h-screen overflow-hidden">
+  <aside class="flex flex-col w-60 shrink-0 h-screen" style="background:var(--pw-bg);border-right:1px solid var(--pw-border)">
+    <div class="flex items-center gap-3 px-5 py-5" style="border-bottom:1px solid var(--pw-border-subtle)">
+      <i data-lucide="shield-check" style="color:var(--pw-accent)"></i><span class="text-lg font-semibold">PatchWarden</span>
+    </div>
+    <nav class="flex-1 flex flex-col gap-1 px-3 pt-4 overflow-y-auto">
+      <a href="/pages/getting-started.html" data-nav-key="getting-started" class="flex items-center gap-3 px-3 py-2.5 text-sm"><i data-lucide="rocket" class="w-4 h-4"></i><span data-i18n="nav.gettingStarted"></span></a>
+      <a href="/pages/dashboard.html" data-nav-key="dashboard" class="flex items-center gap-3 px-3 py-2.5 text-sm"><i data-lucide="layout-dashboard" class="w-4 h-4"></i><span data-i18n="nav.dashboard"></span></a>
+      <a href="/pages/tasks.html" data-nav-key="tasks" class="flex items-center gap-3 px-3 py-2.5 text-sm"><i data-lucide="list-checks" class="w-4 h-4"></i><span data-i18n="nav.tasks"></span></a>
+      <a href="/pages/workspace.html" data-nav-key="workspace" class="flex items-center gap-3 px-3 py-2.5 text-sm"><i data-lucide="folder" class="w-4 h-4"></i><span data-i18n="nav.workspace"></span></a>
+      <a href="/pages/audit.html" data-nav-key="audit" class="flex items-center gap-3 px-3 py-2.5 text-sm"><i data-lucide="file-search" class="w-4 h-4"></i><span data-i18n="nav.audit"></span></a>
+      <a href="/pages/direct-sessions.html" data-nav-key="direct-sessions" class="flex items-center gap-3 px-3 py-2.5 text-sm"><i data-lucide="route" class="w-4 h-4"></i><span data-i18n="nav.direct"></span></a>
+      <a href="/pages/logs.html" data-nav-key="logs" class="flex items-center gap-3 px-3 py-2.5 text-sm"><i data-lucide="scroll-text" class="w-4 h-4"></i><span data-i18n="nav.logs"></span></a>
+      <a href="/pages/settings.html" data-nav-key="settings" data-active="true" class="desktop-only-nav flex items-center gap-3 px-3 py-2.5 text-sm"><i data-lucide="settings" class="w-4 h-4"></i><span data-i18n="nav.settings"></span></a>
+    </nav>
+  </aside>
+  <div class="flex flex-col flex-1 min-w-0 h-screen overflow-hidden">
+    <header class="flex items-center px-6 py-3" style="border-bottom:1px solid var(--pw-border);background:var(--pw-bg)"><h1 class="text-lg font-semibold" data-i18n="settings.title"></h1></header>
+    <main class="flex-1 overflow-y-auto p-6" style="background:var(--pw-bg-elevated)">
+      <div class="settings-layout">
+        <section>
+          <h2 data-i18n="settings.appearance"></h2>
+          <div class="setting-row"><div><strong data-i18n="settings.theme"></strong><p data-i18n="settings.themeHelp"></p></div><select id="theme"><option value="system" data-i18n="settings.themeSystem"></option><option value="light" data-i18n="settings.themeLight"></option><option value="dark" data-i18n="settings.themeDark"></option></select></div>
+          <div class="setting-row"><div><strong data-i18n="language.label"></strong><p data-i18n="settings.languageHelp"></p></div><select id="language"><option value="system" data-i18n="language.system"></option><option value="zh-CN" data-i18n="language.zh"></option><option value="en" data-i18n="language.en"></option></select></div>
+          <div class="setting-row"><div><strong data-i18n="settings.closeWindow"></strong><p data-i18n="settings.closeWindowHelp"></p></div><select id="closeBehavior"><option value="tray" data-i18n="settings.closeToTray"></option><option value="quit" data-i18n="settings.closeQuit"></option></select></div>
+        </section>
+        <section>
+          <h2 data-i18n="settings.localAgents"></h2>
+          <div class="agent-section-toolbar"><p data-i18n="settings.localAgentsHelp"></p><button id="detectAgents"><i data-lucide="scan-search"></i><span data-i18n="settings.detectAgents"></span></button></div>
+          <div id="agentSettingsList" class="agent-settings-list"><p class="agent-empty" data-i18n="settings.loadingAgents"></p></div>
+          <div class="setting-actions"><button id="saveAgents" class="primary-action"><i data-lucide="save"></i><span data-i18n="settings.saveAgents"></span></button><span id="agentSettingsStatus" class="status-text" aria-live="polite"></span></div>
+        </section>
+        <section>
+          <h2 data-i18n="settings.mcpTunnel"></h2>
+          <div class="setting-row">
+            <div class="min-w-0"><strong>tunnel-client.exe</strong><p id="tunnelClientPath" class="mono break-path" data-i18n="settings.tunnelUndetected"></p></div>
+            <div class="inline-actions"><button id="detectTunnel"><i data-lucide="scan-search"></i><span data-i18n="settings.detect"></span></button><button id="chooseTunnel"><i data-lucide="file-search"></i><span data-i18n="settings.choose"></span></button></div>
+          </div>
+          <div class="setting-row">
+            <div><strong>Direct profile</strong><p data-i18n="settings.directHelp"></p></div>
+            <label class="switch-label"><input id="enableDirectProfile" type="checkbox"><span data-i18n="settings.enable"></span></label>
+          </div>
+          <div class="setting-row">
+            <div><strong data-i18n="settings.proxy"></strong><p data-i18n="settings.proxyHelp"></p></div>
+            <select id="proxyScope"><option value="shared" data-i18n="settings.proxyShared"></option><option value="separate" data-i18n="settings.proxySeparate"></option></select>
+          </div>
+          <div class="proxy-grid">
+            <div class="proxy-endpoint">
+              <strong>Core</strong>
+              <select id="coreProxyMode"><option value="environment" data-i18n="settings.proxyEnvironment"></option><option value="none" data-i18n="settings.proxyNone"></option><option value="manual" data-i18n="settings.proxyManual"></option></select>
+              <input id="coreProxyUrl" type="url" placeholder="http://127.0.0.1:7890" autocomplete="off">
+            </div>
+            <div id="directProxyEndpoint" class="proxy-endpoint hidden">
+              <strong>Direct</strong>
+              <select id="directProxyMode"><option value="environment" data-i18n="settings.proxyEnvironment"></option><option value="none" data-i18n="settings.proxyNone"></option><option value="manual" data-i18n="settings.proxyManual"></option></select>
+              <input id="directProxyUrl" type="url" placeholder="socks5://127.0.0.1:1080" autocomplete="off">
+            </div>
+          </div>
+          <div class="setting-actions"><button id="saveRuntime" class="primary-action"><i data-lucide="save"></i><span data-i18n="settings.saveRuntime"></span></button><span id="runtimeStatus" class="status-text" aria-live="polite"></span></div>
+          <div class="credential-panel">
+            <div class="credential-heading"><div><strong data-i18n="settings.tunnelCredentials"></strong><p data-i18n="settings.runtimeKeyHelp"></p></div><span id="credentialState" class="credential-state"></span></div>
+            <div class="credential-grid">
+              <label>Profile<select id="tunnelMode"><option value="core">Core</option><option value="direct">Direct</option></select></label>
+              <label><span data-i18n="settings.tunnelId"></span><input id="tunnelId" type="text" autocomplete="off" spellcheck="false" placeholder="tun_..."></label>
+              <label><span data-i18n="settings.runtimeKey"></span><input id="runtimeKey" type="password" autocomplete="new-password" spellcheck="false"></label>
+            </div>
+            <div class="setting-actions credential-actions"><button id="provisionTunnel" class="primary-action"><i data-lucide="shield-check"></i><span data-i18n="settings.configureCore"></span></button><button id="revalidateCredential"><i data-lucide="activity"></i><span data-i18n="settings.revalidate"></span></button><button id="forgetCredential"><i data-lucide="key-round"></i><span data-i18n="settings.forgetCredential"></span></button><span id="provisionStatus" class="status-text" aria-live="polite"></span></div>
+          </div>
+          <details class="install-guide"><summary data-i18n="settings.installSummary"></summary><ol><li data-i18n="settings.installStep1"></li><li data-i18n="settings.installStep2"></li><li data-i18n="settings.installStep3"></li><li data-i18n="settings.installStep4"></li></ol></details>
+        </section>
+        <section>
+          <h2 data-i18n="settings.workspaceDiagnostics"></h2>
+          <div class="setting-row"><div class="min-w-0"><strong data-i18n="settings.currentConfig"></strong><p id="configPath" class="mono truncate" data-i18n="settings.loading"></p></div><button id="openConfig" data-i18n-title="settings.openConfig"><i data-lucide="external-link"></i></button></div>
+          <div class="setting-row"><div><strong data-i18n="settings.workspace"></strong><p id="workspacePath" class="mono" data-i18n="settings.workspaceHelp"></p></div><button id="changeWorkspace" data-i18n="settings.change"></button></div>
+          <div class="setting-actions"><button id="openLogs"><i data-lucide="folder-open"></i><span data-i18n="settings.openLogs"></span></button><button id="runDoctor"><i data-lucide="stethoscope"></i><span data-i18n="settings.runDoctor"></span></button></div>
+          <pre id="doctorOutput" class="hidden"></pre>
+        </section>
+      </div>
+    </main>
+  </div>
+  <style>
+    [data-nav-key]{color:var(--pw-text-secondary);border-radius:6px}[data-nav-key]:hover{background:var(--pw-bg-hover);color:var(--pw-text-primary)}[data-nav-key][data-active="true"]{background:var(--pw-accent-subtle);color:var(--pw-accent);border-left:2px solid var(--pw-accent)}
+    .settings-layout{display:grid;gap:18px;max-width:920px}.settings-layout section{background:var(--pw-bg-surface);border:1px solid var(--pw-border);border-radius:7px}.settings-layout h2{margin:0;padding:16px 18px;font-size:14px;border-bottom:1px solid var(--pw-border)}.setting-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:20px;align-items:center;padding:16px 18px;border-bottom:1px solid var(--pw-border-subtle)}.setting-row p,.credential-panel p,.agent-section-toolbar p{margin:4px 0 0;color:var(--pw-text-secondary);font-size:12px}.setting-row select,.setting-row button,.setting-actions button,.proxy-endpoint select,.proxy-endpoint input,.credential-grid select,.credential-grid input,.agent-section-toolbar button,.agent-controls select,.agent-controls input,.agent-controls button{min-height:36px;padding:0 12px;color:var(--pw-text-primary);background:var(--pw-bg-elevated);border:1px solid var(--pw-border);border-radius:6px}.setting-row button,.agent-section-toolbar button,.agent-controls button{display:flex;align-items:center;gap:6px}.setting-row svg,.agent-section-toolbar svg,.agent-controls svg{width:16px}.setting-actions{display:flex;align-items:center;gap:10px;padding:16px 18px;flex-wrap:wrap}.setting-actions button{display:flex;align-items:center;gap:8px}.setting-actions svg{width:16px}.inline-actions{display:flex;gap:8px}.switch-label{display:flex;align-items:center;gap:8px}.switch-label input{width:18px;height:18px;accent-color:var(--pw-accent)}.agent-section-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 18px;border-bottom:1px solid var(--pw-border-subtle)}.agent-settings-list{display:grid}.agent-setting-row{display:grid;grid-template-columns:minmax(180px,1fr) minmax(280px,1.4fr);align-items:center;gap:18px;padding:14px 18px;border-bottom:1px solid var(--pw-border-subtle)}.agent-identity{display:grid;grid-template-columns:20px minmax(0,1fr);gap:10px;align-items:center}.agent-identity input{width:18px;height:18px;accent-color:var(--pw-accent)}.agent-identity strong,.agent-identity small{display:block}.agent-identity small{margin-top:3px;color:var(--pw-text-secondary);font-size:11px}.agent-controls{display:grid;grid-template-columns:minmax(150px,1fr) minmax(150px,1fr) 38px;gap:8px}.agent-controls button{justify-content:center;padding:0}.agent-empty{padding:18px;color:var(--pw-text-secondary);font-size:12px}.proxy-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:16px 18px;border-bottom:1px solid var(--pw-border-subtle)}.proxy-endpoint{display:grid;grid-template-columns:auto minmax(150px,auto) minmax(180px,1fr);align-items:center;gap:10px}.proxy-endpoint input:disabled{opacity:.55}.primary-action{background:var(--pw-accent)!important;color:var(--pw-text-inverse)!important}.status-text{font-size:12px;color:var(--pw-text-secondary)}.credential-panel{border-top:1px solid var(--pw-border)}.credential-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:16px 18px}.credential-state{padding:3px 7px;background:var(--pw-bg-hover);border-radius:4px;font-size:11px;white-space:nowrap}.credential-grid{display:grid;grid-template-columns:150px minmax(180px,1fr) minmax(220px,1.4fr);gap:12px;padding:0 18px 16px}.credential-grid label{display:grid;gap:6px;color:var(--pw-text-secondary);font-size:11px}.credential-actions{padding-top:0}.install-guide{margin:0 18px 18px;padding:12px 14px;border:1px solid var(--pw-border-subtle);border-radius:6px;color:var(--pw-text-secondary);font-size:12px}.install-guide summary{cursor:pointer;color:var(--pw-text-primary);font-weight:600}.install-guide ol{margin:10px 0 0 20px;line-height:1.7}.break-path{overflow-wrap:anywhere}.mono{font-family:var(--pw-font-mono)}#doctorOutput{max-height:320px;margin:0 18px 18px;padding:14px;overflow:auto;color:var(--pw-code-text,#dbe8e3);background:var(--pw-code-bg);border-radius:6px;font:11px/1.5 var(--pw-font-mono);white-space:pre-wrap}.hidden{display:none}@media(max-width:760px){.setting-row,.agent-setting-row{grid-template-columns:1fr}.agent-controls{grid-template-columns:1fr}.proxy-grid,.credential-grid{grid-template-columns:1fr}.proxy-endpoint{grid-template-columns:1fr}.inline-actions{justify-content:flex-start}}
+  </style>
+  <script src="/i18n.js"></script>
+  <script src="/desktop-bridge.js"></script>
+  <script src="/settings.js"></script>
+</body>
+</html>

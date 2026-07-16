@@ -69,14 +69,55 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_COMMENTS: "false"
 
+  desktop:
+    name: Windows desktop installer
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+
+      - name: Install core dependencies
+        run: npm ci
+
+      - name: Install isolated desktop dependencies
+        run: npm ci --prefix desktop
+
+      - name: Build core and run desktop tests
+        run: |
+          npm run build
+          npm run desktop:test
+
+      - name: Build unsigned NSIS installer
+        run: npm run desktop:package
+
+      - name: Verify desktop artifacts
+        shell: pwsh
+        run: |
+          $installer = @(Get-ChildItem -LiteralPath release\desktop -Filter 'PatchWarden-Setup-*-x64.exe')
+          $portable = @(Get-ChildItem -LiteralPath release\desktop -Filter 'PatchWarden-Portable-*-x64.zip')
+          if ($installer.Count -ne 1) { throw "Expected exactly one desktop installer." }
+          if ($portable.Count -ne 1) { throw "Expected exactly one portable desktop ZIP." }
+          if (-not (Test-Path -LiteralPath release\desktop\PatchWarden-Desktop-SHA256SUMS.txt)) { throw "Desktop checksum file is missing." }
+
   gate:
     name: CI gate
     if: always()
-    needs: [test, secrets]
+    needs: [test, desktop, secrets]
     runs-on: ubuntu-latest
     steps:
       - name: Require all checks
         shell: bash
         run: |
           test "${{ needs.test.result }}" = "success"
+          test "${{ needs.desktop.result }}" = "success"
           test "${{ needs.secrets.result }}" = "success"

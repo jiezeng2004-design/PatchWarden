@@ -221,6 +221,12 @@ async function testStaticFiles() {
     const root = await httpGet(`${BASE_URL}/`);
     const vendor = await httpGet(`${BASE_URL}/vendor/tailwindcss-browser.js`);
     const css = await httpGet(`${BASE_URL}/colors_and_type.css`);
+    const desktopCss = await httpGet(`${BASE_URL}/desktop.css`);
+    const desktopBridge = await httpGet(`${BASE_URL}/desktop-bridge.js`);
+    const i18n = await httpGet(`${BASE_URL}/i18n.js`);
+    const gettingStarted = await httpGet(`${BASE_URL}/pages/getting-started.html`);
+    const gettingStartedJs = await httpGet(`${BASE_URL}/getting-started.js`);
+    const settings = await httpGet(`${BASE_URL}/pages/settings.html`);
     const favicon = await httpGet(`${BASE_URL}/favicon.ico`);
 
     const checks = [];
@@ -228,7 +234,8 @@ async function testStaticFiles() {
     const rootCt = root.headers["content-type"] || "";
     if (!rootCt.includes("text/html")) checks.push(`GET / -> Content-Type ${rootCt} (expected text/html)`);
     if (!root.body.includes("setup-checklist-card")) checks.push("dashboard missing setup checklist card");
-    if (!root.body.includes("Show Core / Direct log tails")) checks.push("dashboard activity log is not collapsed behind a summary");
+    if (!root.body.includes("查看 Core / Direct 本次日志尾部")) checks.push("dashboard activity log is not collapsed behind a summary");
+    if (!root.body.includes("pw-dashboard-toolbar")) checks.push("dashboard missing stable desktop toolbar layout");
     if (!root.body.includes("evidence-pack-card")) checks.push("dashboard missing v1.5 evidence pack card");
 
     if (vendor.status !== 200) checks.push(`GET /vendor/tailwindcss-browser.js -> status ${vendor.status}`);
@@ -238,6 +245,31 @@ async function testStaticFiles() {
     if (css.status !== 200) checks.push(`GET /colors_and_type.css -> status ${css.status}`);
     const cssCt = css.headers["content-type"] || "";
     if (!cssCt.includes("text/css")) checks.push(`GET /colors_and_type.css -> Content-Type ${cssCt}`);
+
+    if (desktopCss.status !== 200 || !(desktopCss.headers["content-type"] || "").includes("text/css")) {
+      checks.push("desktop refinement stylesheet is not served as CSS");
+    }
+    if (desktopBridge.status !== 200 || !(desktopBridge.headers["content-type"] || "").includes("javascript")) {
+      checks.push("desktop bridge is not served as JavaScript");
+    }
+    if (i18n.status !== 200 || !i18n.body.includes("applyTranslations") || !i18n.body.includes('"zh-CN"') || !i18n.body.includes("en:")) {
+      checks.push("shared Chinese/English translation dictionary is unavailable");
+    }
+    if (gettingStarted.status !== 200 || (gettingStarted.body.match(/class="readiness-item"/g) || []).length !== 4 || !gettingStarted.body.includes("home.manual")) {
+      checks.push("desktop getting-started page is missing its four readiness checks or manual ChatGPT state");
+    }
+    if (gettingStartedJs.status !== 200 || !gettingStartedJs.body.includes("getTunnelSetupStatus") || !gettingStartedJs.body.includes("health_check")) {
+      checks.push("getting-started controller is missing bounded Tunnel status or health_check guidance");
+    }
+    if (settings.status !== 200 || !settings.body.includes("/settings.js")) {
+      checks.push("desktop settings page is unavailable or missing its bounded bridge");
+    }
+    for (const marker of ["detectTunnel", "chooseTunnel", "enableDirectProfile", "proxyScope", "saveRuntime", "tunnelId", "runtimeKey", "provisionTunnel", "forgetCredential", "language"]) {
+      if (!settings.body.includes(marker)) checks.push(`desktop settings missing runtime control: ${marker}`);
+    }
+    if (!desktopBridge.body.includes("patchwardenApplyTheme") || !desktopBridge.body.includes("请求超过 10 秒")) {
+      checks.push("desktop bridge is missing renderer theme propagation or bounded loading timeout");
+    }
 
     if (favicon.status !== 200) checks.push(`GET /favicon.ico -> status ${favicon.status}`);
     const faviconCt = favicon.headers["content-type"] || "";
@@ -268,6 +300,9 @@ async function testPageNavigationRoutes() {
     "/pages/workspace.html",
     "/pages/audit.html",
     "/pages/task-detail.html?id=smoke",
+    "/settings.html",
+    "/pages/settings.html",
+    "/pages/getting-started.html",
   ];
 
   for (const route of routes) {

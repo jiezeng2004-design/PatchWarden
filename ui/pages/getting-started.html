@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>PatchWarden</title>
+  <link rel="stylesheet" href="/colors_and_type.css">
+<script src="/desktop-bootstrap.js"></script>
+<link rel="stylesheet" href="/desktop.css">
+  <script src="/vendor/lucide.js"></script>
+</head>
+<body class="pw-app-shell">
+  <aside class="pw-sidebar">
+    <div class="pw-brand"><i data-lucide="shield-check"></i><strong>PatchWarden</strong></div>
+    <nav>
+      <a href="/pages/getting-started.html" data-nav-key="getting-started" data-active="true"><i data-lucide="rocket"></i><span data-i18n="nav.gettingStarted"></span></a>
+      <a href="/pages/dashboard.html" data-nav-key="dashboard"><i data-lucide="layout-dashboard"></i><span data-i18n="nav.dashboard"></span></a>
+      <a href="/pages/tasks.html" data-nav-key="tasks"><i data-lucide="list-checks"></i><span data-i18n="nav.tasks"></span></a>
+      <a href="/pages/workspace.html" data-nav-key="workspace"><i data-lucide="folder"></i><span data-i18n="nav.workspace"></span></a>
+      <a href="/pages/audit.html" data-nav-key="audit"><i data-lucide="file-search"></i><span data-i18n="nav.audit"></span></a>
+      <a href="/pages/direct-sessions.html" data-nav-key="direct-sessions"><i data-lucide="route"></i><span data-i18n="nav.direct"></span></a>
+      <a href="/pages/logs.html" data-nav-key="logs"><i data-lucide="scroll-text"></i><span data-i18n="nav.logs"></span></a>
+      <a href="/pages/settings.html" data-nav-key="settings" class="desktop-only-nav"><i data-lucide="settings"></i><span data-i18n="nav.settings"></span></a>
+    </nav>
+  </aside>
+  <div class="pw-page">
+    <header class="pw-page-header"><div><h1 data-i18n="home.title"></h1><p data-i18n="home.subtitle"></p></div><select id="language" aria-label="Language"><option value="system" data-i18n="language.system"></option><option value="zh-CN" data-i18n="language.zh"></option><option value="en" data-i18n="language.en"></option></select></header>
+    <main class="getting-started-main">
+      <div class="readiness-list">
+        <section class="readiness-item" data-check="workspace"><span class="check-index">1</span><div><div class="check-heading"><h2 data-i18n="home.workspace"></h2><span class="check-status" data-status>…</span></div><p data-message data-i18n="home.checking"></p></div><a class="primary-command" href="/pages/settings.html" data-i18n="home.openSettings"></a></section>
+        <section class="readiness-item" data-check="tunnel"><span class="check-index">2</span><div><div class="check-heading"><h2 data-i18n="home.platform"></h2><span class="check-status" data-status>…</span></div><p data-message data-i18n="home.checking"></p></div><a class="primary-command" href="https://platform.openai.com/settings/organization/tunnels" target="_blank" rel="noreferrer" data-i18n="home.openPlatform"></a></section>
+        <section class="readiness-item" data-check="core"><span class="check-index">3</span><div><div class="check-heading"><h2 data-i18n="home.core"></h2><span class="check-status" data-status>…</span></div><p data-message data-i18n="home.checking"></p><p class="reason-detail" data-reason></p></div><button class="primary-command" id="startCore" data-i18n="home.startCore"></button></section>
+        <section class="readiness-item" data-check="chatgpt"><span class="check-index">4</span><div><div class="check-heading"><h2 data-i18n="home.chatgpt"></h2><span class="check-status manual" data-status data-i18n="home.manual"></span></div><p data-message data-i18n="home.chatgptManual"></p></div><button class="primary-command" id="copyPrompt" data-i18n="home.copyPrompt"></button></section>
+      </div>
+      <section class="guide-band"><h2 data-i18n="home.docs"></h2><div class="guide-links"><a href="https://developers.openai.com/api/docs/guides/secure-mcp-tunnels" target="_blank" rel="noreferrer" data-i18n="home.secureGuide"></a><a href="https://chatgpt.com/#settings/Plugins" target="_blank" rel="noreferrer" data-i18n="home.pluginsGuide"></a><a href="https://github.com/jiezeng2004-design/PatchWarden/blob/main/README.md" target="_blank" rel="noreferrer" data-i18n="home.readmeZh"></a><a href="https://github.com/jiezeng2004-design/PatchWarden/blob/main/README.en.md" target="_blank" rel="noreferrer" data-i18n="home.readmeEn"></a></div></section>
+      <div id="toast" class="pw-toast" role="status" aria-live="polite"></div>
+    </main>
+  </div>
+  <script src="/i18n.js"></script>
+  <script src="/desktop-bridge.js"></script>
+  <script src="/getting-started.js"></script>
+</body>
+</html>

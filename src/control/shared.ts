@@ -10,7 +10,7 @@
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { delimiter, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { type IncomingMessage, type ServerResponse } from "node:http";
 import { loadConfig, type PatchWardenConfig } from "../config.js";
@@ -22,7 +22,22 @@ export const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), ".."
 export const uiRoot = join(projectRoot, "ui");
 export const manageScriptPath = join(projectRoot, "scripts", "control", "manage-patchwarden.ps1");
 
+function resolveActiveConfigPath(): string {
+  if (process.env.PATCHWARDEN_CONFIG) return resolve(process.env.PATCHWARDEN_CONFIG);
+  for (const name of ["patchwarden.config.json", ".patchwarden.json"]) {
+    const candidate = resolve(process.cwd(), name);
+    if (existsSync(candidate)) return candidate;
+  }
+  return resolve(process.cwd(), "patchwarden.config.json");
+}
+
+export const activeConfigPath = resolveActiveConfigPath();
+export const configIdentitySha256 = createHash("sha256")
+  .update(process.platform === "win32" ? activeConfigPath.toLowerCase() : activeConfigPath)
+  .digest("hex");
+
 export const PAGE_ALIASES: Record<string, string> = {
+  "/getting-started.html": "pages/getting-started.html",
   "/dashboard.html": "pages/dashboard.html",
   "/tasks.html": "pages/tasks.html",
   "/workspace.html": "pages/workspace.html",
@@ -30,6 +45,7 @@ export const PAGE_ALIASES: Record<string, string> = {
   "/task-detail.html": "pages/task-detail.html",
   "/direct-sessions.html": "pages/direct-sessions.html",
   "/logs.html": "pages/logs.html",
+  "/settings.html": "pages/settings.html",
 };
 
 // ── Config (fault-tolerant bootstrap) ─────────────────────────────
@@ -99,8 +115,6 @@ export const host = "127.0.0.1";
 // not depend on the real 8080/8081 ports being free on the host.
 export const CORE_BASE_URL = process.env.PATCHWARDEN_CORE_URL || "http://127.0.0.1:8080";
 export const DIRECT_BASE_URL = process.env.PATCHWARDEN_DIRECT_URL || "http://127.0.0.1:8081";
-export const DEFAULT_TUNNEL_CLIENT_EXE = "D:\\ai_agent\\tunnel-client-v0.0.9--context-conduit-topaz-windows-amd64\\tunnel-client.exe";
-
 export const CONTROL_CENTER_FAVICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <rect width="64" height="64" rx="14" fill="#0a0e14"/>
   <path d="M32 52s17-8 17-27V14L32 8 15 14v11c0 19 17 27 17 27z" fill="#111820" stroke="#2dd4a8" stroke-width="4" stroke-linejoin="round"/>

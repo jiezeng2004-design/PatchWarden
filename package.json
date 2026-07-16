@@ -1,6 +1,6 @@
 {
   "name": "patchwarden",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "description": "Secure local MCP bridge for ChatGPT and local agents, with workspace-scoped task loops, safe summaries, audits, and Direct editing.",
   "type": "module",
   "main": "dist/index.js",
@@ -56,7 +56,13 @@
     "test:http-mcp": "npm run build && node scripts/checks/http-mcp-smoke.js",
     "pretest": "npm run build",
     "pack:clean": "npm run build && node scripts/release/pack-clean.js",
-    "verify:package": "npm run build && node scripts/checks/package-manifest-check.js"
+    "verify:package": "npm run build && node scripts/checks/package-manifest-check.js",
+    "desktop:install": "npm.cmd --prefix desktop install --cache ..\\.npm-cache",
+    "desktop:test": "npm.cmd --prefix desktop test",
+    "desktop:stage": "npm run build && npm.cmd --prefix desktop run stage",
+    "desktop:dev": "npm run build && npm.cmd --prefix desktop run dev",
+    "desktop:package:dir": "npm run build && npm.cmd --prefix desktop run build:dir",
+    "desktop:package": "npm run build && npm.cmd --prefix desktop run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"

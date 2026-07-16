@@ -155,13 +155,13 @@ lineage 的有界摘要，不含完整 rounds 详情或 warnings/errors 原文�
 
 ```json
 {
-  "patchwarden_version": "1.5.1",
-  "package_version": "1.5.1",
+  "patchwarden_version": "1.6.0",
+  "package_version": "1.6.0",
   "commit": "bc950a2",
   "node_version": "v20.11.0",
   "os": { "platform": "win32", "arch": "x64" },
   "tool_profile": "full",
-  "schema_epoch": "2026-07-05-v13",
+  "schema_epoch": "2026-07-16-v14",
   "generated_at": "2026-07-09T12:00:00.000Z"
 }
 ```

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:">
+  <title>设置 PatchWarden</title>
+  <link rel="stylesheet" href="./onboarding.css">
+</head>
+<body>
+  <main class="setup-shell">
+    <aside class="setup-side">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+      </div>
+      <div>
+        <p class="eyebrow">PATCHWARDEN DESKTOP</p>
+        <h1>准备本地安全工作区</h1>
+      </div>
+      <ol class="steps" aria-label="设置步骤">
+        <li data-step="1" class="active"><span>1</span>选择工作区</li>
+        <li data-step="2"><span>2</span>检测本地 Agent</li>
+        <li data-step="3"><span>3</span>健康检查</li>
+      </ol>
+      <p class="privacy">配置只保存在本机，不读取或保存 Token、Cookie 与浏览器登录态。</p>
+    </aside>
+
+    <section class="setup-content">
+      <div id="blockedPanel" class="panel hidden" role="alert">
+        <span class="status-icon error">!</span>
+        <h2>桌面服务暂时无法启动</h2>
+        <p id="blockedReason"></p>
+        <button id="openLogsBlocked" class="button secondary">打开日志目录</button>
+      </div>
+
+      <div id="step1" class="panel">
+        <p class="section-label">步骤 1 / 3</p>
+        <h2>选择使用方式与工作区</h2>
+        <div class="route-picker" role="radiogroup" aria-label="MCP 使用方式">
+          <label class="route-option"><input type="radio" name="connectionMode" value="chatgpt" checked><span><strong>ChatGPT Tunnel</strong><small>通过 Secure MCP Tunnel 在 ChatGPT Plugins（旧称 Connector）中使用。</small></span></label>
+          <label class="route-option"><input type="radio" name="connectionMode" value="local"><span><strong>本地 MCP</strong><small>仅配置本地客户端，可跳过 Platform Tunnel。</small></span></label>
+        </div>
+        <p>选择一个包含项目的专用目录。磁盘根目录、用户主目录、桌面、下载和文档目录不会被接受。</p>
+        <div class="path-row">
+          <div id="workspacePath" class="path-value">尚未选择</div>
+          <button id="chooseWorkspace" class="icon-button" title="选择工作区" aria-label="选择工作区">
+            <svg viewBox="0 0 24 24"><path d="M3 7h5l2 2h11v10H3z"/></svg>
+          </button>
+        </div>
+        <p id="workspaceError" class="error-text" aria-live="polite"></p>
+        <div class="actions"><button id="toAgents" class="button primary" disabled>下一步</button></div>
+      </div>
+
+      <div id="step2" class="panel hidden">
+        <p class="section-label">步骤 2 / 3</p>
+        <h2>检测本地 Agent</h2>
+        <p>检测受支持的本地 CLI，并从安全的本地配置字段读取可选模型。WindowsApps 桌面别名不会被当作 CLI。</p>
+        <div id="agentList" class="agent-list"><div class="loading">正在检测…</div></div>
+        <div class="agent-row dependency-row">
+          <div><div class="agent-name">tunnel-client.exe</div><div id="tunnelStatus" class="agent-detail">正在检测…</div></div>
+          <button id="detectTunnel" class="button secondary">重新检测</button>
+          <button id="chooseTunnel" class="button secondary">选择文件</button>
+        </div>
+        <p class="privacy">未找到时可以继续进入只读控制台。稍后可在“设置”中查看安装和 SHA256 校验步骤。</p>
+        <div class="actions split"><button data-back="1" class="button secondary">上一步</button><button id="saveSetup" class="button primary">保存并检查</button></div>
+      </div>
+
+      <div id="step3" class="panel hidden">
+        <p class="section-label">步骤 3 / 3</p>
+        <h2>运行健康检查</h2>
+        <div id="doctorStatus" class="doctor-status"><span class="spinner"></span><span>正在运行只读检查…</span></div>
+        <div id="doctorCounts" class="count-row hidden"></div>
+        <pre id="doctorOutput" class="doctor-output hidden"></pre>
+        <p class="finish-note">检查完成后将自动进入控制台。</p>
+      </div>
+    </section>
+  </main>
+  <script src="./onboarding.js"></script>
+</body>
+</html>

@@ -65,6 +65,11 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   if (
     method === "GET" &&
     (pathname === "/colors_and_type.css" ||
+      pathname === "/desktop.css" ||
+      pathname === "/desktop-bridge.js" ||
+      pathname === "/i18n.js" ||
+      pathname === "/getting-started.js" ||
+      pathname === "/settings.js" ||
       pathname.startsWith("/pages/") ||
       pathname.startsWith("/partials/") ||
       pathname.startsWith("/vendor/"))
@@ -268,7 +273,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     return;
   }
   if (method === "GET" && pathname === "/api/diagnostics") {
-    handleDiagnostics(res);
+    await handleDiagnostics(res);
     return;
   }
   if (method === "GET" && pathname === "/api/tunnel-ui-url") {

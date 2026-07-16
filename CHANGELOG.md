@@ -1,5 +1,25 @@
 # PatchWarden CHANGELOG
 
+## v1.6.0 (2026-07-16)
+
+### Windows Desktop agents and models
+
+- Added a fixed adapter registry for Codex, OpenCode, Claude Code, Gemini CLI,
+  GitHub Copilot CLI, Qwen Code, Kimi Code, and Aider.
+- Added local-first model discovery and per-agent model selection without
+  exposing credentials, provider configuration, or remote model overrides.
+- Added safe Windows npm CLI resolution without enabling a command shell.
+- Added Agent and model management to first-run setup and Desktop Settings.
+
+### Reliability
+
+- Fixed Windows workspace-root checks on Linux CI and made Desktop tests work
+  on Node.js 20 without test-runner child-process isolation flags.
+- Applied Desktop theme and language state before first paint, made Desktop
+  navigation static, and added bounded cross-document page transitions.
+- Desktop packaging now emits both an NSIS installer and a no-install ZIP with
+  a shared SHA256 checksum manifest.
+
 ## v1.5.1 (2026-07-13)
 
 ### Theme: Dashboard UI Optimization

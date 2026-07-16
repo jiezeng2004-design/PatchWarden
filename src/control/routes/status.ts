@@ -33,9 +33,9 @@ import {
 import { findTunnelClientExecutable } from "./process.js";
 import {
   config,
+  configIdentitySha256,
   controlCenterStatusPath,
   CORE_BASE_URL,
-  DEFAULT_TUNNEL_CLIENT_EXE,
   DIRECT_BASE_URL,
   errorMessage,
   readJsonFileSafe,
@@ -59,9 +59,25 @@ interface StatusSnapshotForSuggestions {
   tunnel: { core: Record<string, unknown>; direct: Record<string, unknown> };
   agents: AgentAvailability[];
   tasks: StatusTasks;
+  direct_profile_enabled: boolean;
 }
 
-function buildSuggestions(s: StatusSnapshotForSuggestions): Suggestion[] {
+export function reconcileTunnelStatus(
+  status: Record<string, unknown>,
+  health: RuntimeHealth,
+): Record<string, unknown> {
+  if (!health.available) return status;
+  return {
+    ...status,
+    observed: true,
+    status: "running",
+    ready: true,
+    reason_code: "health_endpoint_ready",
+    health_observed: true,
+  };
+}
+
+export function buildSuggestions(s: StatusSnapshotForSuggestions): Suggestion[] {
   const out: Suggestion[] = [];
 
   if (!s.core.available) {
@@ -72,7 +88,7 @@ function buildSuggestions(s: StatusSnapshotForSuggestions): Suggestion[] {
       action: "/api/core/start",
     });
   }
-  if (!s.direct.available) {
+  if (s.direct_profile_enabled && !s.direct.available) {
     out.push({
       code: "direct_stopped",
       severity: "warning",
@@ -85,8 +101,8 @@ function buildSuggestions(s: StatusSnapshotForSuggestions): Suggestion[] {
     out.push({
       code: "watcher_stale",
       severity: "error",
-      message: "Watcher 处于 " + s.watcher.status + " 状态，建议 Restart All",
-      action: "/api/restart-all",
+      message: "Watcher 处于 " + s.watcher.status + " 状态，建议重启 Core",
+      action: "/api/core/restart",
     });
   }
 
@@ -101,12 +117,12 @@ function buildSuggestions(s: StatusSnapshotForSuggestions): Suggestion[] {
 
   const coreTunnelReady = !!(s.tunnel.core && s.tunnel.core.ready);
   const directTunnelReady = !!(s.tunnel.direct && s.tunnel.direct.ready);
-  if (!coreTunnelReady || !directTunnelReady) {
+  if (!coreTunnelReady || (s.direct_profile_enabled && !directTunnelReady)) {
     out.push({
       code: "tunnel_not_ready",
       severity: "warning",
-      message: "Tunnel 未就绪，建议重启 profile 或检查代理",
-      action: "/api/restart-all",
+      message: "Tunnel 未就绪，建议启动 profile 或检查代理",
+      action: "/api/start-all",
     });
   }
 
@@ -115,7 +131,7 @@ function buildSuggestions(s: StatusSnapshotForSuggestions): Suggestion[] {
     out.push({
       code: "agent_missing",
       severity: "info",
-      message: "Agent 未就绪：" + missingAgents.map((a) => a.name).join(", ") + "（请检查 opencode/claude 路径）",
+      message: "Agent 未就绪：" + missingAgents.map((a) => a.name).join(", ") + "（请检查对应 CLI 安装与路径）",
     });
   }
 
@@ -169,7 +185,7 @@ function diffAndRecordEvents(prev: StatusSnapshotDigest, curr: StatusSnapshotDig
 
 export async function handleStatus(res: ServerResponse): Promise<void> {
   try {
-    const [coreHealth, directHealth, watcher, tunnelCore, tunnelDirect, toolsCore, toolsDirect, agents, workspaceRoot, tasks] = await Promise.all([
+    const [coreHealth, directHealth, watcher, tunnelCoreRaw, tunnelDirectRaw, toolsCore, toolsDirect, agents, workspaceRoot, tasks] = await Promise.all([
       probeRuntimeHealth(CORE_BASE_URL).catch((err): RuntimeHealth => ({
         available: false,
         reason: errorMessage(err),
@@ -191,6 +207,8 @@ export async function handleStatus(res: ServerResponse): Promise<void> {
       Promise.resolve(resolveWorkspaceRootSafe()),
       Promise.resolve(listTasksForStatus()),
     ]);
+    const tunnelCore = reconcileTunnelStatus(tunnelCoreRaw, coreHealth);
+    const tunnelDirect = reconcileTunnelStatus(tunnelDirectRaw, directHealth);
     const snapshotForSuggestions: StatusSnapshotForSuggestions = {
       core: coreHealth,
       direct: directHealth,
@@ -198,6 +216,7 @@ export async function handleStatus(res: ServerResponse): Promise<void> {
       tunnel: { core: tunnelCore, direct: tunnelDirect },
       agents,
       tasks,
+      direct_profile_enabled: config.enableDirectProfile === true,
     };
     const suggestions = buildSuggestions(snapshotForSuggestions);
     const tunnelClientExe = findTunnelClientExecutable();
@@ -221,11 +240,12 @@ export async function handleStatus(res: ServerResponse): Promise<void> {
       workspace_root: workspaceRoot,
       tasks,
       suggestions,
+      direct_profile_enabled: config.enableDirectProfile === true,
       setup: {
         tunnel_client: {
           available: tunnelClientExe !== null,
           path: tunnelClientExe,
-          default_path: DEFAULT_TUNNEL_CLIENT_EXE,
+          source: config.tunnelClientPath && tunnelClientExe === config.tunnelClientPath ? "config" : "detected",
         },
         workspace_root: workspaceRoot,
         watcher: {
@@ -270,11 +290,15 @@ export function handleTunnelUiUrl(res: ServerResponse): void {
   });
 }
 
-export function handleDiagnostics(res: ServerResponse): void {
+export async function handleDiagnostics(res: ServerResponse): Promise<void> {
   try {
     const watcher = readWatcherStatusSafe();
-    const tunnelCore = readTunnelStatus(false);
-    const tunnelDirect = readTunnelStatus(true);
+    const [coreHealth, directHealth] = await Promise.all([
+      probeRuntimeHealth(CORE_BASE_URL),
+      probeRuntimeHealth(DIRECT_BASE_URL),
+    ]);
+    const tunnelCore = reconcileTunnelStatus(readTunnelStatus(false), coreHealth);
+    const tunnelDirect = reconcileTunnelStatus(readTunnelStatus(true), directHealth);
     const toolsCore = readToolManifest(false);
     const toolsDirect = readToolManifest(true);
     const agents = listAgentsSafe();
@@ -314,6 +338,7 @@ export function handleDiagnostics(res: ServerResponse): void {
       workspace_root: workspaceRoot,
       recent_failures: recentFailures,
       direct_profile_enabled: config.enableDirectProfile ?? false,
+      config_identity_sha256: configIdentitySha256,
     };
 
     // Redact any sensitive content that may have leaked into string fields.

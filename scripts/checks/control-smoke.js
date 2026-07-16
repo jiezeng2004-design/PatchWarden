@@ -145,6 +145,7 @@ try {
     "Restart-PatchWarden-Control.cmd",
     "Stop-PatchWarden.cmd",
     "scripts/control/manage-patchwarden.ps1",
+    "scripts/control/run-background-supervisor.ps1",
     "scripts/control/stop-patchwarden.ps1",
     "scripts/launchers/Start-PatchWarden-Tunnel.cmd",
     "scripts/launchers/Start-PatchWarden-Direct-Tunnel.cmd",
@@ -165,6 +166,16 @@ try {
   const desktopEntry = readFileSync(join(root, "PatchWarden-Desktop.cmd"), "utf8");
   if (!desktopEntry.includes("control-center-tray.ps1") || !desktopEntry.includes("WindowStyle Hidden")) {
     throw new Error("PatchWarden-Desktop.cmd must launch the tray hidden as the daily desktop entry");
+  }
+  const managerSource = readFileSync(manager, "utf8");
+  const wrapperSource = readFileSync(join(root, "scripts", "control", "run-background-supervisor.ps1"), "utf8");
+  for (const expected of ["supervisor-status.json", "supervisor.stdout.log", "supervisor.stderr.log", "run-background-supervisor.ps1", "Write-BackgroundStartingState"]) {
+    if (!managerSource.includes(expected)) {
+      throw new Error(`background manager is missing supervisor observability: ${expected}`);
+    }
+  }
+  if (!wrapperSource.includes("1> $stdout 2> $stderr") || wrapperSource.includes("CONTROL_PLANE_API_KEY")) {
+    throw new Error("background wrapper must redirect supervisor logs without credential arguments");
   }
   console.log("ok - control handles orphan cleanup, scoped kill, port conflicts, health fallback, and Core/Direct lifecycle actions");
 } finally {
