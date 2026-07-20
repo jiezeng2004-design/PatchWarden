@@ -1,9 +1,12 @@
-import { resolve, relative, isAbsolute, sep } from "node:path";
+import { relative } from "node:path";
 import { existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { PatchWardenError } from "../errors.js";
-import { isSensitivePath } from "../security/sensitiveGuard.js";
-import { guardWorkspacePath } from "../security/pathGuard.js";
-import { getConfig } from "../config.js";
+import {
+  hasWindowsAlternateDataStream,
+  isSensitivePath,
+} from "../security/sensitiveGuard.js";
+import { guardPath, guardWorkspacePath } from "../security/pathGuard.js";
+import { getConfig, type PatchWardenConfig } from "../config.js";
 import type { DirectSessionRecord } from "./directSessionStore.js";
 
 // ── Session state guards ───────────────────────────────────────────
@@ -55,36 +58,34 @@ export function guardDirectPath(
   resolvedRepoPath: string,
   workspaceRoot: string
 ): string {
-  const config = getConfig();
-  const resolved = resolve(resolvedRepoPath, filePath);
-  const normalizedRepo = resolve(resolvedRepoPath);
-  const normalizedWs = resolve(workspaceRoot);
-
-  // Check path is inside workspace root
-  const relToWs = relative(normalizedWs, resolved);
-  if (isAbsolute(relToWs) || relToWs.startsWith("..")) {
+  if (hasWindowsAlternateDataStream(filePath)) {
     throw new PatchWardenError(
-      "path_outside_repo",
-      `Path "${filePath}" resolves outside the session repo.`,
-      "Use a relative path inside the session's repo_path.",
+      "windows_ads_path_blocked",
+      `Path "${filePath}" contains a Windows alternate data stream suffix.`,
+      "Use a normal relative file path without a colon or NTFS stream name.",
       true,
       { path: filePath, operation: "direct_path_access" }
     );
   }
 
-  // Check path is inside repo_path
-  const relToRepo = relative(normalizedRepo, resolved);
-  if (isAbsolute(relToRepo) || relToRepo.startsWith("..")) {
-    throw new PatchWardenError(
-      "path_outside_repo",
-      `Path "${filePath}" is outside the session repo_path "${resolvedRepoPath}".`,
-      "Use a relative path inside the session's repo_path.",
-      true,
-      { path: filePath, operation: "direct_path_access" }
-    );
+  // Resolve the repo first so a repo-level symlink/junction cannot escape the
+  // workspace. guardPath then resolves the candidate or its nearest existing
+  // parent, closing intermediate symlink/junction escapes for new files too.
+  try {
+    const guardedRepo = guardWorkspacePath(resolvedRepoPath, workspaceRoot);
+    return guardPath(filePath, guardedRepo);
+  } catch (error) {
+    if (error instanceof PatchWardenError && error.reason === "workspace_path_escape") {
+      throw new PatchWardenError(
+        "path_outside_repo",
+        `Path "${filePath}" resolves outside the session repo.`,
+        "Use a relative path inside the session's repo_path.",
+        true,
+        { path: filePath, operation: "direct_path_access" }
+      );
+    }
+    throw error;
   }
-
-  return resolved;
 }
 
 /**
@@ -96,13 +97,15 @@ export function guardDirectReadPath(
   workspaceRoot: string
 ): string {
   const resolved = guardDirectPath(filePath, resolvedRepoPath, workspaceRoot);
-  const normalized = filePath.replace(/\\/g, "/");
+  const policyPaths = directPolicyPaths(
+    filePath,
+    resolved,
+    resolvedRepoPath,
+    workspaceRoot
+  );
 
   // Block internal PatchWarden paths (sessions, tasks, plans, assessments)
-  if (
-    normalized.startsWith(".patchwarden/") ||
-    normalized.includes("/.patchwarden/")
-  ) {
+  if (policyPaths.some((path) => hasPathSegment(path, ".patchwarden"))) {
     throw new PatchWardenError(
       "internal_patchwarden_path_blocked",
       `Access denied: "${filePath}" is inside the internal .patchwarden directory.`,
@@ -112,7 +115,7 @@ export function guardDirectReadPath(
     );
   }
 
-  if (isSensitivePath(filePath)) {
+  if (policyPaths.some((path) => isSensitivePath(path))) {
     throw new PatchWardenError(
       "sensitive_path_blocked",
       `Access denied: "${filePath}" matches a sensitive file pattern.`,
@@ -145,13 +148,15 @@ export function guardDirectWritePath(
   workspaceRoot: string
 ): string {
   const resolved = guardDirectPath(filePath, resolvedRepoPath, workspaceRoot);
-  const normalized = filePath.replace(/\\/g, "/");
+  const policyPaths = directPolicyPaths(
+    filePath,
+    resolved,
+    resolvedRepoPath,
+    workspaceRoot
+  );
 
   // Block internal PatchWarden paths
-  if (
-    normalized.startsWith(".patchwarden/") ||
-    normalized.includes("/.patchwarden/")
-  ) {
+  if (policyPaths.some((path) => hasPathSegment(path, ".patchwarden"))) {
     throw new PatchWardenError(
       "internal_patchwarden_path_blocked",
       `Modification denied: "${filePath}" is inside the internal .patchwarden directory.`,
@@ -161,7 +166,7 @@ export function guardDirectWritePath(
     );
   }
 
-  if (isSensitivePath(normalized)) {
+  if (policyPaths.some((path) => isSensitivePath(path))) {
     throw new PatchWardenError(
       "sensitive_path_blocked",
       `Modification denied: "${filePath}" matches a sensitive file pattern.`,
@@ -172,7 +177,7 @@ export function guardDirectWritePath(
   }
 
   // Block node_modules
-  if (normalized.startsWith("node_modules/") || normalized.includes("/node_modules/")) {
+  if (policyPaths.some((path) => hasPathSegment(path, "node_modules"))) {
     throw new PatchWardenError(
       "blocked_artifact_path",
       `Modification denied: "${filePath}" is inside node_modules.`,
@@ -183,7 +188,7 @@ export function guardDirectWritePath(
   }
 
   // Block release/
-  if (normalized.startsWith("release/") || normalized.includes("/release/")) {
+  if (policyPaths.some((path) => hasPathSegment(path, "release"))) {
     throw new PatchWardenError(
       "blocked_artifact_path",
       `Modification denied: "${filePath}" is inside the release directory.`,
@@ -194,7 +199,7 @@ export function guardDirectWritePath(
   }
 
   // Block dist/
-  if (normalized.startsWith("dist/") || normalized.includes("/dist/")) {
+  if (policyPaths.some((path) => hasPathSegment(path, "dist"))) {
     throw new PatchWardenError(
       "blocked_artifact_path",
       `Modification denied: "${filePath}" is inside the dist directory.`,
@@ -217,6 +222,27 @@ export function guardDirectWritePath(
   return resolved;
 }
 
+function directPolicyPaths(
+  requestedPath: string,
+  resolvedPath: string,
+  resolvedRepoPath: string,
+  workspaceRoot: string
+): string[] {
+  const guardedRepo = guardWorkspacePath(resolvedRepoPath, workspaceRoot);
+  return [
+    requestedPath.replace(/\\/g, "/"),
+    relative(guardedRepo, resolvedPath).replace(/\\/g, "/"),
+  ];
+}
+
+function hasPathSegment(filePath: string, expectedSegment: string): boolean {
+  const expected = expectedSegment.toLowerCase();
+  return filePath
+    .split("/")
+    .filter(Boolean)
+    .some((segment) => segment.toLowerCase() === expected);
+}
+
 // ── Size guards ────────────────────────────────────────────────────
 
 export function guardDirectPatchSize(patchBytes: number): void {
@@ -232,8 +258,10 @@ export function guardDirectPatchSize(patchBytes: number): void {
   }
 }
 
-export function guardDirectFileSize(fileBytes: number): void {
-  const config = getConfig();
+export function guardDirectFileSize(
+  fileBytes: number,
+  config: PatchWardenConfig = getConfig(),
+): void {
   if (fileBytes > config.directMaxFileBytes) {
     throw new PatchWardenError(
       "file_too_large",

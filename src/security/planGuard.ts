@@ -1,4 +1,5 @@
 import { PatchWardenError } from "../errors.js";
+import { redactSensitiveContent } from "./contentRedaction.js";
 
 interface PlanRule {
   id: string;
@@ -49,7 +50,7 @@ export function guardPlanContent(title: string, content: string): void {
         {
           operation: "save_plan",
           matched_category: rule.category,
-          matched_text: match[0].slice(0, 160),
+          matched_text: redactSensitiveContent(match[0]).content.slice(0, 160),
         }
       );
     }

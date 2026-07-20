@@ -7,7 +7,7 @@ import {
   resolve,
   sep,
 } from "node:path";
-import { realpathSync } from "node:fs";
+import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { PatchWardenError } from "../errors.js";
 
 export function guardPath(
@@ -112,7 +112,7 @@ function realPathOrSelf(value: string): string {
   }
 }
 
-function realPathOrExistingPrefix(candidate: string): string {
+function realPathOrExistingPrefix(candidate: string, seenLinks = new Set<string>()): string {
   const normalized = normalize(candidate);
   const root = parse(normalized).root;
   const suffix: string[] = [];
@@ -121,7 +121,36 @@ function realPathOrExistingPrefix(candidate: string): string {
   while (current && current !== root) {
     try {
       return resolve(realpathSync(current), ...suffix);
-    } catch {
+    } catch (error) {
+      try {
+        const metadata = lstatSync(current);
+        if (metadata.isSymbolicLink()) {
+          const linkKey = process.platform === "win32" ? current.toLowerCase() : current;
+          if (seenLinks.has(linkKey)) {
+            throw new PatchWardenError(
+              "workspace_path_escape",
+              `Symbolic link cycle detected while resolving "${candidate}"`,
+              "Remove the cyclic link and use a path inside the configured workspace.",
+              true,
+              { path: candidate, operation: "path_access", safe_alternative: "Use a non-link path inside workspaceRoot." }
+            );
+          }
+          const nextSeen = new Set(seenLinks);
+          nextSeen.add(linkKey);
+          const linkTarget = readlinkSync(current);
+          const resolvedTarget = isAbsolute(linkTarget)
+            ? resolve(linkTarget)
+            : resolve(dirname(current), linkTarget);
+          return resolve(realPathOrExistingPrefix(resolvedTarget, nextSeen), ...suffix);
+        }
+      } catch (linkError) {
+        if (linkError instanceof PatchWardenError) throw linkError;
+        const linkCode = (linkError as NodeJS.ErrnoException).code;
+        if (linkCode !== "ENOENT" && linkCode !== "ENOTDIR") throw linkError;
+      }
+
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
       suffix.unshift(basename(current));
       const parent = dirname(current);
       if (parent === current) break;
@@ -129,11 +158,7 @@ function realPathOrExistingPrefix(candidate: string): string {
     }
   }
 
-  try {
-    return resolve(realpathSync(root || current), ...suffix);
-  } catch {
-    return normalized;
-  }
+  return resolve(realpathSync(root || current), ...suffix);
 }
 
 function assertInside(
@@ -144,16 +169,10 @@ function assertInside(
 ): void {
   const normalizedRoot = normalize(root);
   const normalizedCandidate = normalize(candidate);
-  const checkRoot = process.platform === "win32"
-    ? normalizedRoot.toLowerCase()
-    : normalizedRoot;
-  const checkCandidate = process.platform === "win32"
-    ? normalizedCandidate.toLowerCase()
-    : normalizedCandidate;
 
   if (
-    checkCandidate !== checkRoot &&
-    !checkCandidate.startsWith(checkRoot + sep)
+    normalizedCandidate !== normalizedRoot &&
+    !normalizedCandidate.startsWith(normalizedRoot + sep)
   ) {
     if (message.startsWith("Path escapes workspace")) {
       throw new PatchWardenError(

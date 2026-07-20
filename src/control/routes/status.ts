@@ -9,8 +9,8 @@
  */
 import { existsSync } from "node:fs";
 import { type ServerResponse } from "node:http";
-import { type AgentAvailability } from "../../tools/listAgents.js";
-import { type TaskEntry } from "../../tools/listTasks.js";
+import { type AgentAvailability } from "../../tools/workspace/listAgents.js";
+import { type TaskEntry } from "../../tools/tasks/listTasks.js";
 import { type WatcherStatusSnapshot } from "../../watcherStatus.js";
 import { PATCHWARDEN_VERSION, TOOL_SCHEMA_EPOCH } from "../../version.js";
 import { redactSensitiveValue } from "../../security/contentRedaction.js";
@@ -97,7 +97,7 @@ export function buildSuggestions(s: StatusSnapshotForSuggestions): Suggestion[] 
     });
   }
 
-  if (s.watcher.status === "stale" || s.watcher.status === "unreadable") {
+  if (s.watcher.status === "degraded" || s.watcher.status === "stale" || s.watcher.status === "unreadable") {
     out.push({
       code: "watcher_stale",
       severity: "error",

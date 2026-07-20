@@ -16,16 +16,21 @@
  */
 
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { loadConfig, getTasksDir } from "./config.js";
 import { registerTools } from "./tools/registry.js";
-import { healthCheck } from "./tools/healthCheck.js";
+import { healthCheck } from "./tools/diagnostics/healthCheck.js";
 import { getToolCatalogSnapshot } from "./tools/registry.js";
 import { PATCHWARDEN_VERSION } from "./version.js";
 import { logger } from "./logging.js";
+import { firstHeaderValue, timingSafeStringEqual } from "./security/secretComparison.js";
+import { redactSensitiveContent } from "./security/contentRedaction.js";
+import { atomicWriteJsonFileSync } from "./utils/atomicFile.js";
+import { mutateTaskStatus } from "./runner/taskStatusStore.js";
+import { isTrustedLoopbackHostHeader } from "./security/loopbackHost.js";
 
 // ── Bootstrap ─────────────────────────────────────────────────────
 
@@ -44,6 +49,16 @@ logger.info(`[patchwarden-http] ⚠️  Bound to 127.0.0.1 only — not exposed 
 const httpCfg = config.http || {};
 const ownerTokenEnv = httpCfg.ownerTokenEnv || "PATCHWARDEN_OWNER_TOKEN";
 const ownerToken = process.env[ownerTokenEnv] || "";
+const MAX_ADMIN_BODY_BYTES = 64 * 1024;
+const MAX_ACCEPTANCE_NOTES_CHARS = 10_000;
+const REVIEWABLE_TASK_STATUSES = new Set([
+  "done_by_agent",
+  "done",
+  "accepted",
+  "rejected",
+  "needs_fix",
+  "blocked",
+]);
 
 if (ownerToken) {
   logger.info(`[patchwarden-http] 🔒 Owner token required (env: ${ownerTokenEnv})`);
@@ -54,15 +69,15 @@ if (ownerToken) {
 function checkOwnerToken(req: IncomingMessage): boolean {
   if (!ownerToken) return true; // no token configured — allow all
 
-  const authHeader = req.headers["authorization"] || "";
-  const customHeader = req.headers["x-patchwarden-token"] || "";
+  const authHeader = firstHeaderValue(req.headers["authorization"]);
+  const customHeader = firstHeaderValue(req.headers["x-patchwarden-token"]);
 
   if (authHeader.startsWith("Bearer ")) {
-    return authHeader.slice(7) === ownerToken;
+    return timingSafeStringEqual(authHeader.slice(7), ownerToken);
   }
 
-  if (typeof customHeader === "string" && customHeader.length > 0) {
-    return customHeader === ownerToken;
+  if (customHeader.length > 0) {
+    return timingSafeStringEqual(customHeader, ownerToken);
   }
 
   return false;
@@ -82,11 +97,22 @@ function handleAcceptance(taskId: string, status: "accepted" | "rejected", body:
     throw Object.assign(new Error(`Task "${taskId}" not found.`), { statusCode: 404 });
   }
   let notes = "";
-  try {
-    const parsed = JSON.parse(body || "{}");
-    notes = String(parsed.notes || parsed.reason || "");
-  } catch {
-    // no body or invalid JSON — notes stays empty
+  if (body.trim()) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      throw httpError(400, "Acceptance body must be valid JSON.");
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw httpError(400, "Acceptance body must be a JSON object.");
+    }
+    const record = parsed as Record<string, unknown>;
+    const rawNotes = record.notes ?? record.reason ?? "";
+    if (typeof rawNotes !== "string") {
+      throw httpError(400, "Acceptance notes or reason must be a string.");
+    }
+    notes = redactSensitiveContent(rawNotes).content.slice(0, MAX_ACCEPTANCE_NOTES_CHARS);
   }
   const acceptance = {
     status,
@@ -94,21 +120,67 @@ function handleAcceptance(taskId: string, status: "accepted" | "rejected", body:
     reviewer: "human",
     notes,
   };
-  writeFileSync(filePath, JSON.stringify(acceptance, null, 2), "utf-8");
-
-  // Also update the task's status.json with acceptance_status
+  // Commit the review artifact and status annotation while holding the same
+  // status lock used by the runner, cancel, and audit paths.
   const statusFile = join(taskDir, "status.json");
-  if (existsSync(statusFile)) {
-    try {
-      const current = JSON.parse(readFileSync(statusFile, "utf-8"));
-      current.acceptance_status = status;
-      current.acceptance_reviewed_at = acceptance.reviewed_at;
-      writeFileSync(statusFile, JSON.stringify(current, null, 2), "utf-8");
-    } catch {
-      // status.json update is best-effort
-    }
+  if (!existsSync(statusFile)) {
+    throw httpError(409, `Task "${taskId}" has no status.json to review.`);
   }
+  mutateTaskStatus(statusFile, (current) => {
+    if (!REVIEWABLE_TASK_STATUSES.has(String(current.status || ""))) {
+      throw httpError(409, `Task "${taskId}" is not in a reviewable terminal state.`);
+    }
+    atomicWriteJsonFileSync(filePath, acceptance);
+    const next = {
+      ...current,
+      acceptance_status: status,
+      acceptance_reviewed_at: acceptance.reviewed_at,
+      updated_at: new Date().toISOString(),
+    };
+    return { next, result: next };
+  });
   return acceptance;
+}
+
+function httpError(statusCode: number, message: string): Error & { statusCode: number } {
+  return Object.assign(new Error(message), { statusCode });
+}
+
+function readBoundedRequestBody(req: IncomingMessage, maxBytes: number): Promise<string> {
+  const declaredLength = Number(firstHeaderValue(req.headers["content-length"]));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    req.resume();
+    return Promise.reject(httpError(413, `Request body exceeds ${maxBytes} bytes.`));
+  }
+  return new Promise((resolveBody, rejectBody) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let settled = false;
+    req.on("data", (chunk: Buffer | string) => {
+      if (settled) return;
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += buffer.length;
+      if (total > maxBytes) {
+        settled = true;
+        req.resume();
+        rejectBody(httpError(413, `Request body exceeds ${maxBytes} bytes.`));
+        return;
+      }
+      chunks.push(buffer);
+    });
+    req.on("end", () => {
+      if (!settled) {
+        settled = true;
+        resolveBody(Buffer.concat(chunks).toString("utf-8"));
+      }
+    });
+    req.on("error", (error) => {
+      if (!settled) {
+        settled = true;
+        rejectBody(error);
+      }
+    });
+  });
 }
 
 function readAcceptance(taskId: string): object {
@@ -181,6 +253,16 @@ function parseAdminUrl(url: string) {
 // ── HTTP server ───────────────────────────────────────────────────
 
 const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+  if (!isTrustedLoopbackHostHeader(req.headers.host, port)) {
+    res.writeHead(421, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+    });
+    res.end(JSON.stringify({ error: "Untrusted Host header" }));
+    return;
+  }
+
   // Health check endpoints
   if (req.method === "GET" && (req.url === "/healthz" || req.url === "/readyz")) {
     const health = healthCheck(getToolCatalogSnapshot());
@@ -206,9 +288,7 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
         return;
       }
       if ((admin.action === "accept" || admin.action === "reject") && req.method === "POST") {
-        const chunks: Buffer[] = [];
-        for await (const chunk of req) { chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)); }
-        const body = Buffer.concat(chunks).toString("utf-8");
+        const body = await readBoundedRequestBody(req, MAX_ADMIN_BODY_BYTES);
         const acceptance = handleAcceptance(admin.taskId, admin.action === "accept" ? "accepted" : "rejected", body);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(acceptance, null, 2));
@@ -216,10 +296,13 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
       }
       res.writeHead(405, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Method not allowed for this admin endpoint." }));
-    } catch (err: any) {
-      const statusCode = err.statusCode || 500;
+    } catch (err: unknown) {
+      const statusCode = err && typeof err === "object" && "statusCode" in err
+        ? Number((err as { statusCode?: unknown }).statusCode) || 500
+        : 500;
+      const message = err instanceof Error ? err.message : "Internal server error";
       res.writeHead(statusCode, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: err.message || "Internal server error" }));
+      res.end(JSON.stringify({ error: message }));
     }
     return;
   }

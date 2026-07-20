@@ -60,6 +60,8 @@ async function runScenario(label, mode, maxRestarts, lifetimeMs, assertState) {
 async function runExternalScenario() {
   const fixture = createFixture("external");
   const env = fixtureEnv(fixture, "healthy", 7_000);
+  delete env.CONTROL_PLANE_API_KEY;
+  delete env.PATCHWARDEN_OWNER_TOKEN;
   const external = spawn(process.execPath, [fixture.watcherPath], {
     cwd: fixture.project,
     env: {
@@ -168,6 +170,9 @@ function fixtureEnv(fixture, mode, lifetimeMs) {
     APPDATA: fixture.appData,
     LOCALAPPDATA: fixture.localAppData,
     CONTROL_PLANE_API_KEY: "test-key",
+    PATCHWARDEN_OWNER_TOKEN: "test-owner-token",
+    PATCHWARDEN_AGENT_ENV_ALLOWLIST: "PATCHWARDEN_TEST_PROVIDER_KEY",
+    PATCHWARDEN_TEST_PROVIDER_KEY: "provider-key-canary",
     WATCHER_FIXTURE_MODE: mode,
     TUNNEL_FIXTURE_LIFETIME_MS: String(lifetimeMs),
   };
@@ -177,6 +182,9 @@ function watcherFixtureSource(attemptPath) {
   return `
 const fs=require('fs');const path=require('path');
 if(!process.env.XDG_CONFIG_HOME){console.error('watcher did not receive XDG_CONFIG_HOME');process.exit(12)}
+if(process.env.CONTROL_PLANE_API_KEY){console.error('watcher received tunnel owner credential');process.exit(13)}
+if(process.env.PATCHWARDEN_OWNER_TOKEN){console.error('watcher received HTTP owner credential');process.exit(14)}
+if(process.env.PATCHWARDEN_TEST_PROVIDER_KEY!=='provider-key-canary'){console.error('watcher did not receive allow-listed provider credential');process.exit(15)}
 let attempt=0;try{attempt=Number(fs.readFileSync(${JSON.stringify(attemptPath)},'utf8'))||0}catch{}
 attempt++;fs.writeFileSync(${JSON.stringify(attemptPath)},String(attempt));
 const cfg=JSON.parse(fs.readFileSync(process.env.PATCHWARDEN_CONFIG,'utf8'));
@@ -192,6 +200,7 @@ else setInterval(write,250);
 function tunnelFixtureSource() {
   return `
 const fs=require('fs');const path=require('path');const args=process.argv.slice(2);const command=args[0]||'';
+if(process.env.PATCHWARDEN_TEST_PROVIDER_KEY){console.error('allow-listed provider credential leaked into tunnel-client');process.exit(22)}
 const flag=(name)=>{const i=args.indexOf(name);return i>=0?args[i+1]:''};
 if(command==='init'){const profile=flag('--profile')||'patchwarden';const mcpCommand=flag('--mcp-command')||'';const yamlDir=path.join(process.env.APPDATA,'tunnel-client');const yamlPath=path.join(yamlDir,profile+'.yaml');fs.mkdirSync(yamlDir,{recursive:true});fs.writeFileSync(yamlPath,'mcp:\\n  commands:\\n    - channel: main\\n      command: \"'+mcpCommand.replace(/\\\\/g,'/')+'\"\\n\\nhealth:\\n  listen_addr: \"127.0.0.1:8080\"\\n');console.log('{}');process.exit(0)}
 if(command==='doctor'){console.log('{}');process.exit(0)}

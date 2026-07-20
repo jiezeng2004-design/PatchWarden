@@ -7,21 +7,22 @@
 
 import { getConfig } from "../../config.js";
 import { PatchWardenError } from "../../errors.js";
-import { createDirectSession } from "../createDirectSession.js";
-import { searchWorkspace } from "../searchWorkspace.js";
-import { applyPatch } from "../applyPatch.js";
-import { runVerification } from "../runVerification.js";
-import { runDirectVerificationBundle } from "../runDirectVerificationBundle.js";
-import { finalizeDirectSession } from "../finalizeDirectSession.js";
-import { auditSession } from "../auditSession.js";
-import { syncFile } from "../syncFile.js";
+import { createDirectSession } from "../direct/createDirectSession.js";
+import { searchWorkspace } from "../workspace/searchWorkspace.js";
+import { applyPatch } from "../workspace/applyPatch.js";
+import { runVerification } from "../tasks/runVerification.js";
+import { runDirectVerificationBundle } from "../direct/runDirectVerificationBundle.js";
+import { finalizeDirectSession } from "../direct/finalizeDirectSession.js";
+import { auditSession } from "../diagnostics/auditSession.js";
+import { syncFile } from "../workspace/syncFile.js";
 import {
   safeAuditDirectSession,
   safeDirectSummary,
   safeFinalizeDirectSession,
-} from "../safeViews.js";
+} from "../diagnostics/safeViews.js";
 import type { ToolHandlerMap } from "./types.js";
 import { toResult } from "./types.js";
+import { parsePatchOperations } from "./validation.js";
 
 /** Mirror of guardDirectProfileEnabled from the original registry.ts. */
 function guardDirectProfileEnabled(): void {
@@ -72,7 +73,7 @@ export const directHandlers: ToolHandlerMap = {
         session_id: String(args?.session_id ?? ""),
         path: String(args?.path ?? ""),
         expected_sha256: String(args?.expected_sha256 ?? ""),
-        operations: Array.isArray(args?.operations) ? (args.operations as any) : [],
+        operations: parsePatchOperations(args?.operations),
       }),
     );
   },

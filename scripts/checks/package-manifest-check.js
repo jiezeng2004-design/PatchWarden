@@ -1,15 +1,24 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  buildChildEnvironment,
+  resolvePackageManagerInvocation,
+} from "../../dist/runner/processSecurity.js";
 
-const isWindows = process.platform === "win32";
-const command = isWindows ? (process.env.ComSpec || "cmd.exe") : "npm";
-const args = isWindows
-  ? ["/d", "/s", "/c", "npm.cmd pack --dry-run --json"]
-  : ["pack", "--dry-run", "--json"];
-const result = spawnSync(command, args, {
+const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+const env = buildChildEnvironment({ cwd: root });
+const invocation = resolvePackageManagerInvocation(process.platform === "win32" ? "npm.cmd" : "npm", root, {
+  pathValue: env.PATH,
+});
+const result = spawnSync(invocation.command, [...invocation.argsPrefix, "pack", "--dry-run", "--json"], {
+  cwd: root,
   encoding: "utf8",
+  env,
   shell: false,
+  windowsHide: true,
 });
 
 if (result.status !== 0) {
@@ -35,6 +44,8 @@ const forbidden = [
   /\.dpapi$/i,
   /^docs\/optimization-proposal\.md$/i,
   /(^|\/)kill-patchwarden\.(cmd|ps1)$/i,
+  /^(?:dist|src)\/test\//i,
+  /^docs\/archive\//i,
 ];
 const leaked = files.filter((file) => forbidden.some((pattern) => pattern.test(file)));
 if (leaked.length > 0) {
@@ -44,8 +55,10 @@ if (leaked.length > 0) {
 }
 
 const required = [
+  "dist/index.js",
+  "dist/index.d.ts",
   "PatchWarden.cmd",
-  "PatchWarden-Desktop.cmd",
+  "scripts/launchers/PatchWarden-Desktop.cmd",
   "scripts/control/manage-patchwarden.ps1",
   "scripts/launchers/Start-PatchWarden-Tunnel.cmd",
   "scripts/launchers/Start-PatchWarden-Direct-Tunnel.cmd",

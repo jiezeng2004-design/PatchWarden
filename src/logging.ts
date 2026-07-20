@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { redactSensitiveContent } from "./security/contentRedaction.js";
-import { stableJsonStringify } from "./tools/toolRegistry.js";
+import { stableJsonStringify } from "./utils/stableJson.js";
 import { getConfig } from "./config.js";
+import { appendBoundedTextFileSync } from "./utils/boundedFile.js";
+
+const MAX_INVOCATION_LOG_BYTES = 5 * 1024 * 1024;
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -234,7 +237,11 @@ export function logToolInvocation(
 
     mkdirSync(logsDir, { recursive: true });
     const logFilePath = join(logsDir, "invocation.log");
-    appendFileSync(logFilePath, JSON.stringify(entry) + "\n", "utf8");
+    appendBoundedTextFileSync(
+      logFilePath,
+      JSON.stringify(entry) + "\n",
+      MAX_INVOCATION_LOG_BYTES,
+    );
   } catch (err) {
     // 日志失败不应阻断主流程，仅向 stderr 记录错误
     try {

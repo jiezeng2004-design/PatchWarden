@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { collectMatchingFiles } from "../lib/file-discovery.js";
 
 const scriptDir = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const root = resolve(scriptDir, "..", "..");
@@ -14,10 +15,7 @@ if (!existsSync(unitDir)) {
   process.exit(1);
 }
 
-const testFiles = readdirSync(unitDir)
-  .filter((name) => name.endsWith(".test.js"))
-  .sort()
-  .map((name) => resolve(unitDir, name));
+const testFiles = collectMatchingFiles(unitDir, (name) => name.endsWith(".test.js"));
 
 if (testFiles.length === 0) {
   console.error(`[unit-tests] No compiled unit tests found in ${unitDir}`);

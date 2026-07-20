@@ -8,7 +8,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { type ServerResponse } from "node:http";
-import { toSafeTaskLineage, type SafeTaskLineage, type TaskLineageRecord } from "../../tools/taskLineage.js";
+import { toSafeTaskLineage, type SafeTaskLineage, type TaskLineageRecord } from "../../tools/tasks/taskLineage.js";
 import { config, errorMessage, readJsonFileSafeUnder, sendJson } from "../shared.js";
 
 interface LineageSummary {

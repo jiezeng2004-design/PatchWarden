@@ -61,12 +61,13 @@ PatchWarden uses a narrower, auditable task channel:
 - Every task must specify a `repo_path` inside `workspaceRoot`.
 - Agent launch commands come from local configuration, not model input.
 - Verification commands must exactly match `allowedTestCommands`.
-- Every completed task records structured results, a full diff, file
+- Every completed task records structured results, a bounded and redacted diff, file
   statistics, and independent verification output.
 - Changes outside the requested repository cause a scope violation instead of
   being silently accepted.
-- Sensitive paths such as `.env` files, tokens, SSH keys, cookies, and
-  credential stores are blocked by default.
+- `.patchwarden/` is not a sensitive-path exemption. Names such as `.env`
+  files, tokens, SSH keys, cookies, and credential stores remain blocked at
+  every directory depth.
 
 Good use cases:
 
@@ -110,7 +111,7 @@ A completed task writes bounded, reviewable artifacts under
 - `result.json` - final status, verification status, changed-file groups, and warnings.
 - `artifact_manifest.json` - generated artifacts with size, type, and SHA-256.
 - `verify.json` - exact verification commands and exit codes.
-- `diff.patch` - complete source diff when Git evidence is available.
+- `diff.patch` - up to 20 MiB of redacted source diff when Git evidence is available; truncation is explicit.
 - `rollback_scope_violation_plan.md` - review plan when a task changes files outside `repo_path`.
 
 Example compact evidence:
@@ -300,11 +301,13 @@ Recommended Windows example:
   "agents": {
     "opencode": {
       "command": "opencode",
-      "args": ["run", "{prompt}"]
+      "args": ["run", "{prompt}"],
+      "envAllowlist": []
     },
     "codex": {
       "command": "codex",
-      "args": ["exec", "--cd", "{repo}", "{prompt}"]
+      "args": ["exec", "--cd", "{repo}", "{prompt}"],
+      "envAllowlist": []
     }
   },
   "allowedTestCommands": [
@@ -333,6 +336,7 @@ Configuration fields:
 | `tasksDir` | Yes | Task and result directory, normally `.patchwarden/tasks`. |
 | `toolProfile` | No | `full`, `chatgpt_core`, `chatgpt_direct`, or `chatgpt_search`; use `full` for local clients and `chatgpt_search` for compact discovery-driven clients. |
 | `agents` | Yes | Execution-agent allowlist; supports `{repo}` and `{prompt}` placeholders. |
+| `agents.<name>.envAllowlist` | No | Provider environment variable names explicitly forwarded to that agent; none are inherited by default. Tunnel and HTTP owner credentials are always blocked. |
 | `allowedTestCommands` | Yes | Exact allowlist for independent verification commands. |
 | `repoAllowedTestCommands` | No | Extra exact commands keyed by workspace-relative repository path; wildcards are unsupported. |
 | `maxReadFileBytes` | Yes | Maximum bytes returned by one MCP file read. |
@@ -349,12 +353,17 @@ Important configuration rules:
 - If you use backslashes, escape them as `D:\\path\\to\\project`.
 - Do not set `workspaceRoot` to a drive root, home directory, Desktop,
   Downloads, or Documents.
+- Configuration loading fails closed when `workspaceRoot` is missing,
+  inaccessible, not a directory, or one of those unsafe broad roots.
 - `plansDir` and `tasksDir` are resolved relative to `workspaceRoot`.
 - `repo_path` must stay inside `workspaceRoot` and cannot escape with `..`.
 - `allowedTestCommands` uses exact matching; similar commands are not
   automatically authorized.
 - Repository-specific commands come only from trusted local configuration;
   a target repository cannot authorize itself through `package.json`.
+- Every execution agent must be explicitly registered. Provider credentials or
+  proxy variables are forwarded only when their names appear in that agent's
+  `envAllowlist`; owner credentials cannot be allow-listed.
 - Configuration may contain private paths and should not be committed.
 
 Set the configuration path:
@@ -702,12 +711,19 @@ mean the task is wrong.
 | `progress.md` | Progress reported by the agent. |
 | `result.md` | Human-readable execution report. |
 | `result.json` | Structured result, paths, changes, warnings, and next steps. |
-| `diff.patch` | Complete task change evidence. |
+| `diff.patch` | Up to 20 MiB of task change evidence; credential-like values are redacted before persistence and truncation is explicit. |
 | `artifact_manifest.json` | Generated artifact paths, types, sizes, and SHA-256 hashes. |
 | `file-stats.json` | Per-file addition and deletion statistics. |
 | `verify.json` | Structured record for every independent verification command. |
 | `verify.log` | Human-readable independent verification output. |
 | `test.log` | Test output captured during agent execution. |
+
+Client-facing task artifact reads are limited by `maxReadFileBytes`; diff,
+summary, and log-tail surfaces read bounded prefixes or suffixes. `audit_task`
+scans at most 200 Markdown files and 4 MiB of documentation and returns a
+warning when that budget is reached. Persistent invocation and reconciliation
+logs use cross-process locked, bounded append and retain recent content with an
+explicit truncation marker when full.
 
 An agent saying “published” or “pushed” is not reliable remote evidence.
 Verify GitHub, npm, tags, and releases against the live platform state.
@@ -793,10 +809,10 @@ available from PowerShell:
 .\PatchWarden.cmd restart all
 .\PatchWarden.cmd status all
 .\PatchWarden.cmd kill all
-.\Stop-PatchWarden.cmd
+.\scripts\launchers\Stop-PatchWarden.cmd
 ```
 
-For daily desktop use, start with `PatchWarden-Desktop.cmd`; it starts the tray and keeps Control Center available without opening extra browser windows. Use `PatchWarden-Control-Tray.cmd --foreground` only for tray debugging, `PatchWarden-Control.cmd` for the full local Web dashboard, and `Stop-PatchWarden.cmd` for one-click shutdown of Core/Direct, Control Center, and the tray.
+For daily desktop use, start with `scripts\launchers\PatchWarden-Desktop.cmd`; it starts the tray and keeps Control Center available without opening extra browser windows. Use `scripts\launchers\PatchWarden-Control-Tray.cmd --foreground` only for tray debugging, `scripts\launchers\PatchWarden-Control.cmd` for the full local Web dashboard, and `scripts\launchers\Stop-PatchWarden.cmd` for one-click shutdown of Core/Direct, Control Center, and the tray.
 
 ### Windows installer
 
@@ -822,6 +838,7 @@ never credentials.
 ```powershell
 npm.cmd install --prefix desktop --cache .\.npm-cache
 npm.cmd run desktop:test
+npm.cmd run desktop:preflight
 npm.cmd run desktop:package
 ```
 
@@ -830,6 +847,13 @@ release is unsigned and has no automatic updater, so Windows SmartScreen may
 show an unknown-publisher warning. Verify the GitHub Release source and SHA256.
 See [docs/desktop-app.md](docs/desktop-app.md) for installation, runtime, and
 uninstall details.
+
+`desktop:preflight` uses a unique output directory for clean builds, complete
+unit and desktop tests, npm package-surface validation, an Electron directory
+package, an isolated 26-tool runtime check, and unpacked UI/single-instance
+smoke evidence. It writes `preflight-report.json` and `preflight-report.md`.
+Before release, run `npm.cmd run desktop:preflight:release` from a clean
+checkout; it rejects any uncommitted path.
 
 The old single-purpose launchers remain under `scripts/launchers/` as a
 compatibility layer. Personal launchers live under `.local/launchers/` and
@@ -1050,6 +1074,13 @@ creation. `export_task_evidence_pack` writes bounded `evidence.json` and
 `EVIDENCE.md` files under `.patchwarden/evidence-packs/<lineage_id>/` without
 stdout/stderr tails, full diffs, verification logs, or sensitive file content.
 
+Goal Session state changes are serialized by a shared cross-process mutation
+lock and committed atomically. A non-empty Goal automatically becomes
+`completed` after every subgoal is accepted. `create_subgoal_task` treats the
+Goal's stored `repo_path` as authoritative and rejects a caller-supplied mismatch
+with `goal_repo_mismatch`; isolated worktrees are created from that repository,
+and create/merge/discard share a repository lifecycle lock.
+
 `full` additionally provides:
 
 - `get_plan`
@@ -1068,6 +1099,12 @@ Direct mode exposes fourteen guarded tools so ChatGPT can create an editing
 session, read and search source files, apply hash-bound JSON patches, run
 exactly allowlisted verification commands or a bounded verification bundle, finalize the evidence, and audit
 the result without a local execution agent.
+
+Direct patch and sync operations accept only size-bounded UTF-8 text, count
+patch limits in UTF-8 bytes, reject credential-like results, revalidate hashes
+immediately before replacement, and serialize patch/sync/verify/finalize/audit
+for each session. Direct still does not expose shell, delete, rename, commit,
+push, publish, or deployment operations.
 
 Enable it in the trusted local configuration while keeping the ordinary Core
 profile unchanged:
@@ -1110,9 +1147,10 @@ Primary protections:
 - Agent commands and argument templates must be configured in advance.
 - Verification commands must exactly match the allowlist.
 - File access is contained to `workspaceRoot`.
-- Sensitive filenames and obvious credential-read plans are blocked.
-- Secret-like values in task artifacts are redacted.
-- HTTP mode binds only to `127.0.0.1`.
+- Sensitive filenames and obvious credential-read plans are blocked;
+  `.patchwarden/` does not bypass this check.
+- Credential-like diff content is redacted before persistence and marks the task as a policy violation.
+- HTTP services bind only to `127.0.0.1` and reject non-loopback Host headers.
 - The Runner does not automatically commit, push, publish, or reset.
 
 Protect these local paths:
@@ -1202,9 +1240,9 @@ and release-asset checksums independently.
 ## Related documentation
 
 - [Windows Desktop installer](docs/desktop-app.md)
-- [v0.6.4 release notes](docs/release-v0.6.4.md)
-- [v0.6.1 release notes](docs/release-v0.6.1.md)
-- [v0.6.0 release notes](docs/release-v0.6.0.md)
+- [v0.6.4 release notes](docs/archive/releases/release-v0.6.4.md)
+- [v0.6.1 release notes](docs/archive/releases/release-v0.6.1.md)
+- [v0.6.0 release notes](docs/archive/releases/release-v0.6.0.md)
 - [ChatGPT usage guide](docs/chatgpt-usage.md)
 - [Migration guide](docs/migration-from-safe-bifrost.md)
 - [ChatGPT Connector demo](docs/demo.md)

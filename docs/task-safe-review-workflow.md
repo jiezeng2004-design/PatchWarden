@@ -18,7 +18,7 @@
 - **safe_audit**：审计摘要，包含 artifact 完整性、scope_changes、命令白名单合规性
   的有界摘要。
 - **acceptance_status**：任务的验收状态，比 `status` 更能反映“是否真的通过”。
-- **Advanced 区**：折叠区域，包含完整 result / diff / test_log，需手动展开。
+- **Advanced 区**：折叠区域，包含配置上限内的 result / diff / test_log，需手动展开。
 
 ## 验收工作流
 
@@ -54,11 +54,11 @@ Task Detail 默认展示 safe 摘要视图：
 ### 4. 仅在必要时展开高级区
 
 只有当 safe 摘要无法定论时（例如 `manual_verification_required` 为 true，
-或 `fail_checks` 指向某个具体失败），才展开高级区查看完整产物：
+或 `fail_checks` 指向某个具体失败），才展开高级区查看配置上限内的产物：
 
-- 完整 result（JSON）
-- 完整 diff
-- 完整 test_log
+- 有界并脱敏的 result（JSON）
+- 有界并脱敏的 diff
+- 有界并脱敏的 test_log
 
 > 高级区内容不会自动加载，必须手动点击展开。展开不会触发任何写操作。
 

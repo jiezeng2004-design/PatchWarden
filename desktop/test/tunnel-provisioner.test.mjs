@@ -2,14 +2,29 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, it } from "node:test";
-import { atomicWriteJson } from "../src/config-store.mjs";
-import { forgetTunnelCredential, getTunnelSetupStatus, maskTunnelId, provisionTunnelProfile, revalidateTunnelProfile } from "../src/tunnel-provisioner.mjs";
+import { pathToFileURL } from "node:url";
+
+const testDist = process.env.PATCHWARDEN_DESKTOP_TEST_DIST;
+const distRoot = testDist ? resolve(testDist) : resolve(import.meta.dirname, "..", "dist");
+const [{ atomicWriteJson }, {
+  forgetTunnelCredential,
+  getTunnelSetupStatus,
+  maskTunnelId,
+  provisionTunnelProfile,
+  revalidateTunnelProfile,
+}] = await Promise.all([
+  import(pathToFileURL(resolve(distRoot, "config-store.js")).href),
+  import(pathToFileURL(resolve(distRoot, "tunnel-provisioner.js")).href),
+]);
 
 function fixture() {
-  const root = join(tmpdir(), `patchwarden-provision-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const base = join(tmpdir(), `patchwarden-provision-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const root = join(base, "project");
+  const systemRoot = join(base, "Windows");
+  const powershell = join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   const appData = join(root, "AppData", "Roaming");
   const local = join(root, "Local");
   const exe = join(root, "tunnel-client.exe");
@@ -17,9 +32,20 @@ function fixture() {
   const statusPath = join(local, "tunnel-setup-status.json");
   const credentialPath = join(appData, "patchwarden", "control-plane-api-key.dpapi");
   mkdirSync(root, { recursive: true });
+  mkdirSync(join(systemRoot, "System32", "WindowsPowerShell", "v1.0"), { recursive: true });
+  writeFileSync(powershell, "fixture", "utf8");
   writeFileSync(exe, "fixture", "utf8");
   atomicWriteJson(configPath, { workspaceRoot: root, tunnelClientPath: exe }, false);
-  return { root, appData, local, configPath, statusPath, credentialPath, env: { APPDATA: appData, LOCALAPPDATA: local, PATH: "" } };
+  return {
+    root,
+    appData,
+    local,
+    configPath,
+    statusPath,
+    credentialPath,
+    powershell,
+    env: { APPDATA: appData, LOCALAPPDATA: local, PATH: "", SystemRoot: systemRoot },
+  };
 }
 
 function fakeSpawn(result, capture) {
@@ -51,16 +77,30 @@ describe("desktop tunnel provisioning", () => {
 
   it("passes the runtime key only through stdin and never persists or returns it", async () => {
     const f = fixture(); const capture = {}; const secret = "runtime-secret-fixture";
+    const config = JSON.parse(readFileSync(f.configPath, "utf8"));
+    atomicWriteJson(f.configPath, { ...config, http: { ownerTokenEnv: "CUSTOM_OWNER_TOKEN" } }, false);
     const result = await provisionTunnelProfile({
       mode: "core", tunnelId: "tun_fixture", runtimeKey: secret, configPath: f.configPath,
       statusPath: f.statusPath, credentialPath: f.credentialPath, projectRoot: f.root,
-      env: { ...f.env, CONTROL_PLANE_API_KEY: "stale-secret" },
+      env: {
+        ...f.env,
+        HTTPS_PROXY: "http://proxy.test:8080",
+        OPENAI_API_KEY: "unrelated-agent-key",
+        CONTROL_PLANE_API_KEY: "stale-secret",
+        PATCHWARDEN_OWNER_TOKEN: "owner-secret",
+        CUSTOM_OWNER_TOKEN: "custom-owner-secret",
+      },
       spawnImpl: fakeSpawn({ ok: true, reason_code: "configured", next_step: "start_core" }, capture),
     });
     assert.equal(capture.stdin, `${secret}\n`);
+    assert.equal(capture.command, f.powershell);
     assert.equal(capture.args.includes(secret), false);
     assert.equal(Object.values(capture.options.env).includes(secret), false);
+    assert.equal(capture.options.env.HTTPS_PROXY, "http://proxy.test:8080");
+    assert.equal(Object.hasOwn(capture.options.env, "OPENAI_API_KEY"), false);
     assert.equal(Object.hasOwn(capture.options.env, "CONTROL_PLANE_API_KEY"), false);
+    assert.equal(Object.hasOwn(capture.options.env, "PATCHWARDEN_OWNER_TOKEN"), false);
+    assert.equal(Object.hasOwn(capture.options.env, "CUSTOM_OWNER_TOKEN"), false);
     assert.equal(JSON.stringify(result).includes(secret), false);
     assert.equal(readFileSync(f.statusPath, "utf8").includes(secret), false);
     assert.equal(readFileSync(f.configPath, "utf8").includes(secret), false);
@@ -97,12 +137,18 @@ describe("desktop tunnel provisioning", () => {
     writeFileSync(join(f.appData, "tunnel-client", "patchwarden.yaml"), 'tunnel_id: "tun_fixture"\n', "utf8");
     const result = await revalidateTunnelProfile({
       mode: "core", configPath: f.configPath, statusPath: f.statusPath, credentialPath: f.credentialPath,
-      projectRoot: f.root, env: { ...f.env, CONTROL_PLANE_API_KEY: "stale-secret" },
+      projectRoot: f.root, env: {
+        ...f.env,
+        CONTROL_PLANE_API_KEY: "stale-secret",
+        PATCHWARDEN_OWNER_TOKEN: "owner-secret",
+      },
       spawnImpl: fakeSpawn({ ok: true, reason_code: "configured", next_step: "start_core" }, capture),
     });
     assert.equal(result.ok, true);
+    assert.equal(capture.command, f.powershell);
     assert.ok(capture.args.includes("-UseSavedCredential"));
     assert.equal(capture.args.includes("stale-secret"), false);
     assert.equal(Object.hasOwn(capture.options.env, "CONTROL_PLANE_API_KEY"), false);
+    assert.equal(Object.hasOwn(capture.options.env, "PATCHWARDEN_OWNER_TOKEN"), false);
   });
 });

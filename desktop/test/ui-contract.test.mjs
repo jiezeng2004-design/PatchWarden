@@ -74,4 +74,15 @@ describe("desktop UI contracts", () => {
     const bridge = read("ui/desktop-bridge.js");
     assert.doesNotMatch(bridge, /addSettingsNavigation/);
   });
+
+  it("keeps packaged UI smoke isolated from normal startup", () => {
+    const main = read("desktop/src/main.ts");
+    const smoke = read("desktop/scripts/smoke-unpacked.mjs");
+    assert.match(main, /PATCHWARDEN_DESKTOP_SMOKE === "1"/);
+    assert.match(main, /\[\[1280, 720\], \[1024, 700\], \[960, 640\]\]/);
+    assert.match(main, /metrics\.scrollWidth <= metrics\.clientWidth/);
+    assert.match(smoke, /PATCHWARDEN_CONFIG: isolatedConfig/);
+    assert.match(smoke, /second instance must exit successfully/);
+    assert.doesNotMatch(smoke, /taskkill|Stop-Process|kill all/i);
+  });
 });

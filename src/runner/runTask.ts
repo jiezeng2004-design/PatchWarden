@@ -1,10 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import {
-  createWriteStream,
   existsSync,
   readFileSync,
-  writeFileSync,
-  type WriteStream,
 } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { getTasksDir, getPlansDir, getConfig, resolveWorkspaceRoot } from "../config.js";
@@ -12,11 +9,17 @@ import { guardPath, guardWorkspacePath } from "../security/pathGuard.js";
 import {
   guardTestCommand,
 } from "../security/commandGuard.js";
-import { writeTaskProgress } from "../taskProgress.js";
-import { writeTaskRuntime } from "../taskRuntime.js";
+import { writeTaskProgress } from "./taskProgress.js";
+import { writeTaskRuntime } from "./taskRuntime.js";
+import {
+  claimPendingTask,
+  readTaskStatusFile,
+  updateTaskStatusFile,
+  type TaskStatusRecord,
+} from "./taskStatusStore.js";
 import { validateAssessmentFreshness } from "../assessments/assessmentStore.js";
 import { buildAgentInvocation, buildExecutionPrompt } from "./agentInvocation.js";
-import type { TaskPhase, TaskStatus } from "../tools/createTask.js";
+import type { TaskPhase, TaskStatus } from "../tools/tasks/createTask.js";
 import {
   buildChangeArtifacts,
   captureRepoSnapshot,
@@ -35,8 +38,18 @@ import {
   type ChangedFileGroups,
 } from "./changeCapture.js";
 import { PatchWardenError, errorPayload } from "../errors.js";
-import { diagnoseAndroidBuild } from "../tools/androidDoctor.js";
+import { ARTIFACT_SCHEMA_VERSION } from "../version.js";
+import { diagnoseAndroidBuild } from "../tools/workspace/androidDoctor.js";
 import { runPostTaskCleanup, type PostTaskCleanupReport } from "./postTaskCleanup.js";
+import { atomicWriteFileSync, atomicWriteJsonFileSync } from "../utils/atomicFile.js";
+import {
+  allowedEnvironmentValues,
+  buildChildEnvironment,
+  redactProcessOutput,
+  resolvePackageManagerInvocation,
+  resolveTrustedExecutable,
+  SecureProcessLogCapture,
+} from "./processSecurity.js";
 
 const HEARTBEAT_INTERVAL_MS = 2000;
 const GRACEFUL_KILL_MS = 2000;
@@ -95,7 +108,7 @@ interface TaskContext {
   wsRoot: string;
   config: ReturnType<typeof getConfig>;
   plansDir: string;
-  initialStatus: Record<string, any>;
+  initialStatus: TaskStatusRecord;
   planId: string;
   agentName: string;
   testCommand: string;
@@ -154,7 +167,25 @@ async function prepareTask(taskId: string): Promise<TaskContext | TaskRunResult>
   const statusFile = join(taskDir, "status.json");
   if (!existsSync(statusFile)) throw new Error(`Task not found: "${taskId}"`);
 
-  const initialStatus = readStatus(statusFile);
+  const startedAtMs = Date.now();
+  const claim = claimPendingTask(statusFile, {
+    status: "running",
+    phase: "preparing",
+    started_at: new Date(startedAtMs).toISOString(),
+    last_heartbeat_at: new Date(startedAtMs).toISOString(),
+    current_command: null,
+    error: null,
+  });
+  if (!claim.claimed) {
+    const currentStatus = String(claim.status.status || "failed") as TaskStatus;
+    return {
+      task_id: taskId,
+      status: currentStatus,
+      error: `Task is ${currentStatus}; only pending tasks can be claimed for execution.`,
+    };
+  }
+
+  const initialStatus = claim.status;
   const planId = String(initialStatus.plan_id || "");
   const agentName = String(initialStatus.agent || "");
   const rawRepoPath = String(initialStatus.resolved_repo_path || initialStatus.repo_path || wsRoot);
@@ -167,7 +198,6 @@ async function prepareTask(taskId: string): Promise<TaskContext | TaskRunResult>
   } catch (error) {
     return failBeforeExecution(taskId, taskDir, errorMessage(error), error);
   }
-  const startedAtMs = Date.now();
   const deadlineMs = startedAtMs + timeoutSeconds * 1000;
 
   let repoPath: string;
@@ -199,15 +229,7 @@ async function prepareTask(taskId: string): Promise<TaskContext | TaskRunResult>
     }
   }
 
-  updateStatus(taskDir, {
-    status: "running",
-    phase: "preparing",
-    started_at: new Date(startedAtMs).toISOString(),
-    last_heartbeat_at: new Date().toISOString(),
-    timeout_seconds: timeoutSeconds,
-    current_command: null,
-    error: null,
-  });
+  updateStatus(taskDir, { timeout_seconds: timeoutSeconds });
   writeTaskRuntime(taskDir, {
     task_started_at: new Date(startedAtMs).toISOString(),
     watcher_instance_id: process.env.PATCHWARDEN_WATCHER_INSTANCE_ID || undefined,
@@ -264,6 +286,8 @@ async function executeAgent(ctx: TaskContext): Promise<ExecutionState> {
       deadlineMs: ctx.deadlineMs,
       stdoutPath: join(ctx.taskDir, "stdout.log"),
       stderrPath: join(ctx.taskDir, "stderr.log"),
+      environmentVariableNames: invocation.environmentVariableNames,
+      blockedEnvironmentVariableNames: invocation.blockedEnvironmentVariableNames,
     });
 
     const agentResult = state.agentResult;
@@ -342,7 +366,7 @@ async function collectArtifacts(ctx: TaskContext, state: ExecutionState): Promis
         skipped: [{ path: ".", reason: "post_task_cleanup", skip_reason: errorMessage(error) }],
         source_files_touched: 0,
       };
-      writeFileSync(join(ctx.taskDir, "post-task-cleanup.json"), JSON.stringify(cleanupReport, null, 2), "utf-8");
+      atomicWriteJsonFileSync(join(ctx.taskDir, "post-task-cleanup.json"), cleanupReport);
       updateStatus(ctx.taskDir, { cleanup: cleanupReport });
     }
   }
@@ -353,21 +377,20 @@ async function collectArtifacts(ctx: TaskContext, state: ExecutionState): Promis
   let artifactStatus: "collected" | "partial" | "failed" | "timeout" = "collected";
   let artifactCollectionError: string | null = null;
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const artifactController = new AbortController();
   try {
-    const collectionResult = await Promise.race([
-      Promise.resolve().then(async () => {
-        const afterSnapshot = await captureRepoSnapshot(ctx.repoPath);
-        writeSnapshot(ctx.taskDir, "git-after.json", afterSnapshot);
-        return await buildChangeArtifacts(ctx.repoPath, ctx.beforeSnapshot, afterSnapshot);
-      }),
-      new Promise<never>((_, reject) => {
-        timeoutHandle = setTimeout(() => reject(new Error("Artifact collection timed out")), ARTIFACT_COLLECTION_TIMEOUT_MS);
-      }),
-    ]);
-    if (timeoutHandle) clearTimeout(timeoutHandle);
-    changes = collectionResult;
+    timeoutHandle = setTimeout(() => {
+      artifactController.abort(new Error("Artifact collection timed out"));
+    }, ARTIFACT_COLLECTION_TIMEOUT_MS);
+    const afterSnapshot = await captureRepoSnapshot(ctx.repoPath, artifactController.signal);
+    writeSnapshot(ctx.taskDir, "git-after.json", afterSnapshot);
+    changes = await buildChangeArtifacts(
+      ctx.repoPath,
+      ctx.beforeSnapshot,
+      afterSnapshot,
+      artifactController.signal,
+    );
   } catch (error) {
-    if (timeoutHandle) clearTimeout(timeoutHandle);
     state.lastCaughtError = error;
     artifactCollectionError = errorMessage(error);
     artifactStatus = artifactCollectionError.includes("timed out") ? "timeout" : "failed";
@@ -386,7 +409,7 @@ async function collectArtifacts(ctx: TaskContext, state: ExecutionState): Promis
       unavailable_reason: `Change capture failed: ${artifactCollectionError}`,
       artifact_hygiene: emptyArtifactHygiene(),
     };
-    writeFileSync(join(ctx.taskDir, "partial_result.md"), [
+    atomicWriteFileSync(join(ctx.taskDir, "partial_result.md"), [
       "# PatchWarden Partial Result",
       "",
       `Task: ${ctx.taskId}`,
@@ -406,13 +429,15 @@ async function collectArtifacts(ctx: TaskContext, state: ExecutionState): Promis
       "## Note",
       "Artifact collection did not complete. The task result may be incomplete. Review stdout.log, stderr.log, and verify.json for details.",
       "",
-    ].join("\n"), "utf-8");
+    ].join("\n"));
     if (state.finalStatus === "done_by_agent") {
       state.finalError = `Change capture failed: ${artifactCollectionError}`;
       state.finalStatus = "failed";
     } else {
       state.finalError ||= `Change capture failed: ${artifactCollectionError}`;
     }
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
   }
   const artifactCollectionFinishedAt = new Date().toISOString();
 
@@ -440,18 +465,18 @@ async function collectArtifacts(ctx: TaskContext, state: ExecutionState): Promis
 
   applyScopeViolationVerdict(ctx, state, changes, newOutOfScopeChanges, preexistingExternalDirty);
 
-  writeFileSync(join(ctx.taskDir, "git.diff"), changes.diff, "utf-8");
-  writeFileSync(join(ctx.taskDir, "diff.patch"), changes.diff, "utf-8");
-  writeFileSync(join(ctx.taskDir, "changed-files.json"), JSON.stringify(changes, null, 2), "utf-8");
+  atomicWriteFileSync(join(ctx.taskDir, "git.diff"), changes.diff);
+  atomicWriteFileSync(join(ctx.taskDir, "diff.patch"), changes.diff);
+  atomicWriteJsonFileSync(join(ctx.taskDir, "changed-files.json"), { schema_version: ARTIFACT_SCHEMA_VERSION, ...changes });
   const artifactManifest = await buildArtifactManifest(changes.changed_files, ctx.repoPath, ctx.taskId);
-  writeFileSync(join(ctx.taskDir, "artifact_manifest.json"), JSON.stringify(artifactManifest, null, 2), "utf-8");
+  atomicWriteJsonFileSync(join(ctx.taskDir, "artifact_manifest.json"), artifactManifest);
   const changedFileGroups = groupChangedFiles(changes.changed_files);
-  writeFileSync(join(ctx.taskDir, "file-stats.json"), JSON.stringify({
+  atomicWriteJsonFileSync(join(ctx.taskDir, "file-stats.json"), {
     task_id: ctx.taskId,
     additions: changes.additions,
     deletions: changes.deletions,
     files: changes.file_stats,
-  }, null, 2), "utf-8");
+  });
 
   return {
     changes, artifactStatus, artifactCollectionError, artifactCollectionStartedAt, artifactCollectionFinishedAt,
@@ -470,15 +495,15 @@ function applyScopeViolationVerdict(
   if (newOutOfScopeChanges.length > 0) {
     state.finalStatus = "failed_scope_violation";
     state.finalError = `Detected ${newOutOfScopeChanges.length} new change(s) outside resolved_repo_path during task execution.`;
-    writeFileSync(join(ctx.taskDir, "rollback-plan.json"), JSON.stringify({
+    atomicWriteJsonFileSync(join(ctx.taskDir, "rollback-plan.json"), {
       task_id: ctx.taskId,
       status: "review_required",
       automatic_rollback_performed: false,
       warning: "Review ownership and concurrent edits before rollback. PatchWarden did not modify or restore these files.",
       out_of_scope_changes: newOutOfScopeChanges,
       preexisting_external_dirty_files: preexistingExternalDirty,
-    }, null, 2), "utf-8");
-    writeFileSync(join(ctx.taskDir, "rollback_scope_violation_plan.md"), [
+    });
+    atomicWriteFileSync(join(ctx.taskDir, "rollback_scope_violation_plan.md"), [
       "# Scope Violation Rollback Plan",
       "",
       `Task: ${ctx.taskId}`,
@@ -488,7 +513,10 @@ function applyScopeViolationVerdict(
       "## New out-of-scope files (caused by this task)",
       ...newOutOfScopeChanges.map((file) => `- ${file.change}: ${file.path}`),
       "",
-    ].join("\n"), "utf-8");
+    ].join("\n"));
+  } else if (changes.diff_redacted) {
+    state.finalStatus = "failed_policy_violation";
+    state.finalError = "Credential-like content was detected in the task diff. PatchWarden redacted the evidence; remove the sensitive content before retrying.";
   } else if (ctx.changePolicy === "no_changes" && changes.changed_files.length > 0) {
     state.finalStatus = "failed_policy_violation";
     state.finalError = `Task policy requires no repository changes, but detected ${changes.changed_files.length} change(s).`;
@@ -500,17 +528,19 @@ function finalizeTask(ctx: TaskContext, state: ExecutionState, evidence: Artifac
     outOfScopeChanges, newOutOfScopeChanges, preexistingExternalDirty, preexistingWarnings, cleanupReport,
     artifactManifest, changedFileGroups } = evidence;
 
-  writeFileSync(join(ctx.taskDir, "test.log"), buildTestLog(state.testResult), "utf-8");
+  atomicWriteFileSync(join(ctx.taskDir, "test.log"), buildTestLog(state.testResult));
   const verifyJson = buildVerifyJson(ctx.verifyCommands, state.verifyResults, ctx.repoPath);
   if (newOutOfScopeChanges.length > 0) {
     verifyJson.status = "failed";
     verifyJson.failure_reason = "scope_violation";
   } else if (state.finalStatus === "failed_policy_violation") {
     verifyJson.status = "failed";
-    verifyJson.failure_reason = "change_policy_violation";
+    verifyJson.failure_reason = changes.diff_redacted
+      ? "sensitive_content_violation"
+      : "change_policy_violation";
   }
-  writeFileSync(join(ctx.taskDir, "verify.json"), JSON.stringify(verifyJson, null, 2), "utf-8");
-  writeFileSync(join(ctx.taskDir, "verify.log"), buildVerifyLog(verifyJson.commands), "utf-8");
+  atomicWriteJsonFileSync(join(ctx.taskDir, "verify.json"), verifyJson);
+  atomicWriteFileSync(join(ctx.taskDir, "verify.log"), buildVerifyLog(verifyJson.commands));
 
   if (!["canceled", "done_by_agent", "failed_verification", "failed_scope_violation", "failed_policy_violation"].includes(state.finalStatus)) state.finalStatus = "failed";
   const finalPhase: TaskPhase = state.finalStatus === "done_by_agent" ? "done_by_agent" : (state.finalStatus as TaskPhase);
@@ -547,19 +577,19 @@ function finalizeTask(ctx: TaskContext, state: ExecutionState, evidence: Artifac
     androidWarning,
     preexistingWarnings,
   });
-  writeFileSync(join(ctx.taskDir, "result.md"), resultMd, "utf-8");
+  atomicWriteFileSync(join(ctx.taskDir, "result.md"), resultMd);
 
   const resultJson = buildResultJson({
     ctx, state, evidence, verifyJson, followup, androidDiagnostic, androidWarning,
   });
-  writeFileSync(join(ctx.taskDir, "result.json"), JSON.stringify(resultJson, null, 2), "utf-8");
+  atomicWriteJsonFileSync(join(ctx.taskDir, "result.json"), resultJson);
 
   if (state.finalError) {
     const structuredError = errorPayload(state.lastCaughtError);
-    writeFileSync(join(ctx.taskDir, "error.log"), JSON.stringify({
+    atomicWriteJsonFileSync(join(ctx.taskDir, "error.log"), {
       summary: state.finalError,
       ...structuredError,
-    }, null, 2), "utf-8");
+    });
   }
 
   const finishedAt = new Date().toISOString();
@@ -584,6 +614,8 @@ function finalizeTask(ctx: TaskContext, state: ExecutionState, evidence: Artifac
     verify_commands: ctx.verifyCommands,
     diff_available: changes.diff_available,
     diff_truncated: changes.diff_truncated,
+    diff_redacted: changes.diff_redacted === true,
+    diff_redaction_categories: changes.diff_redaction_categories ?? [],
     workspace_dirty_before: changes.workspace_dirty_before,
     workspace_dirty_after: changes.workspace_dirty_after,
     workspace_dirty: changes.workspace_dirty_after,
@@ -619,6 +651,7 @@ function buildResultJson(input: {
     preexistingExternalDirty, cleanupReport, artifactManifest, changedFileGroups } = evidence;
 
   return {
+    schema_version: ARTIFACT_SCHEMA_VERSION,
     task_id: ctx.taskId,
     status: state.finalStatus,
     agent: ctx.agentName,
@@ -668,6 +701,9 @@ function buildResultJson(input: {
     warnings: [
       ...ctx.beforeSnapshot.warnings,
       ...(changes.diff_truncated ? ["diff.patch was truncated; changed-files.json retains file evidence."] : []),
+      ...(changes.diff_redacted ? [
+        `Credential-like diff content was redacted (${(changes.diff_redaction_categories ?? []).join(", ") || "sensitive_content"}).`,
+      ] : []),
       ...evidence.preexistingWarnings,
       ...(androidWarning ? [androidWarning] : []),
     ],
@@ -753,18 +789,33 @@ async function runManagedProcess(options: {
   deadlineMs: number;
   stdoutPath?: string;
   stderrPath?: string;
+  environmentVariableNames?: string[];
+  blockedEnvironmentVariableNames?: string[];
+  maxLogBytes?: number;
 }): Promise<ManagedProcessResult> {
   if (Date.now() >= options.deadlineMs) {
     return { exitCode: null, stdout: "", stderr: "", spawnError: null, terminationReason: "timeout" };
   }
 
+  const exactRedactionValues = allowedEnvironmentValues(options.environmentVariableNames);
+  const logCapture = new SecureProcessLogCapture(
+    [options.stdoutPath, options.stderrPath],
+    options.maxLogBytes,
+  );
   let child: ChildProcess;
   try {
-    child = spawn(options.command, options.args, {
+    const env = buildChildEnvironment({
+      cwd: options.cwd,
+      allowedNames: options.environmentVariableNames,
+      blockedNames: options.blockedEnvironmentVariableNames,
+    });
+    const command = resolveTrustedExecutable(options.command, options.cwd, { pathValue: env.PATH });
+    child = spawn(command, options.args, {
       cwd: options.cwd,
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
       windowsHide: true,
+      env,
     });
   } catch (error) {
     return { exitCode: null, stdout: "", stderr: "", spawnError: errorMessage(error), terminationReason: null };
@@ -776,8 +827,6 @@ async function runManagedProcess(options: {
     child_started_at: new Date().toISOString(),
   });
 
-  const stdoutStream = openStream(options.stdoutPath);
-  const stderrStream = openStream(options.stderrPath);
   let stdout = "";
   let stderr = "";
   let spawnError: string | null = null;
@@ -836,12 +885,12 @@ async function runManagedProcess(options: {
   child.stdout?.on("data", (chunk: Buffer) => {
     const text = chunk.toString("utf-8");
     stdout = appendBounded(stdout, text);
-    stdoutStream?.write(text);
+    logCapture.append(options.stdoutPath, chunk);
   });
   child.stderr?.on("data", (chunk: Buffer) => {
     const text = chunk.toString("utf-8");
     stderr = appendBounded(stderr, text);
-    stderrStream?.write(text);
+    logCapture.append(options.stderrPath, chunk);
   });
 
   heartbeat();
@@ -857,12 +906,6 @@ async function runManagedProcess(options: {
     };
     childExitFinish = finish;
     child.once("close", (code) => finish(code));
-    child.once("exit", (code) => {
-      // On Windows, "close" can lag behind "exit" when stdio pipes drain
-      // after taskkill. Resolve on exit to avoid hanging the runner, but
-      // still let "close" fire if it arrives first.
-      finish(code);
-    });
     child.once("error", (error) => {
       spawnError = error.message;
       finish(null);
@@ -871,8 +914,7 @@ async function runManagedProcess(options: {
 
   clearInterval(heartbeatTimer);
   if (forceTimer) clearTimeout(forceTimer);
-  stdoutStream?.destroy();
-  stderrStream?.destroy();
+  logCapture.flush(exactRedactionValues);
   writeTaskRuntime(options.taskDir, {
     phase: options.phase,
     last_heartbeat_at: new Date().toISOString(),
@@ -880,8 +922,16 @@ async function runManagedProcess(options: {
     runner_pid: process.pid,
     child_pid: undefined,
   });
+  const safeStdout = redactProcessOutput(stdout, exactRedactionValues);
+  const safeStderr = redactProcessOutput(stderr, exactRedactionValues);
 
-  return { exitCode, stdout, stderr, spawnError, terminationReason };
+  return {
+    exitCode,
+    stdout: safeStdout.length > MAX_CAPTURE_CHARS ? safeStdout.slice(-MAX_CAPTURE_CHARS) : safeStdout,
+    stderr: safeStderr.length > MAX_CAPTURE_CHARS ? safeStderr.slice(-MAX_CAPTURE_CHARS) : safeStderr,
+    spawnError,
+    terminationReason,
+  };
 }
 
 async function runTrustedTestCommand(
@@ -899,9 +949,9 @@ async function runTrustedTestCommand(
   let command = parts[0];
   let args = parts.slice(1);
   if (process.platform === "win32" && /^(npm|npm\.cmd|pnpm|pnpm\.cmd)$/i.test(command)) {
-    const shim = /^pnpm/i.test(command) ? "pnpm.cmd" : "npm.cmd";
-    command = process.env.ComSpec || "cmd.exe";
-    args = ["/d", "/s", "/c", shim, ...args];
+    const packageManager = resolvePackageManagerInvocation(command, repoPath);
+    command = packageManager.command;
+    args = [...packageManager.argsPrefix, ...args];
   }
   const result = await runManagedProcess({
     command,
@@ -1161,10 +1211,10 @@ function normalizeTimeout(value: unknown, config: ReturnType<typeof getConfig>):
 function failBeforeExecution(taskId: string, taskDir: string, message: string, caughtError?: unknown): TaskRunResult {
   // Phase 9: Preserve PatchWardenError structured info in error.log
   const structuredError = caughtError ? errorPayload(caughtError) : { error: message };
-  writeFileSync(join(taskDir, "error.log"), JSON.stringify({
+  atomicWriteJsonFileSync(join(taskDir, "error.log"), {
     summary: message,
     ...structuredError,
-  }, null, 2), "utf-8");
+  });
   const current = readStatus(join(taskDir, "status.json"));
   const now = new Date().toISOString();
   const verify: VerifyReport = {
@@ -1172,17 +1222,17 @@ function failBeforeExecution(taskId: string, taskDir: string, message: string, c
     requested_commands: Array.isArray(current.verify_commands) ? current.verify_commands : [],
     commands: [],
   };
-  writeFileSync(join(taskDir, "verify.json"), JSON.stringify(verify, null, 2), "utf-8");
-  writeFileSync(join(taskDir, "verify.log"), `Verification did not run: ${message}\n`, "utf-8");
-  writeFileSync(join(taskDir, "test.log"), `(not run)\nExit code: not run\n${message}\n`, "utf-8");
-  writeFileSync(join(taskDir, "git.diff"), "(task failed before change capture)\n", "utf-8");
-  writeFileSync(join(taskDir, "diff.patch"), "(task failed before change capture)\n", "utf-8");
-  writeFileSync(join(taskDir, "file-stats.json"), JSON.stringify({
+  atomicWriteJsonFileSync(join(taskDir, "verify.json"), verify);
+  atomicWriteFileSync(join(taskDir, "verify.log"), `Verification did not run: ${message}\n`);
+  atomicWriteFileSync(join(taskDir, "test.log"), `(not run)\nExit code: not run\n${message}\n`);
+  atomicWriteFileSync(join(taskDir, "git.diff"), "(task failed before change capture)\n");
+  atomicWriteFileSync(join(taskDir, "diff.patch"), "(task failed before change capture)\n");
+  atomicWriteJsonFileSync(join(taskDir, "file-stats.json"), {
     task_id: taskId,
     additions: 0,
     deletions: 0,
     files: [],
-  }, null, 2), "utf-8");
+  });
   const result = {
     task_id: taskId,
     status: "failed",
@@ -1208,8 +1258,8 @@ function failBeforeExecution(taskId: string, taskDir: string, message: string, c
     safe_followup_prompt: "Inspect result.json and error.log, correct the task metadata or configuration, and retry without widening repository scope.",
     next_steps: ["Fix task metadata or configuration and retry the task."],
   };
-  writeFileSync(join(taskDir, "result.json"), JSON.stringify(result, null, 2), "utf-8");
-  writeFileSync(join(taskDir, "result.md"), `# PatchWarden Task Result\n\n## Status\nfailed\n\n## Summary\n${message}\n`, "utf-8");
+  atomicWriteJsonFileSync(join(taskDir, "result.json"), result);
+  atomicWriteFileSync(join(taskDir, "result.md"), `# PatchWarden Task Result\n\n## Status\nfailed\n\n## Summary\n${message}\n`);
   updateStatus(taskDir, {
     status: "failed",
     phase: "failed",
@@ -1242,13 +1292,11 @@ function setTaskPhase(
 
 function updateStatus(taskDir: string, patch: Record<string, unknown>): void {
   const statusFile = join(taskDir, "status.json");
-  const current = readStatus(statusFile);
-  const next = { ...current, ...patch, updated_at: new Date().toISOString() };
-  writeFileSync(statusFile, JSON.stringify(next, null, 2), "utf-8");
+  updateTaskStatusFile(statusFile, patch);
 }
 
-function readStatus(statusFile: string): Record<string, any> {
-  return JSON.parse(readFileSync(statusFile, "utf-8"));
+function readStatus(statusFile: string): TaskStatusRecord {
+  return readTaskStatusFile(statusFile);
 }
 
 function gracefulKill(child: ChildProcess): void {
@@ -1262,10 +1310,13 @@ function forceKill(child: ChildProcess): void {
   if (!child.pid) return;
   try {
     if (process.platform === "win32") {
-      const result = spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
+      const systemRoot = process.env.SystemRoot || process.env.WINDIR || "C:\\Windows";
+      const taskkill = resolveTrustedExecutable(`${systemRoot}\\System32\\taskkill.exe`, process.cwd());
+      const result = spawnSync(taskkill, ["/PID", String(child.pid), "/T", "/F"], {
         stdio: "ignore",
         timeout: 5000,
         windowsHide: true,
+        env: buildChildEnvironment({ cwd: process.cwd() }),
       });
       if (result.status !== 0) child.kill("SIGKILL");
     } else {
@@ -1274,10 +1325,6 @@ function forceKill(child: ChildProcess): void {
   } catch {
     try { child.kill("SIGKILL"); } catch {} // cleanup failure is safe to ignore
   }
-}
-
-function openStream(path?: string): WriteStream | null {
-  return path ? createWriteStream(path, { flags: "a" }) : null;
 }
 
 function appendBounded(current: string, next: string): string {

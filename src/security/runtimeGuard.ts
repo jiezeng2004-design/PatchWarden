@@ -1,6 +1,7 @@
 import { resolve, join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PatchWardenError } from "../errors.js";
+import { isPathChildOf, isSamePath } from "../utils/platform.js";
 
 const CRITICAL_RUNTIME_DIRS = ["dist", "src", "scripts", "release"];
 
@@ -10,19 +11,21 @@ const CRITICAL_RUNTIME_DIRS = ["dist", "src", "scripts", "release"];
  * and direct-session flows share the same protection.
  */
 export function guardRuntimeSelfModification(resolvedRepoPath: string): void {
-  const runtimeRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  // runtimeGuard lives at <package-root>/{src,dist}/security/runtimeGuard.*.
+  const runtimeRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const isRuntimeRoot = isSamePath(resolvedRepoPath, runtimeRoot);
   if (
-    resolvedRepoPath === runtimeRoot ||
-    resolvedRepoPath.startsWith(runtimeRoot + resolve("/")[0])
+    isRuntimeRoot ||
+    isPathChildOf(resolvedRepoPath, runtimeRoot)
   ) {
     const isCritical = CRITICAL_RUNTIME_DIRS.some((dir) => {
       const full = join(runtimeRoot, dir);
       return (
-        resolvedRepoPath === full ||
-        resolvedRepoPath.startsWith(full + resolve("/")[0])
+        isSamePath(resolvedRepoPath, full) ||
+        isPathChildOf(resolvedRepoPath, full)
       );
     });
-    if (resolvedRepoPath === runtimeRoot || isCritical) {
+    if (isRuntimeRoot || isCritical) {
       throw new PatchWardenError(
         "runtime_self_modification_blocked",
         `repo_path points to the active PatchWarden runtime or its critical subdirectories.`,

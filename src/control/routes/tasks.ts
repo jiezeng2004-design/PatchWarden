@@ -10,9 +10,8 @@
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { type ServerResponse } from "node:http";
-import { listTasks, type TaskEntry } from "../../tools/listTasks.js";
-import type { AcceptanceStatus } from "../../tools/createTask.js";
-import { safeAudit, safeDiffSummary, safeResult, safeTestSummary } from "../../tools/safeViews.js";
+import { listTasks } from "../../tools/tasks/listTasks.js";
+import { safeAudit, safeDiffSummary, safeResult, safeTestSummary } from "../../tools/diagnostics/safeViews.js";
 import { getTasksDir } from "../../config.js";
 import {
   augmentTaskWithStale,
@@ -20,11 +19,12 @@ import {
   fileMtimeIso,
   isValidTaskId,
   parseReviewVerdict,
+  reconstructTaskEntry,
   readWatcherStatusSafe,
   StaleClassification,
   TERMINAL_TASK_STATUSES,
 } from "../runtime.js";
-import { config, errorMessage, readJsonFileSafe, readTextFileSafe, sendJson } from "../shared.js";
+import { config, errorMessage, guardControlPath, readJsonFileSafe, readTextFileSafe, sendJson } from "../shared.js";
 
 export interface TaskFilters {
   repo_path?: string;
@@ -156,9 +156,13 @@ export function handleStaleTasks(res: ServerResponse): void {
 
 export function handleTaskDetail(res: ServerResponse, taskId: string): void {
   try {
+    if (!isValidTaskId(taskId)) {
+      sendJson(res, 400, { error: "Invalid task id" });
+      return;
+    }
     const tasksDir = getTasksDir(config);
-    const taskDir = join(tasksDir, taskId);
-    if (!existsSync(taskDir) || !statSync(taskDir).isDirectory()) {
+    const taskDir = guardControlPath(join(tasksDir, taskId), config.tasksDir);
+    if (!taskDir || !existsSync(taskDir) || !statSync(taskDir).isDirectory()) {
       sendJson(res, 404, { error: "Task not found" });
       return;
     }
@@ -204,33 +208,7 @@ export function handleTaskDetail(res: ServerResponse, taskId: string): void {
     let stale: StaleClassification | null = null;
     if (statusData) {
       const watcher = readWatcherStatusSafe();
-      const VALID_ACCEPTANCE2 = ["pending", "accepted", "rejected", "needs_fix", "blocked"];
-      const taskStatus2 = String(statusData.status || "pending");
-      const taskAcceptanceStatus2 = taskStatus2 === "done_by_agent"
-        ? (typeof statusData.acceptance_status === "string" && VALID_ACCEPTANCE2.includes(statusData.acceptance_status) ? (statusData.acceptance_status as AcceptanceStatus) : "pending" as AcceptanceStatus)
-        : null;
-      const entry: TaskEntry = {
-        task_id: taskId,
-        plan_id: String(statusData.plan_id || ""),
-        title: "",
-        agent: String(statusData.agent || ""),
-        status: taskStatus2 as TaskEntry["status"],
-        phase: String(runtimeData?.phase || statusData.phase || "queued") as TaskEntry["phase"],
-        acceptance_status: taskAcceptanceStatus2,
-        created_at: String(statusData.created_at || ""),
-        updated_at: String(statusData.updated_at || ""),
-        workspace_root: String(statusData.workspace_root || config.workspaceRoot),
-        repo_path: String(statusData.repo_path || "."),
-        resolved_repo_path: String(statusData.resolved_repo_path || statusData.repo_path || config.workspaceRoot),
-        test_command: String(statusData.test_command || ""),
-        verify_commands: Array.isArray(statusData.verify_commands) ? (statusData.verify_commands as string[]) : [],
-        error: statusData.error ? String(statusData.error) : null,
-        last_heartbeat_at: String(runtimeData?.last_heartbeat_at || statusData.last_heartbeat_at || statusData.updated_at || ""),
-        current_command: runtimeData?.current_command === undefined ? null : String(runtimeData.current_command || "") || null,
-        timeout_seconds: Number(statusData.timeout_seconds) || config.defaultTaskTimeoutSeconds,
-        pending_reason: null,
-        watcher_status: watcher.status,
-      };
+      const entry = reconstructTaskEntry(taskId, statusData, runtimeData ?? {}, watcher);
       stale = classifyStaleTask(entry, watcher);
     }
 
@@ -264,11 +242,7 @@ export function handleTaskSafeResult(res: ServerResponse, taskId: string): void 
       sendJson(res, 400, { error: "Invalid task id" });
       return;
     }
-    try {
-      sendJson(res, 200, safeResult(taskId, { max_items: 12 }));
-    } catch (err) {
-      sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
-    }
+    sendJson(res, 200, safeResult(taskId, { max_items: 12 }));
   } catch (err) {
     sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
   }
@@ -280,11 +254,7 @@ export function handleTaskSafeAudit(res: ServerResponse, taskId: string): void {
       sendJson(res, 400, { error: "Invalid task id" });
       return;
     }
-    try {
-      sendJson(res, 200, safeAudit(taskId, { max_items: 12 }));
-    } catch (err) {
-      sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
-    }
+    sendJson(res, 200, safeAudit(taskId, { max_items: 12 }));
   } catch (err) {
     sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
   }
@@ -296,11 +266,7 @@ export function handleTaskSafeTestSummary(res: ServerResponse, taskId: string): 
       sendJson(res, 400, { error: "Invalid task id" });
       return;
     }
-    try {
-      sendJson(res, 200, safeTestSummary(taskId));
-    } catch (err) {
-      sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
-    }
+    sendJson(res, 200, safeTestSummary(taskId));
   } catch (err) {
     sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
   }
@@ -312,11 +278,7 @@ export function handleTaskSafeDiffSummary(res: ServerResponse, taskId: string): 
       sendJson(res, 400, { error: "Invalid task id" });
       return;
     }
-    try {
-      sendJson(res, 200, safeDiffSummary(taskId, { max_items: 12 }));
-    } catch (err) {
-      sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
-    }
+    sendJson(res, 200, safeDiffSummary(taskId, { max_items: 12 }));
   } catch (err) {
     sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
   }

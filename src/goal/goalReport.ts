@@ -6,11 +6,12 @@
  * 所有写入操作使用原子写（.tmp + rename），所有字符串内容经 redactSensitiveValue 脱敏。
  */
 
-import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { getConfig } from "../config.js";
 import { redactSensitiveValue } from "../security/contentRedaction.js";
-import { listEvidencePacks } from "../tools/evidencePack.js";
+import { listEvidencePacks } from "../tools/tasks/evidencePack.js";
+import { atomicWriteFileSync } from "../utils/atomicFile.js";
 import { summarizeGoalProgress, type GoalProgressSummary } from "./goalProgress.js";
 import { readGoalStatus } from "./goalStore.js";
 
@@ -43,15 +44,6 @@ export interface SafeGoalReport {
 
 function resolveWorkspaceRoot(workspaceRoot?: string): string {
   return workspaceRoot ?? getConfig().workspaceRoot;
-}
-
-/**
- * 原子写文件：先写到 .tmp 文件，再 renameSync 到目标路径。
- */
-function atomicWriteFile(filePath: string, content: string): void {
-  const tmpPath = filePath + ".tmp";
-  writeFileSync(tmpPath, content, "utf-8");
-  renameSync(tmpPath, filePath);
 }
 
 /**
@@ -261,11 +253,11 @@ export function exportGoalReport(
   const safeReport = redactSensitiveValue(rawReport).value as SafeGoalReport;
 
   // 原子写 JSON（机器可读）
-  atomicWriteFile(reportJsonPath, JSON.stringify(safeReport, null, 2) + "\n");
+  atomicWriteFileSync(reportJsonPath, JSON.stringify(safeReport, null, 2) + "\n");
 
   // 原子写 Markdown（人类可读，从脱敏后的对象生成）
   const markdown = buildReportMarkdown(safeReport, { noSubgoals, incomplete });
-  atomicWriteFile(reportMdPath, markdown);
+  atomicWriteFileSync(reportMdPath, markdown);
 
   return safeReport;
 }

@@ -54,6 +54,8 @@ try {
   }), "utf-8");
   writeFileSync(join(workspaceRoot, "hello.txt"), "hello from mcp smoke\n", "utf-8");
   writeFileSync(join(workspaceRoot, ".env"), "SECRET=blocked\n", "utf-8");
+  writeFileSync(join(workspaceRoot, "npm.cmd"), "@echo repo npm hijack executed\r\n@exit /b 99\r\n", "utf-8");
+  writeFileSync(join(workspaceRoot, "git.cmd"), "@echo repo git hijack executed\r\n@exit /b 98\r\n", "utf-8");
   writeFileSync(
     join(workspaceRoot, "package.json"),
     JSON.stringify({
@@ -320,7 +322,11 @@ try {
   );
   ok("sensitive file and path escape checks reject access");
 
-  const runner = spawnSync("node", ["dist/runner/cli.js", task.task_id], {
+  // The runner executes with the temporary workspace as cwd; use an absolute
+  // package path so the smoke test does not depend on that workspace having a
+  // copied `dist/` tree.
+  const runnerPath = resolve(root, "dist", "runner", "cli.js");
+  const runner = spawnSync("node", [runnerPath, task.task_id], {
     cwd: root,
     env: { ...process.env, PATCHWARDEN_CONFIG: configPath },
     encoding: "utf-8",

@@ -15,6 +15,9 @@ import { homedir } from "node:os";
 import { type IncomingMessage, type ServerResponse } from "node:http";
 import { loadConfig, type PatchWardenConfig } from "../config.js";
 import { logger } from "../logging.js";
+import { readTextFilePrefixSync, readTextFileTailLinesSync } from "../utils/boundedFile.js";
+import { redactSensitiveContent, redactSensitiveValue } from "../security/contentRedaction.js";
+import { guardPath } from "../security/pathGuard.js";
 
 // ── Paths ─────────────────────────────────────────────────────────
 
@@ -52,7 +55,10 @@ export const PAGE_ALIASES: Record<string, string> = {
 
 export function createFallbackConfig(): PatchWardenConfig {
   return {
-    workspaceRoot: process.cwd(),
+    // Fault-tolerant dashboard mode must not widen a rejected workspace to the
+    // caller's cwd (which could be a home or drive root). The package root is
+    // bounded and all execution capabilities remain disabled below.
+    workspaceRoot: projectRoot,
     plansDir: ".patchwarden/plans",
     tasksDir: ".patchwarden/tasks",
     assessmentsDir: ".patchwarden/assessments",
@@ -233,8 +239,11 @@ export function readBody(req: IncomingMessage): Promise<unknown | null> {
 export function readJsonFileSafe<T = unknown>(filePath: string): T | null {
   if (!existsSync(filePath)) return null;
   try {
+    const size = statSync(filePath).size;
+    if (size > Math.max(1, config.maxReadFileBytes)) return null;
     const raw = readFileSync(filePath, "utf-8");
-    return JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw) as T;
+    const parsed = JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw);
+    return redactSensitiveValue(parsed).value as T;
   } catch {
     return null;
   }
@@ -262,18 +271,28 @@ export function readJsonFileSafeUnder<T = unknown>(root: string, relPath: string
 export function readTextFileSafe(filePath: string): string | null {
   if (!existsSync(filePath)) return null;
   try {
-    return readFileSync(filePath, "utf-8");
+    const bounded = readTextFilePrefixSync(filePath, Math.max(1, config.maxReadFileBytes));
+    return redactSensitiveContent(bounded.content).content;
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve a Control Center artifact path and reject symlink/junction escapes. */
+export function guardControlPath(path: string, allowedPrefix: string): string | null {
+  try {
+    return guardPath(path, config.workspaceRoot, allowedPrefix);
   } catch {
     return null;
   }
 }
 
 export function readFileTail(filePath: string, lines = 100): string {
-  if (!existsSync(filePath)) return "";
-  const content = readFileSync(filePath, "utf-8");
-  const allLines = content.split(/\r?\n/);
-  if (allLines.length > 0 && allLines[allLines.length - 1] === "") allLines.pop();
-  return allLines.slice(-lines).join("\n");
+  try {
+    return readTextFileTailLinesSync(filePath, lines);
+  } catch {
+    return "";
+  }
 }
 
 export function findLatestLog(dir: string, pattern: RegExp): string | null {
@@ -300,6 +319,39 @@ export function findLatestLog(dir: string, pattern: RegExp): string | null {
     }
   }
   return join(dir, latestName);
+}
+
+// ── Routing ──────────────────────────────────────────────────────
+
+/**
+ * Declarative route descriptor consumed by `routeTable.ts` and dispatched by
+ * `server.ts`'s `handleRequest`. The handler receives the slice of path
+ * capture groups `[match[1], match[2], ...]` so wrappers can decode them via
+ * `decodeParam`. POST routes default to `requiresToken: true`.
+ */
+export interface Route {
+  method: "GET" | "POST";
+  pattern: RegExp;
+  handler: (res: ServerResponse, params: string[]) => Promise<void> | void;
+  requiresToken?: boolean; // POST defaults to true
+}
+
+/**
+ * Safely decode a path capture group, falling back to the raw value if the
+ * percent-encoding is malformed. Accepts the raw `RegExpMatchArray` or the
+ * sliced `string[]` params passed to a Route handler — both are readable by
+ * numeric index. Note: under `lib: es2024+` `RegExpMatchArray` is a tuple
+ * `[string, ...string[]]`, so we widen the parameter to `readonly string[]` to
+ * accept both shapes without forcing callers to cast.
+ */
+export function decodeParam(match: readonly string[] | RegExpMatchArray | null, index: number): string {
+  if (!match) return "";
+  const raw = match[index] || "";
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
 }
 
 // Re-export widely-used node primitives so route modules have a single import

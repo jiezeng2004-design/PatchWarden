@@ -9,9 +9,10 @@
 
 import type { GoalStatus } from "./goalStatus.js";
 import { suggestNextSubgoal } from "./goalGraph.js";
-import { getConfig } from "../config.js";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { getGoalDir } from "./goalStore.js";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { atomicWriteFileSync } from "../utils/atomicFile.js";
 
 // ── Markdown 生成 ────────────────────────────────────────────────
 
@@ -195,12 +196,11 @@ export function exportHandoff(
 ): { handoff_path: string; content_preview: string } {
   const content = generateHandoff(goalId, goalStatus);
 
-  const root = workspaceRoot ?? getConfig().workspaceRoot;
-  const goalDir = resolve(root, ".patchwarden", "goals", goalId);
+  const goalDir = getGoalDir(goalId, workspaceRoot);
   mkdirSync(goalDir, { recursive: true });
 
   const handoffPath = join(goalDir, "handoff.md");
-  writeFileSync(handoffPath, content, "utf-8");
+  atomicWriteFileSync(handoffPath, content);
 
   const preview = content.length > 500 ? content.slice(0, 500) + "..." : content;
 

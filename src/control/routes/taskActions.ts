@@ -7,24 +7,25 @@
  * dashboard. None of them delete task files; they annotate or launch external
  * viewers.
  */
-import { existsSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
 import { type ServerResponse } from "node:http";
-import { type TaskEntry } from "../../tools/listTasks.js";
-import type { AcceptanceStatus } from "../../tools/createTask.js";
-import { auditTask } from "../../tools/auditTask.js";
+import { auditTask } from "../../tools/diagnostics/auditTask.js";
 import { getTasksDir } from "../../config.js";
 import {
   classifyStaleTask,
   isValidTaskId,
   readHiddenStaleIds,
+  reconstructTaskEntry,
   readWatcherStatusSafe,
   recordEvent,
   TERMINAL_TASK_STATUSES,
   writeHiddenStaleIds,
 } from "../runtime.js";
-import { config, errorMessage, readJsonFileSafe, sendJson } from "../shared.js";
+import { launchFileManager } from "../fileManager.js";
+import { config, errorMessage, guardControlPath, readJsonFileSafe, sendJson } from "../shared.js";
+import { atomicWriteJsonFileSync } from "../../utils/atomicFile.js";
+import { mutateTaskStatus } from "../../runner/taskStatusStore.js";
 
 /**
  * Reconcile a stale task. Does NOT delete the task. Reads the task files,
@@ -39,8 +40,8 @@ export function handleReconcile(res: ServerResponse, taskId: string): void {
       return;
     }
     const tasksDir = getTasksDir(config);
-    const taskDir = join(tasksDir, taskId);
-    if (!existsSync(taskDir) || !statSync(taskDir).isDirectory()) {
+    const taskDir = guardControlPath(join(tasksDir, taskId), config.tasksDir);
+    if (!taskDir || !existsSync(taskDir) || !statSync(taskDir).isDirectory()) {
       sendJson(res, 404, { error: "Task not found" });
       return;
     }
@@ -51,33 +52,7 @@ export function handleReconcile(res: ServerResponse, taskId: string): void {
     const runtimeData = readJsonFileSafe<Record<string, unknown>>(runtimePath) ?? {};
 
     const watcher = readWatcherStatusSafe();
-    const VALID_ACCEPTANCE = ["pending", "accepted", "rejected", "needs_fix", "blocked"];
-    const taskStatus = String(statusData.status || "pending");
-    const taskAcceptanceStatus = taskStatus === "done_by_agent"
-      ? (typeof statusData.acceptance_status === "string" && VALID_ACCEPTANCE.includes(statusData.acceptance_status) ? (statusData.acceptance_status as AcceptanceStatus) : "pending" as AcceptanceStatus)
-      : null;
-    const taskEntry: TaskEntry = {
-      task_id: taskId,
-      plan_id: String(statusData.plan_id || ""),
-      title: "",
-      agent: String(statusData.agent || ""),
-      status: taskStatus as TaskEntry["status"],
-      phase: String(runtimeData.phase || statusData.phase || "queued") as TaskEntry["phase"],
-      acceptance_status: taskAcceptanceStatus,
-      created_at: String(statusData.created_at || ""),
-      updated_at: String(statusData.updated_at || ""),
-      workspace_root: String(statusData.workspace_root || config.workspaceRoot),
-      repo_path: String(statusData.repo_path || "."),
-      resolved_repo_path: String(statusData.resolved_repo_path || statusData.repo_path || config.workspaceRoot),
-      test_command: String(statusData.test_command || ""),
-      verify_commands: Array.isArray(statusData.verify_commands) ? (statusData.verify_commands as string[]) : [],
-      error: statusData.error ? String(statusData.error) : null,
-      last_heartbeat_at: String(runtimeData.last_heartbeat_at || statusData.last_heartbeat_at || statusData.updated_at || ""),
-      current_command: runtimeData.current_command === undefined ? null : String(runtimeData.current_command || "") || null,
-      timeout_seconds: Number(statusData.timeout_seconds) || config.defaultTaskTimeoutSeconds,
-      pending_reason: null,
-      watcher_status: watcher.status,
-    };
+    const taskEntry = reconstructTaskEntry(taskId, statusData, runtimeData, watcher);
 
     const cls = classifyStaleTask(taskEntry, watcher);
     const isTerminal = TERMINAL_TASK_STATUSES.has(taskEntry.status);
@@ -123,7 +98,7 @@ export function handleReconcile(res: ServerResponse, taskId: string): void {
 
     // Write the reconcile record artifact.
     try {
-      writeFileSync(join(taskDir, "reconcile.json"), JSON.stringify(reconcileRecord, null, 2), "utf-8");
+      atomicWriteJsonFileSync(join(taskDir, "reconcile.json"), reconcileRecord);
     } catch (writeErr) {
       sendJson(res, 500, { error: `Failed to write reconcile record: ${errorMessage(writeErr)}` });
       return;
@@ -131,13 +106,18 @@ export function handleReconcile(res: ServerResponse, taskId: string): void {
 
     // Annotate status.json with reconcile metadata (do not mutate status enum).
     if (safe) {
-      const annotated = {
-        ...statusData,
+      const annotation = {
         reconcile_state: decision === "marked_archived" ? "archived" : "stale",
         reconciled_at: reconciledAt,
       };
       try {
-        writeFileSync(statusPath, JSON.stringify(annotated, null, 2), "utf-8");
+        mutateTaskStatus(statusPath, (current) => {
+          if (current.status !== taskEntry.status) {
+            throw new Error("Task status changed while reconcile was being evaluated; retry.");
+          }
+          const next = { ...current, ...annotation, updated_at: new Date().toISOString() };
+          return { next, result: next };
+        });
       } catch (writeErr) {
         sendJson(res, 500, { error: `Failed to annotate status.json: ${errorMessage(writeErr)}` });
         return;
@@ -169,8 +149,8 @@ export function handleTaskAudit(res: ServerResponse, taskId: string): void {
       return;
     }
     const tasksDir = getTasksDir(config);
-    const taskDir = join(tasksDir, taskId);
-    if (!existsSync(taskDir) || !statSync(taskDir).isDirectory()) {
+    const taskDir = guardControlPath(join(tasksDir, taskId), config.tasksDir);
+    if (!taskDir || !existsSync(taskDir) || !statSync(taskDir).isDirectory()) {
       sendJson(res, 404, { error: "Task not found" });
       return;
     }
@@ -198,26 +178,12 @@ export function handleOpenTaskFolder(res: ServerResponse, taskId: string): void 
       return;
     }
     const tasksDir = getTasksDir(config);
-    const taskDir = join(tasksDir, taskId);
-    if (!existsSync(taskDir) || !statSync(taskDir).isDirectory()) {
+    const taskDir = guardControlPath(join(tasksDir, taskId), config.tasksDir);
+    if (!taskDir || !existsSync(taskDir) || !statSync(taskDir).isDirectory()) {
       sendJson(res, 404, { error: "Task not found" });
       return;
     }
-    let cmd: string;
-    if (process.platform === "win32") {
-      cmd = "explorer.exe";
-    } else if (process.platform === "darwin") {
-      cmd = "open";
-    } else {
-      cmd = "xdg-open";
-    }
-    try {
-      const child = spawn(cmd, [taskDir], { detached: true, stdio: "ignore" });
-      child.on("error", () => { /* ignore spawn errors */ });
-      child.unref();
-    } catch {
-      /* ignore */
-    }
+    launchFileManager(taskDir, tasksDir);
     sendJson(res, 200, { ok: true, path: taskDir });
   } catch (err) {
     sendJson(res, 500, { error: errorMessage(err) });

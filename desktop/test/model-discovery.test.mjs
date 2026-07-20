@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { discoverModelsForAgent } from "../src/model-discovery.mjs";
+import { discoverModelsForAgent } from "../dist/model-discovery.js";
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "patchwarden-models-"));

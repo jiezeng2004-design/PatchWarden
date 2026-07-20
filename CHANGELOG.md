@@ -1,5 +1,25 @@
 # PatchWarden CHANGELOG
 
+## v1.6.1 (2026-07-20)
+
+### Security and concurrency hardening
+
+- Serialized cross-process Goal, Worktree, Direct, task-status, assessment,
+  and bounded-log mutations with auditable, fail-closed lock ownership.
+- Hardened workspace and sensitive-path validation, shell-free executable
+  resolution, minimal child environments, and process-output redaction.
+- Added bounded evidence reads/writes and unique atomic replacement for task,
+  Goal, watcher, worktree, and Desktop configuration artifacts.
+
+### Reliability and maintainability
+
+- Reorganized tools and tests by domain while keeping MCP profile manifests
+  stable, and made clean builds recursively discover the complete test suite.
+- Tightened Core and Desktop production TypeScript boundaries by validating
+  IPC, JSON, model-discovery, and tunnel-process data from `unknown`.
+- Expanded Windows concurrency, lifecycle, supervisor, Desktop, and package
+  verification coverage.
+
 ## v1.6.0 (2026-07-16)
 
 ### Windows Desktop agents and models

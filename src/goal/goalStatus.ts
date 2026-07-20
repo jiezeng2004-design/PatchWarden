@@ -12,6 +12,7 @@
  */
 
 import { PatchWardenError } from "../errors.js";
+import { redactSensitiveContent } from "../security/contentRedaction.js";
 
 // ── 类型定义 ──────────────────────────────────────────────────────
 
@@ -35,6 +36,8 @@ export interface Subgoal {
   external_ref?: string;
   /** Spec Kit task.files 提示（作用域文件路径列表） */
   scope_hints?: string[];
+  /** Managed git worktree associated with an isolated subgoal task. */
+  worktree_id?: string;
 }
 
 export interface GoalStatus {
@@ -74,7 +77,7 @@ export function createInitialGoalStatus(
   const now = new Date().toISOString();
   return {
     goal_id: goalId,
-    title,
+    title: redactGoalText(title, 500),
     status: "active",
     repo_path: repoPath,
     created_at: now,
@@ -94,6 +97,15 @@ export function addSubgoal(
   title: string,
   dependsOn: string[] = []
 ): { goalStatus: GoalStatus; subgoalId: string } {
+  if (goalStatus.status !== "active") {
+    throw new PatchWardenError(
+      "goal_not_active",
+      `Goal "${goalStatus.goal_id}" is ${goalStatus.status} and cannot accept new subgoals.`,
+      "Create a new Goal Session for additional work.",
+      true,
+      { goal_id: goalStatus.goal_id, status: goalStatus.status },
+    );
+  }
   const existingIds = new Set(goalStatus.subgoals.map((s) => s.id));
   for (const depId of dependsOn) {
     if (!existingIds.has(depId)) {
@@ -111,7 +123,7 @@ export function addSubgoal(
   const subgoalId = `subgoal-${String(nextNumber).padStart(3, "0")}`;
   const newSubgoal: Subgoal = {
     id: subgoalId,
-    title,
+    title: redactGoalText(title, 500),
     status: "ready",
     depends_on: [...dependsOn],
     task_ids: [],
@@ -185,7 +197,7 @@ export function updateSubgoalStatus(
         { subgoal_id: subgoalId, from_status: current.status, to_status: newStatus }
       );
     }
-    updatedSubgoal.rejected_reason = options.rejected_reason;
+    updatedSubgoal.rejected_reason = redactGoalText(options.rejected_reason, 2000);
   }
 
   const newSubgoals = [...goalStatus.subgoals];
@@ -196,6 +208,10 @@ export function updateSubgoalStatus(
     subgoals: newSubgoals,
     updated_at: new Date().toISOString(),
   };
+}
+
+function redactGoalText(value: string, maxChars: number): string {
+  return redactSensitiveContent(String(value || "")).content.slice(0, maxChars);
 }
 
 /**

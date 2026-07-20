@@ -18,14 +18,20 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
-  renameSync,
-  writeFileSync,
   statSync,
 } from "node:fs";
 import { join } from "node:path";
 import { getConfig } from "../config.js";
-import { guardWorkspacePath } from "../security/pathGuard.js";
+import { guardPath, guardWorkspacePath } from "../security/pathGuard.js";
 import { PatchWardenError } from "../errors.js";
+import { atomicWriteFileSync, atomicWriteJsonFileSync } from "../utils/atomicFile.js";
+import { redactSensitiveContent } from "../security/contentRedaction.js";
+import {
+  mutateLockedJsonFileSync,
+  readJsonObjectFileSync,
+  withFileLock,
+  withFileLockSync,
+} from "../utils/lockedJsonFile.js";
 import {
   type GoalStatus,
   type Subgoal,
@@ -36,6 +42,26 @@ import {
 
 function resolveWorkspaceRoot(workspaceRoot?: string): string {
   return workspaceRoot ?? getConfig().workspaceRoot;
+}
+
+const GOALS_PREFIX = join(".patchwarden", "goals");
+const GOAL_ID_MAX_LENGTH = 128;
+const GOAL_ID_PATTERN = /^goal_[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+/** Validate the storage key before it can participate in path construction. */
+export function assertValidGoalId(goalId: string): void {
+  if (
+    goalId.length > GOAL_ID_MAX_LENGTH ||
+    !GOAL_ID_PATTERN.test(goalId)
+  ) {
+    throw new PatchWardenError(
+      "invalid_goal_id",
+      `Invalid goal id. Expected "goal_" followed by at most ${GOAL_ID_MAX_LENGTH - 5} ASCII letters, digits, underscores, or hyphens.`,
+      "Use the goal_id returned by create_goal or list_goals.",
+      true,
+      { goal_id_length: goalId.length }
+    );
+  }
 }
 
 // ── Goal ID 生成 ──────────────────────────────────────────────────
@@ -86,14 +112,17 @@ export function generateGoalId(title: string, existingIds: string[]): string {
  * 不自动创建目录。
  */
 export function getGoalsDir(workspaceRoot?: string): string {
-  return join(resolveWorkspaceRoot(workspaceRoot), ".patchwarden", "goals");
+  const wsRoot = resolveWorkspaceRoot(workspaceRoot);
+  return guardPath(join(wsRoot, GOALS_PREFIX), wsRoot, GOALS_PREFIX);
 }
 
 /**
  * 返回 `{getGoalsDir()}/{goalId}` 路径。
  */
 export function getGoalDir(goalId: string, workspaceRoot?: string): string {
-  return join(getGoalsDir(workspaceRoot), goalId);
+  assertValidGoalId(goalId);
+  const wsRoot = resolveWorkspaceRoot(workspaceRoot);
+  return guardPath(join(getGoalsDir(wsRoot), goalId), wsRoot, GOALS_PREFIX);
 }
 
 // ── CRUD ──────────────────────────────────────────────────────────
@@ -112,12 +141,26 @@ export function createGoal(
   description: string,
   workspaceRoot?: string
 ): { goal_id: string; goal_dir: string } {
+  const safeTitle = redactSensitiveContent(title)
+    .content
+    .replace(/[\r\n\t]+/g, " ")
+    .trim()
+    .slice(0, 500) || "Untitled goal";
+  const safeDescription = redactSensitiveContent(description).content;
+  if (Buffer.byteLength(safeDescription, "utf-8") > 1024 * 1024) {
+    throw new PatchWardenError(
+      "goal_description_too_large",
+      "Goal description exceeds the 1 MiB limit.",
+      "Split the work into smaller Goal Sessions.",
+    );
+  }
   const wsRoot = resolveWorkspaceRoot(workspaceRoot);
   const guardedRepo = guardWorkspacePath(repoPath, wsRoot);
 
   const goalsDir = getGoalsDir(workspaceRoot);
-  const existingIds: string[] = [];
-  if (existsSync(goalsDir)) {
+  mkdirSync(goalsDir, { recursive: true });
+  return withFileLockSync(join(goalsDir, "goal-creation"), () => {
+    const existingIds: string[] = [];
     for (const entry of readdirSync(goalsDir)) {
       const entryPath = join(goalsDir, entry);
       try {
@@ -125,45 +168,38 @@ export function createGoal(
           existingIds.push(entry);
         }
       } catch {
-        // 跳过无法 stat 的条目
+        // Skip entries that cannot be inspected.
       }
     }
-  }
 
-  const goalId = generateGoalId(title, existingIds);
-  const goalDir = join(goalsDir, goalId);
+    const goalId = generateGoalId(safeTitle, existingIds);
+    const goalDir = getGoalDir(goalId, wsRoot);
 
-  // 创建目录结构
-  mkdirSync(join(goalDir, "tasks"), { recursive: true });
-  mkdirSync(join(goalDir, "artifacts"), { recursive: true });
+    mkdirSync(goalDir);
+    mkdirSync(join(goalDir, "tasks"));
+    mkdirSync(join(goalDir, "artifacts"));
 
-  // 写入 GOAL.md
-  const now = new Date().toISOString();
-  const goalMd = [
-    `# ${title}`,
-    "",
-    description,
-    "",
-    `- Created: ${now}`,
-    `- Repo: ${guardedRepo}`,
-    "- Status: active",
-    "",
-  ].join("\n");
-  writeFileSync(join(goalDir, "GOAL.md"), goalMd, "utf-8");
+    const now = new Date().toISOString();
+    const goalMd = [
+      `# ${safeTitle}`,
+      "",
+      safeDescription,
+      "",
+      `- Created: ${now}`,
+      `- Repo: ${guardedRepo}`,
+      "- Status: active",
+      "",
+    ].join("\n");
+    atomicWriteFileSync(join(goalDir, "GOAL.md"), goalMd);
 
-  // 写入 GOALS.md
-  const goalsMd = `# Subgoals: ${title}\n\n_No subgoals yet._\n`;
-  writeFileSync(join(goalDir, "GOALS.md"), goalsMd, "utf-8");
+    const goalsMd = `# Subgoals: ${safeTitle}\n\n_No subgoals yet._\n`;
+    atomicWriteFileSync(join(goalDir, "GOALS.md"), goalsMd);
 
-  // 写入 goal_status.json
-  const status = createInitialGoalStatus(goalId, title, guardedRepo);
-  writeFileSync(
-    join(goalDir, "goal_status.json"),
-    JSON.stringify(status, null, 2) + "\n",
-    "utf-8"
-  );
+    const status = createInitialGoalStatus(goalId, safeTitle, guardedRepo);
+    atomicWriteJsonFileSync(join(goalDir, "goal_status.json"), status);
 
-  return { goal_id: goalId, goal_dir: goalDir };
+    return { goal_id: goalId, goal_dir: goalDir };
+  }, goalBusyOptions("creation"));
 }
 
 /**
@@ -197,8 +233,8 @@ export function listGoals(
   }> = [];
 
   for (const entry of readdirSync(goalsDir)) {
-    const entryPath = join(goalsDir, entry);
     try {
+      const entryPath = getGoalDir(entry, workspaceRoot);
       if (!statSync(entryPath).isDirectory()) {
         continue;
       }
@@ -254,7 +290,12 @@ export function readGoal(
   let goalDescription = "";
   const goalMdPath = join(goalDir, "GOAL.md");
   if (existsSync(goalMdPath)) {
-    goalDescription = readFileSync(goalMdPath, "utf-8");
+    const safeGoalMdPath = guardPath(
+      goalMdPath,
+      resolveWorkspaceRoot(workspaceRoot),
+      GOALS_PREFIX,
+    );
+    goalDescription = readFileSync(safeGoalMdPath, "utf-8");
   }
 
   return {
@@ -270,8 +311,7 @@ export function readGoal(
 }
 
 /**
- * 原子写入 goal_status.json：先写到 .tmp 文件，再 renameSync。
- * JSON 序列化用 JSON.stringify(status, null, 2) + 末尾换行。
+ * Replace goal_status.json under the shared cross-process mutation lock.
  */
 export function writeGoalStatus(
   goalId: string,
@@ -279,10 +319,26 @@ export function writeGoalStatus(
   workspaceRoot?: string
 ): void {
   const goalDir = getGoalDir(goalId, workspaceRoot);
-  const finalPath = join(goalDir, "goal_status.json");
-  const tmpPath = join(goalDir, "goal_status.json.tmp");
-  writeFileSync(tmpPath, JSON.stringify(status, null, 2) + "\n", "utf-8");
-  renameSync(tmpPath, finalPath);
+  if (!existsSync(goalDir)) {
+    throw new PatchWardenError(
+      "goal_not_found",
+      `Goal directory not found: "${goalDir}"`,
+      "Ensure the goal has been created before writing its status.",
+      true,
+      { goal_id: goalId, goal_dir: goalDir },
+    );
+  }
+  const statusPath = getGoalStatusPath(goalId, workspaceRoot);
+  if (!existsSync(statusPath)) {
+    withFileLockSync(statusPath, () => {
+      atomicWriteJsonFileSync(
+        statusPath,
+        normalizeGoalLifecycle(validateGoalStatus(goalId, status, workspaceRoot)),
+      );
+    }, goalBusyOptions(goalId));
+    return;
+  }
+  mutateGoalStatus(goalId, () => ({ next: status, result: undefined }), workspaceRoot);
 }
 
 /**
@@ -290,8 +346,7 @@ export function writeGoalStatus(
  * 如果文件不存在，抛出 PatchWardenError("goal_not_found")。
  */
 export function readGoalStatus(goalId: string, workspaceRoot?: string): GoalStatus {
-  const goalDir = getGoalDir(goalId, workspaceRoot);
-  const statusPath = join(goalDir, "goal_status.json");
+  const statusPath = getGoalStatusPath(goalId, workspaceRoot);
   if (!existsSync(statusPath)) {
     throw new PatchWardenError(
       "goal_not_found",
@@ -301,6 +356,138 @@ export function readGoalStatus(goalId: string, workspaceRoot?: string): GoalStat
       { goal_id: goalId, status_path: statusPath }
     );
   }
-  const raw = readFileSync(statusPath, "utf-8");
-  return JSON.parse(raw) as GoalStatus;
+  let parsed: unknown;
+  try {
+    parsed = readJsonObjectFileSync(statusPath);
+  } catch {
+    throw invalidGoalStatus(goalId, "goal_status.json is not valid JSON");
+  }
+  return validateGoalStatus(goalId, parsed, workspaceRoot);
+}
+
+export interface GoalStatusMutation<R> {
+  next?: GoalStatus;
+  result: R;
+}
+
+export function mutateGoalStatus<R>(
+  goalId: string,
+  mutation: (current: GoalStatus) => GoalStatusMutation<R>,
+  workspaceRoot?: string,
+): R {
+  const statusPath = getGoalStatusPath(goalId, workspaceRoot);
+  ensureGoalStatusExists(goalId, statusPath);
+  return mutateLockedJsonFileSync<GoalStatus, R>(statusPath, (raw) => {
+    const current = validateGoalStatus(goalId, raw, workspaceRoot);
+    const outcome = mutation(current);
+    if (!outcome.next) return outcome;
+    return {
+      next: normalizeGoalLifecycle(validateGoalStatus(goalId, outcome.next, workspaceRoot)),
+      result: outcome.result,
+    };
+  }, goalBusyOptions(goalId));
+}
+
+export async function mutateGoalStatusAsync<R>(
+  goalId: string,
+  mutation: (current: GoalStatus) => Promise<GoalStatusMutation<R>>,
+  workspaceRoot?: string,
+): Promise<R> {
+  const statusPath = getGoalStatusPath(goalId, workspaceRoot);
+  ensureGoalStatusExists(goalId, statusPath);
+  return withFileLock(statusPath, async () => {
+    const current = validateGoalStatus(
+      goalId,
+      readJsonObjectFileSync(statusPath),
+      workspaceRoot,
+    );
+    const outcome = await mutation(current);
+    if (outcome.next) {
+      atomicWriteJsonFileSync(
+        statusPath,
+        normalizeGoalLifecycle(validateGoalStatus(goalId, outcome.next, workspaceRoot)),
+      );
+    }
+    return outcome.result;
+  }, goalBusyOptions(goalId));
+}
+
+function getGoalStatusPath(goalId: string, workspaceRoot?: string): string {
+  const wsRoot = resolveWorkspaceRoot(workspaceRoot);
+  return guardPath(
+    join(getGoalDir(goalId, wsRoot), "goal_status.json"),
+    wsRoot,
+    GOALS_PREFIX,
+  );
+}
+
+function ensureGoalStatusExists(goalId: string, statusPath: string): void {
+  if (!existsSync(statusPath)) {
+    throw new PatchWardenError(
+      "goal_not_found",
+      `goal_status.json not found for goal "${goalId}" at "${statusPath}"`,
+      "Ensure the goal has been created via createGoal before updating it.",
+      true,
+      { goal_id: goalId, status_path: statusPath },
+    );
+  }
+}
+
+function validateGoalStatus(
+  goalId: string,
+  value: unknown,
+  workspaceRoot?: string,
+): GoalStatus {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw invalidGoalStatus(goalId, "expected a JSON object");
+  }
+  const candidate = value as Partial<GoalStatus>;
+  if (candidate.goal_id !== goalId) {
+    throw invalidGoalStatus(goalId, "goal_id does not match its directory");
+  }
+  if (typeof candidate.title !== "string" || typeof candidate.repo_path !== "string") {
+    throw invalidGoalStatus(goalId, "title or repo_path is missing");
+  }
+  if (candidate.status !== "active" && candidate.status !== "completed" && candidate.status !== "abandoned") {
+    throw invalidGoalStatus(goalId, "status is invalid");
+  }
+  if (!Array.isArray(candidate.subgoals)) {
+    throw invalidGoalStatus(goalId, "subgoals must be an array");
+  }
+  guardWorkspacePath(candidate.repo_path, resolveWorkspaceRoot(workspaceRoot));
+  return candidate as GoalStatus;
+}
+
+function normalizeGoalLifecycle(status: GoalStatus): GoalStatus {
+  if (
+    status.status === "active" &&
+    status.subgoals.length > 0 &&
+    status.subgoals.every((subgoal) => subgoal.status === "accepted")
+  ) {
+    return { ...status, status: "completed", updated_at: new Date().toISOString() };
+  }
+  return status;
+}
+
+function invalidGoalStatus(goalId: string, detail: string): PatchWardenError {
+  return new PatchWardenError(
+    "invalid_goal_status",
+    `Invalid goal status for "${goalId}": ${detail}.`,
+    "Recreate the Goal Session or restore a valid goal_status.json artifact.",
+    true,
+    { goal_id: goalId },
+  );
+}
+
+function goalBusyOptions(goalId: string) {
+  return {
+    waitMs: 0,
+    busyError: () => new PatchWardenError(
+      "goal_busy",
+      `Goal "${goalId}" is currently being updated.`,
+      "Retry after the active Goal operation finishes.",
+      true,
+      { goal_id: goalId },
+    ),
+  };
 }

@@ -6,7 +6,7 @@ $RuntimeDirectory = Join-Path $env:LOCALAPPDATA "patchwarden\runtime"
 $HealthUrlFile = Join-Path $RuntimeDirectory "tunnel-health-url.txt"
 
 $env:PATCHWARDEN_CONFIG = $ConfigPath
-$healthJson = node --input-type=module -e "Promise.all([import('./dist/tools/healthCheck.js'),import('./dist/tools/registry.js')]).then(([h,r])=>console.log(JSON.stringify(h.healthCheck(r.getToolCatalogSnapshot()))))" 2>$null
+$healthJson = node --input-type=module -e "Promise.all([import('./dist/tools/diagnostics/healthCheck.js'),import('./dist/tools/registry.js')]).then(([h,r])=>console.log(JSON.stringify(h.healthCheck(r.getToolCatalogSnapshot()))))" 2>$null
 if ($LASTEXITCODE -ne 0 -or -not $healthJson) {
   throw "Could not load PatchWarden health information. Run npm.cmd run build first."
 }

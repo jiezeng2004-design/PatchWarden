@@ -1,4 +1,4 @@
-import { existsSync, statSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, normalize, resolve, win32 } from "node:path";
 
@@ -32,16 +32,18 @@ export function unsafeWorkspaceRootLabel(value: string, userHome = homedir()): s
 }
 
 export function validateWorkspaceRoot(value: string, userHome = homedir()): WorkspaceRootValidation {
-  const resolved = normalize(resolve(value || "."));
-  if (!existsSync(resolved)) {
-    return { ok: false, path: resolved, reason: "workspaceRoot does not exist", category: "missing" };
+  const lexicalPath = normalize(resolve(value || "."));
+  if (!existsSync(lexicalPath)) {
+    return { ok: false, path: lexicalPath, reason: "workspaceRoot does not exist", category: "missing" };
   }
+  let resolved: string;
   try {
+    resolved = normalize(realpathSync(lexicalPath));
     if (!statSync(resolved).isDirectory()) {
       return { ok: false, path: resolved, reason: "workspaceRoot is not a directory", category: "not_directory" };
     }
   } catch {
-    return { ok: false, path: resolved, reason: "workspaceRoot is not accessible", category: "not_directory" };
+    return { ok: false, path: lexicalPath, reason: "workspaceRoot is not accessible", category: "not_directory" };
   }
   const unsafeLabel = unsafeWorkspaceRootLabel(resolved, userHome);
   if (unsafeLabel) {

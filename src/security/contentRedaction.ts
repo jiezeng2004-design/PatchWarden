@@ -39,13 +39,13 @@ const RULES: RedactionRule[] = [
   {
     category: "credential_assignment",
     reason: "matched credential assignment",
-    pattern: /\b((?:access[_ -]?token|api[_ -]?key|secret|password|credential|token)\s*[:=]\s*)(["']?)([^\s,"'\]}]{8,})(["']?)/gi,
+    pattern: /\b((?:(?:[A-Za-z][A-Za-z0-9]*[_ -])*(?:access[_ -]?token|refresh[_ -]?token|api[_ -]?key|secret(?:[_ -]?access)?[_ -]?key|client[_ -]?secret|private[_ -]?key|secret|password|credential|token))\s*[:=]\s*)(["']?)([^\s,"'\]}]{8,})(["']?)/gi,
     replace: "$1$2[REDACTED]$4",
   },
   {
     category: "known_token_format",
     reason: "matched known token format",
-    pattern: /\b(?:sk|ghp|github_pat)_[A-Za-z0-9_-]{16,}\b/g,
+    pattern: /\b(?:sk-(?:proj-|ant-)?[A-Za-z0-9_-]{16,}|sk_[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_-]{16,}|github_pat_[A-Za-z0-9_-]{16,}|glpat-[A-Za-z0-9_-]{16,}|xox[baprs]-[A-Za-z0-9-]{16,}|(?:hf|npm)_[A-Za-z0-9_-]{16,}|(?:sk|rk)_live_[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b/g,
     replace: "[REDACTED TOKEN]",
   },
 ];

@@ -9,7 +9,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { readGoalStatus, writeGoalStatus } from "./goalStore.js";
+import { mutateGoalStatus } from "./goalStore.js";
 import { updateSubgoalStatus } from "./goalStatus.js";
 import { logger } from "../logging.js";
 
@@ -39,13 +39,16 @@ export function syncSubgoalOnTaskDone(
   if (!goalId || !subgoalId) return;
 
   try {
-    const goalStatus = readGoalStatus(goalId, workspaceRoot);
-    const subgoal = goalStatus.subgoals.find((s) => s.id === subgoalId);
-    if (!subgoal) return;
-    if (subgoal.status !== "running") return;
-
-    const updated = updateSubgoalStatus(goalStatus, subgoalId, "done_by_agent");
-    writeGoalStatus(goalId, updated, workspaceRoot);
+    mutateGoalStatus(goalId, (goalStatus) => {
+      const subgoal = goalStatus.subgoals.find((entry) => entry.id === subgoalId);
+      if (!subgoal || subgoal.status !== "running") {
+        return { result: undefined };
+      }
+      return {
+        next: updateSubgoalStatus(goalStatus, subgoalId, "done_by_agent"),
+        result: undefined,
+      };
+    }, workspaceRoot);
   } catch (err) {
     // subgoal 同步失败不应影响任务完成流程，只记录到 stderr
     logger.error(

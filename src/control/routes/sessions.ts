@@ -10,7 +10,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { type ServerResponse } from "node:http";
 import { getDirectSessionsDir } from "../../config.js";
-import { safeAuditDirectSession, safeDirectSummary, safeFinalizeDirectSession } from "../../tools/safeViews.js";
+import { safeAuditDirectSession, safeDirectSummary, safeFinalizeDirectSession } from "../../tools/diagnostics/safeViews.js";
 import {
   fileMtimeIso,
   isValidDirectSessionId,
@@ -18,7 +18,7 @@ import {
   recordEvent,
   writeHiddenDirectSessionIds,
 } from "../runtime.js";
-import { config, errorMessage, readJsonFileSafe, readTextFileSafe, sendJson } from "../shared.js";
+import { config, errorMessage, guardControlPath, readJsonFileSafe, readTextFileSafe, sendJson } from "../shared.js";
 
 interface DirectSessionSummary {
   session_id: string;
@@ -111,7 +111,9 @@ export function handleDirectSessions(res: ServerResponse): void {
     const summaries: DirectSessionSummary[] = [];
     for (const entry of entries) {
       if (hiddenIds.has(entry.name)) continue;
-      const summary = readDirectSessionSummary(join(sessionsDir, entry.name), entry.name);
+      const sessionDir = guardControlPath(join(sessionsDir, entry.name), config.directSessionsDir);
+      if (!sessionDir) continue;
+      const summary = readDirectSessionSummary(sessionDir, entry.name);
       if (summary) summaries.push(summary);
     }
     // Sort by created_at descending.
@@ -124,19 +126,13 @@ export function handleDirectSessions(res: ServerResponse): void {
 
 export function handleDirectSessionDetail(res: ServerResponse, sessionId: string): void {
   try {
-    if (
-      sessionId === "." ||
-      sessionId === ".." ||
-      sessionId.includes("/") ||
-      sessionId.includes("\\") ||
-      sessionId.includes("\0")
-    ) {
+    if (!isValidDirectSessionId(sessionId)) {
       sendJson(res, 400, { error: "Invalid session id" });
       return;
     }
     const sessionsDir = getDirectSessionsDir(config);
-    const sessionDir = join(sessionsDir, sessionId);
-    if (!existsSync(sessionDir) || !statSync(sessionDir).isDirectory()) {
+    const sessionDir = guardControlPath(join(sessionsDir, sessionId), config.directSessionsDir);
+    if (!sessionDir || !existsSync(sessionDir) || !statSync(sessionDir).isDirectory()) {
       sendJson(res, 404, { error: "Direct session not found" });
       return;
     }
@@ -158,13 +154,7 @@ export function handleDirectSessionDetail(res: ServerResponse, sessionId: string
 
 export function handleDirectSessionSafeSummary(res: ServerResponse, sessionId: string): void {
   try {
-    if (
-      sessionId === "." ||
-      sessionId === ".." ||
-      sessionId.includes("/") ||
-      sessionId.includes("\\") ||
-      sessionId.includes("\0")
-    ) {
+    if (!isValidDirectSessionId(sessionId)) {
       sendJson(res, 400, { error: "Invalid session id" });
       return;
     }

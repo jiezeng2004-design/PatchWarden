@@ -10,21 +10,22 @@
 
 import { existsSync, statSync, readFileSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { isAbsolute, resolve, normalize, join } from "node:path";
-import { execSync } from "node:child_process";
 import { createServer } from "node:net";
 import { getConfig, type PatchWardenConfig } from "./config.js";
 import { guardPath, guardWorkspacePath } from "./security/pathGuard.js";
 import { isSensitivePath } from "./security/sensitiveGuard.js";
 import { guardPlanContent } from "./security/planGuard.js";
-import { TASK_READ_ONLY_FILES } from "./tools/getTaskFile.js";
+import { TASK_READ_ONLY_FILES } from "./tools/tasks/getTaskFile.js";
 import { getToolDefs } from "./tools/registry.js";
-import { CHATGPT_CORE_TOOL_NAMES, CHATGPT_DIRECT_TOOL_NAMES, selectToolsForProfile } from "./tools/toolCatalog.js";
-import { buildToolRegistry } from "./tools/toolRegistry.js";
-import { runAllSchemaDriftChecks } from "./tools/schemaDriftCheck.js";
+import { CHATGPT_CORE_TOOL_NAMES, CHATGPT_DIRECT_TOOL_NAMES, selectToolsForProfile } from "./tools/catalog/toolCatalog.js";
+import { buildToolRegistry } from "./tools/catalog/toolRegistry.js";
+import { runAllSchemaDriftChecks } from "./tools/diagnostics/schemaDriftCheck.js";
 import { runReleaseGateCheck } from "./release/releaseGate.js";
 import { PATCHWARDEN_VERSION } from "./version.js";
 import { logger } from "./logging.js";
 import { unsafeWorkspaceRootLabel } from "./security/workspaceRootGuard.js";
+import { runSimpleProcessSync } from "./runner/simpleProcess.js";
+import { resolveAgentLaunch } from "./runner/agentInvocation.js";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -51,13 +52,18 @@ export interface DoctorContext {
 
 // ── Helpers ────────────────────────────────────────────────────────
 
-function cmd(cmdStr: string): string {
+function cmd(command: string, args: readonly string[] = []): string {
   try {
-    return execSync(cmdStr, {
-      encoding: "utf-8",
-      timeout: 5000,
-      stdio: ["ignore", "pipe", "ignore"], // suppress stdin and stderr
-    }).trim();
+    const result = runSimpleProcessSync({
+      command,
+      args: [...args],
+      cwd: process.cwd(),
+      timeoutMs: 5000,
+      maxStdoutBytes: 64 * 1024,
+      maxStderrBytes: 64 * 1024,
+    });
+    if (result.exitCode !== 0) return "";
+    return `${result.stdout}${result.stderr}`.trim();
   } catch {
     return "";
   }
@@ -110,7 +116,7 @@ const checkNpmAvailable: DoctorCheck = {
   id: "npm-available",
   description: "npm available",
   run() {
-    const npmVer = cmd(process.platform === "win32" ? "npm.cmd --version" : "npm --version");
+    const npmVer = cmd(process.platform === "win32" ? "npm.cmd" : "npm", ["--version"]);
     return [checkResult("npm available", npmVer !== "", npmVer || "npm not found in PATH")];
   },
 };
@@ -145,7 +151,7 @@ const checkGitAvailable: DoctorCheck = {
   id: "git-available",
   description: "Git available",
   run() {
-    const gitVer = cmd("git --version");
+    const gitVer = cmd("git", ["--version"]);
     return [warnCheckResult("Git available", gitVer !== "", gitVer || "git not found — runner git.diff will not work")];
   },
 };
@@ -325,8 +331,8 @@ const checkToolProfiles: DoctorCheck = {
       process.env.PATCHWARDEN_TOOL_PROFILE = "full";
       const fullTools = getToolDefs();
       const coreTools = selectToolsForProfile(fullTools, "chatgpt_core", context.config?.enableDirectProfile);
-      const createSchema = coreTools.find((tool) => tool.name === "create_task")?.inputSchema as any;
-      const waitSchema = coreTools.find((tool) => tool.name === "wait_for_task")?.inputSchema as any;
+      const createSchema = coreTools.find((tool) => tool.name === "create_task")?.inputSchema;
+      const waitSchema = coreTools.find((tool) => tool.name === "wait_for_task")?.inputSchema;
       results.push(checkResult("Full tool profile exposes 66 tools", fullTools.length === 66, `${fullTools.length} tools`));
       results.push(
         checkResult(
@@ -457,23 +463,23 @@ const checkToolModules: DoctorCheck = {
   description: "Tool module checks",
   run() {
     const newTools = [
-      "listTasks",
-      "listAgents",
-      "cancelTask",
-      "killTask",
-      "retryTask",
-      "getTaskProgress",
-      "getTaskSummary",
-      "waitForTask",
-      "getTaskStdoutTail",
-      "healthCheck",
-      "auditTask",
+      { name: "listTasks", subdir: "tasks" },
+      { name: "listAgents", subdir: "workspace" },
+      { name: "cancelTask", subdir: "tasks" },
+      { name: "killTask", subdir: "tasks" },
+      { name: "retryTask", subdir: "tasks" },
+      { name: "getTaskProgress", subdir: "tasks" },
+      { name: "getTaskSummary", subdir: "tasks" },
+      { name: "waitForTask", subdir: "tasks" },
+      { name: "getTaskStdoutTail", subdir: "tasks" },
+      { name: "healthCheck", subdir: "diagnostics" },
+      { name: "auditTask", subdir: "diagnostics" },
     ];
     const results: DoctorCheckResult[] = [];
     for (const t of newTools) {
-      const compiled = resolve(process.cwd(), "dist/tools", `${t}.js`);
+      const compiled = resolve(process.cwd(), "dist/tools", t.subdir, `${t.name}.js`);
       const exists = existsSync(compiled);
-      results.push(checkResult(`Tool module: ${t}`, exists, exists ? "compiled" : "missing"));
+      results.push(checkResult(`Tool module: ${t.name}`, exists, exists ? "compiled" : "missing"));
     }
     return results;
   },
@@ -484,18 +490,18 @@ const checkDirectToolModules: DoctorCheck = {
   description: "Direct tool module checks",
   run() {
     const directToolModules = [
-      "createDirectSession",
-      "searchWorkspace",
-      "applyPatch",
-      "runVerification",
-      "finalizeDirectSession",
-      "auditSession",
+      { name: "createDirectSession", subdir: "direct" },
+      { name: "searchWorkspace", subdir: "workspace" },
+      { name: "applyPatch", subdir: "workspace" },
+      { name: "runVerification", subdir: "tasks" },
+      { name: "finalizeDirectSession", subdir: "direct" },
+      { name: "auditSession", subdir: "diagnostics" },
     ];
     const results: DoctorCheckResult[] = [];
     for (const t of directToolModules) {
-      const compiled = resolve(process.cwd(), "dist/tools", `${t}.js`);
+      const compiled = resolve(process.cwd(), "dist/tools", t.subdir, `${t.name}.js`);
       const exists = existsSync(compiled);
-      results.push(checkResult(`Direct tool module: ${t}`, exists, exists ? "compiled" : "missing"));
+      results.push(checkResult(`Direct tool module: ${t.name}`, exists, exists ? "compiled" : "missing"));
     }
     return results;
   },
@@ -606,8 +612,7 @@ const checkAgentCommands: DoctorCheck = {
   run(context) {
     if (!context.config) return [];
     const results: DoctorCheckResult[] = [];
-    const agents = context.config.agents || {};
-    for (const [name, agentCfg] of Object.entries(agents) as [string, any][]) {
+    for (const [name, agentCfg] of Object.entries(context.config.agents)) {
       const cmdName = agentCfg.command;
       const looksLikePath = isAbsolute(cmdName) || cmdName.includes("/") || cmdName.includes("\\");
       if (looksLikePath) {
@@ -615,11 +620,26 @@ const checkAgentCommands: DoctorCheck = {
         results.push(warnCheckResult(`Agent "${name}" command available`, agentExists, agentExists ? `Found: ${cmdName}` : `"${cmdName}" does not exist — agent tasks will fail`));
         continue;
       }
-      // Platform-appropriate lookup: 'where' on Windows, 'command -v' on Unix
+      // Use an argumentized lookup utility; never interpolate config into a shell.
       const isWin = process.platform === "win32";
-      const lookupCmd = isWin ? `where ${cmdName}` : `command -v ${cmdName}`;
-      const fallbackCmd = isWin ? `command -v ${cmdName}` : `which ${cmdName}`;
-      const found = cmd(lookupCmd) || cmd(fallbackCmd);
+      let found = "";
+      if (isWin) {
+        try {
+          found = resolveAgentLaunch(
+            name,
+            cmdName,
+            process.platform,
+            process.env.PATH || "",
+            existsSync,
+            context.config.workspaceRoot,
+            typeof agentCfg.adapter === "string" ? agentCfg.adapter : name,
+          ).command;
+        } catch {
+          found = "";
+        }
+      } else {
+        found = cmd("which", [cmdName]);
+      }
       results.push(warnCheckResult(`Agent "${name}" command available`, found !== "", found ? `Found: ${found.split("\n")[0]}` : `"${cmdName}" not in PATH — agent tasks will fail`));
     }
     return results;

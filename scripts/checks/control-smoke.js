@@ -139,11 +139,11 @@ try {
 
   const expectedFiles = [
     "PatchWarden.cmd",
-    "PatchWarden-Control.cmd",
-    "PatchWarden-Control-Tray.cmd",
-    "PatchWarden-Desktop.cmd",
-    "Restart-PatchWarden-Control.cmd",
-    "Stop-PatchWarden.cmd",
+    "scripts/launchers/PatchWarden-Control.cmd",
+    "scripts/launchers/PatchWarden-Control-Tray.cmd",
+    "scripts/launchers/PatchWarden-Desktop.cmd",
+    "scripts/launchers/Restart-PatchWarden-Control.cmd",
+    "scripts/launchers/Stop-PatchWarden.cmd",
     "scripts/control/manage-patchwarden.ps1",
     "scripts/control/run-background-supervisor.ps1",
     "scripts/control/stop-patchwarden.ps1",
@@ -159,11 +159,11 @@ try {
   if (!rootEntry.includes("manage-patchwarden.ps1")) {
     throw new Error("PatchWarden.cmd does not invoke the consolidated manager");
   }
-  const stopEntry = readFileSync(join(root, "Stop-PatchWarden.cmd"), "utf8");
-  if (!stopEntry.includes("scripts\\control\\stop-patchwarden.ps1")) {
+  const stopEntry = readFileSync(join(root, "scripts", "launchers", "Stop-PatchWarden.cmd"), "utf8");
+  if (!stopEntry.includes("control\\stop-patchwarden.ps1")) {
     throw new Error("Stop-PatchWarden.cmd does not invoke the one-click shutdown script");
   }
-  const desktopEntry = readFileSync(join(root, "PatchWarden-Desktop.cmd"), "utf8");
+  const desktopEntry = readFileSync(join(root, "scripts", "launchers", "PatchWarden-Desktop.cmd"), "utf8");
   if (!desktopEntry.includes("control-center-tray.ps1") || !desktopEntry.includes("WindowStyle Hidden")) {
     throw new Error("PatchWarden-Desktop.cmd must launch the tray hidden as the daily desktop entry");
   }

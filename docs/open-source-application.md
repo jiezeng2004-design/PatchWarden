@@ -56,19 +56,24 @@ evidence packs.
 
 ## Current Public Evidence
 
-Snapshot checked on 2026-07-12:
+Remote snapshot checked on 2026-07-19:
 
 - GitHub repository: `jiezeng2004-design/PatchWarden`
 - Stars: 2
 - Forks: 0
-- Open issues: 9 (`#25`, `#26`, `#28`–`#34`)
-- Open pull requests: 2 (`#24`, `#37`, both draft)
-- GitHub latest release: `v1.5.0`
-- npm latest dist-tag: `patchwarden@1.5.0`
-- Local source version in `package.json`: `1.5.1`
+- Open issues: 9
+- Open pull requests: 4
+- GitHub latest release: `v1.6.0`, published on 2026-07-16
+- npm latest dist-tag: `patchwarden@1.5.1`
 
-The source version is ahead of the latest public Release/npm package. Treat
-`1.5.1` as pending release work until GitHub Release and npm are verified.
+Local workspace facts, kept separate from the public snapshot:
+
+- Local source version in `package.json`: `1.6.1`
+- Local working branch: `codex/windows-desktop-tunnel-fixes`
+
+Local source is `v1.6.1`; the 2026-07-19 remote snapshot still records GitHub
+Release `v1.6.0` and npm `latest` `1.5.1`. Treat the publication surfaces as out
+of sync; local builds do not establish that either remote surface was updated.
 
 ## Existing Project Evidence
 
@@ -76,7 +81,7 @@ Repository-facing evidence already present:
 
 - `README.md` and `README.en.md` explain the MCP bridge model, safety boundary,
   setup, ChatGPT/Codex/OpenCode usage, and local data handling.
-- `CHANGELOG.md` records ongoing releases from the 1.0 line through 1.5.x.
+- `CHANGELOG.md` records ongoing releases from the 1.0 line through 1.6.1.
 - `SECURITY.md` directs vulnerability reports to GitHub private security
   advisories.
 - `CONTRIBUTING.md` documents local verification and safety expectations.
@@ -112,8 +117,9 @@ Known gaps before submission:
 - collect 3 to 5 real user reports through GitHub issues or discussions
 - record a live screencast if stronger evidence is needed; a privacy-safe
   scripted GIF now exists for the public maintainer workflow
-- finish the `1.5.1` release only after PR/CI, GitHub Release, npm, and
-  `dist-tags.latest` are all verified
+- resolve the release lag through the reviewed workflow; local source is
+  `1.6.1`, while the last verified GitHub Release is `1.6.0` and npm `latest`
+  / `dist-tags.latest` are `1.5.1`
 - add small contributor-friendly roadmap issues such as macOS docs, Codex CLI
   examples, and a minimal demo repository
 

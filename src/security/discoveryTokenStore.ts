@@ -12,8 +12,8 @@
 
 import { randomBytes } from "node:crypto";
 import { PatchWardenError } from "../errors.js";
-import type { ToolRisk } from "../tools/toolRegistry.js";
-import type { ToolProfile } from "../tools/toolCatalog.js";
+import type { ToolRisk } from "../tools/catalog/toolRegistry.js";
+import type { ToolProfile } from "../tools/catalog/toolCatalog.js";
 
 // ── 类型定义 ──────────────────────────────────────────────────────
 
@@ -42,6 +42,7 @@ export interface IssueTokenInput {
 // ── 常量 ──────────────────────────────────────────────────────────
 
 const DEFAULT_TTL_MS = 10 * 60 * 1000; // 10 分钟
+export const MAX_ACTIVE_DISCOVERY_TOKENS = 1024;
 
 // ── 模块级 token store（单例，进程内共享） ───────────────────────
 
@@ -62,6 +63,17 @@ function generateTokenId(): string {
   return `dst_${datePart}_${randomPart}`;
 }
 
+function pruneTokenStore(nowMs: number): void {
+  for (const [token, record] of tokenStore) {
+    if (Date.parse(record.expiresAt) <= nowMs) tokenStore.delete(token);
+  }
+  while (tokenStore.size >= MAX_ACTIVE_DISCOVERY_TOKENS) {
+    const oldest = tokenStore.keys().next().value as string | undefined;
+    if (!oldest) break;
+    tokenStore.delete(oldest);
+  }
+}
+
 // ── 公共 API ──────────────────────────────────────────────────────
 
 /**
@@ -69,9 +81,11 @@ function generateTokenId(): string {
  * token id 格式：dst_{YYYYMMDD}_{randomHex12}
  */
 export function issueToken(input: IssueTokenInput): string {
-  const now = new Date();
+  const nowMs = Date.now();
+  pruneTokenStore(nowMs);
+  const now = new Date(nowMs);
   const issuedAt = now.toISOString();
-  const expiresAt = new Date(Date.now() + (input.ttlMs ?? DEFAULT_TTL_MS)).toISOString();
+  const expiresAt = new Date(nowMs + (input.ttlMs ?? DEFAULT_TTL_MS)).toISOString();
   const token = generateTokenId();
 
   const record: DiscoveryTokenRecord = {

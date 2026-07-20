@@ -16,7 +16,8 @@ import { fileURLToPath } from "node:url";
 
 const scriptDir = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const root = resolve(scriptDir, "..", "..");
-const releaseDir = resolve(root, "release");
+const releaseRoot = resolve(root, "release");
+const releaseDir = resolve(releaseRoot, "package");
 const archivePath = resolve(root, "patchwarden-release.tar.gz");
 
 // Read version from package.json for zip naming
@@ -31,11 +32,6 @@ const include = [
   "src",
   "ui",
   "PatchWarden.cmd",
-  "PatchWarden-Control.cmd",
-  "PatchWarden-Control-Tray.cmd",
-  "PatchWarden-Desktop.cmd",
-  "Restart-PatchWarden-Control.cmd",
-  "Stop-PatchWarden.cmd",
   ".gitignore",
   "LICENSE",
   "README.md",
@@ -57,6 +53,8 @@ const forbidden = [
   /(^|[\\/])\.env$/,
   /\.log$/,
   /^docs[\\/]optimization-proposal\.md$/i,
+  /^docs[\\/]archive(?:[\\/]|$)/i,
+  /^(?:dist|src)[\\/]test(?:[\\/]|$)/i,
   /(^|[\\/])kill-patchwarden\.(cmd|ps1)$/i,
 ];
 
@@ -173,9 +171,15 @@ function readZipEntryNames(zipPath) {
   return names;
 }
 
+const stageRelativeToRoot = toPosix(relative(root, releaseDir));
+if (stageRelativeToRoot !== "release/package") {
+  throw new Error(`Refusing to clean non-isolated release staging path: ${stageRelativeToRoot}`);
+}
+
 console.log("[pack-clean] Preparing clean release directory...");
 rmSync(releaseDir, { recursive: true, force: true });
 rmSync(archivePath, { force: true });
+mkdirSync(releaseRoot, { recursive: true });
 mkdirSync(releaseDir, { recursive: true });
 
 for (const item of include) {

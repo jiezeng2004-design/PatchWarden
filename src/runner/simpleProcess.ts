@@ -1,5 +1,12 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { createWriteStream, writeFileSync, readFileSync, existsSync, type WriteStream } from "node:fs";
+import {
+  allowedEnvironmentValues,
+  buildChildEnvironment,
+  prepareShellFreeCommand,
+  redactProcessOutput,
+  resolveTrustedExecutable,
+  SecureProcessLogCapture,
+} from "./processSecurity.js";
 
 const GRACEFUL_KILL_MS = 2000;
 
@@ -12,6 +19,9 @@ export interface SimpleProcessOptions {
   maxStderrBytes?: number;
   stdoutPath?: string;
   stderrPath?: string;
+  environmentVariableNames?: string[];
+  blockedEnvironmentVariableNames?: string[];
+  maxLogBytes?: number;
 }
 
 export interface SimpleProcessResult {
@@ -30,16 +40,29 @@ const DEFAULT_MAX_STDERR = 131072;
 export function runSimpleProcessSync(options: SimpleProcessOptions): SimpleProcessResult {
   const maxStdout = options.maxStdoutBytes ?? DEFAULT_MAX_STDOUT;
   const maxStderr = options.maxStderrBytes ?? DEFAULT_MAX_STDERR;
+  const exactRedactionValues = allowedEnvironmentValues(options.environmentVariableNames);
+  const logCapture = new SecureProcessLogCapture(
+    [options.stdoutPath, options.stderrPath],
+    options.maxLogBytes,
+  );
 
   let result;
   try {
-    result = spawnSync(options.command, options.args, {
+    const env = buildChildEnvironment({
+      cwd: options.cwd,
+      allowedNames: options.environmentVariableNames,
+      blockedNames: options.blockedEnvironmentVariableNames,
+    });
+    const prepared = prepareShellFreeCommand(options.command, options.args, options.cwd, { pathValue: env.PATH });
+    const command = resolveTrustedExecutable(prepared.command, options.cwd, { pathValue: env.PATH });
+    result = spawnSync(command, prepared.args, {
       cwd: options.cwd,
       stdio: ["ignore", "pipe", "pipe"],
       timeout: options.timeoutMs,
       windowsHide: true,
       maxBuffer: maxStdout + 1024,
       encoding: "utf-8",
+      env,
     });
   } catch (error) {
     return {
@@ -53,20 +76,19 @@ export function runSimpleProcessSync(options: SimpleProcessOptions): SimpleProce
     };
   }
 
-  const stdout = result.stdout || "";
-  const stderr = result.stderr || "";
+  const rawStdout = result.stdout || "";
+  const rawStderr = result.stderr || "";
+  const stdout = redactProcessOutput(rawStdout, exactRedactionValues);
+  const stderr = redactProcessOutput(rawStderr, exactRedactionValues);
   const timedOut: boolean = Boolean(
     result.signal === "SIGTERM" || result.signal === "SIGKILL" ||
     (result.signal !== null && result.status === null) ||
-    (result.error && (result.error as any).code === "ETIMEDOUT")
+    (result.error && errorCode(result.error) === "ETIMEDOUT")
   );
 
-  if (options.stdoutPath && stdout) {
-    try { writeFileSyncAppend(options.stdoutPath, stdout); } catch {} // best-effort log write; failure doesn't affect result
-  }
-  if (options.stderrPath && stderr) {
-    try { writeFileSyncAppend(options.stderrPath, stderr); } catch {} // best-effort log write; failure doesn't affect result
-  }
+  logCapture.append(options.stdoutPath, rawStdout);
+  logCapture.append(options.stderrPath, rawStderr);
+  logCapture.flush(exactRedactionValues);
 
   return {
     exitCode: result.status,
@@ -75,23 +97,35 @@ export function runSimpleProcessSync(options: SimpleProcessOptions): SimpleProce
     // If timed out, don't report spawnError — it's a timeout, not a spawn failure
     spawnError: timedOut ? null : (result.error ? result.error.message : null),
     timedOut,
-    stdoutTruncated: stdout.length > maxStdout,
-    stderrTruncated: stderr.length > maxStderr,
+    stdoutTruncated: rawStdout.length > maxStdout || stdout.length > maxStdout,
+    stderrTruncated: rawStderr.length > maxStderr || stderr.length > maxStderr,
   };
 }
 
 export async function runSimpleProcess(options: SimpleProcessOptions): Promise<SimpleProcessResult> {
   const maxStdout = options.maxStdoutBytes ?? DEFAULT_MAX_STDOUT;
   const maxStderr = options.maxStderrBytes ?? DEFAULT_MAX_STDERR;
-  const deadlineMs = Date.now() + options.timeoutMs;
+  const exactRedactionValues = allowedEnvironmentValues(options.environmentVariableNames);
+  const logCapture = new SecureProcessLogCapture(
+    [options.stdoutPath, options.stderrPath],
+    options.maxLogBytes,
+  );
 
   let child: ChildProcess;
   try {
-    child = spawn(options.command, options.args, {
+    const env = buildChildEnvironment({
+      cwd: options.cwd,
+      allowedNames: options.environmentVariableNames,
+      blockedNames: options.blockedEnvironmentVariableNames,
+    });
+    const prepared = prepareShellFreeCommand(options.command, options.args, options.cwd, { pathValue: env.PATH });
+    const command = resolveTrustedExecutable(prepared.command, options.cwd, { pathValue: env.PATH });
+    child = spawn(command, prepared.args, {
       cwd: options.cwd,
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
       windowsHide: true,
+      env,
     });
   } catch (error) {
     return {
@@ -104,9 +138,6 @@ export async function runSimpleProcess(options: SimpleProcessOptions): Promise<S
       stderrTruncated: false,
     };
   }
-
-  const stdoutStream = options.stdoutPath ? createWriteStream(options.stdoutPath, { flags: "a" }) : null;
-  const stderrStream = options.stderrPath ? createWriteStream(options.stderrPath, { flags: "a" }) : null;
 
   let stdoutBuf = Buffer.alloc(0);
   let stderrBuf = Buffer.alloc(0);
@@ -130,7 +161,7 @@ export async function runSimpleProcess(options: SimpleProcessOptions): Promise<S
   };
 
   child.stdout?.on("data", (chunk: Buffer) => {
-    stdoutStream?.write(chunk);
+    logCapture.append(options.stdoutPath, chunk);
     if (stdoutBuf.length < maxStdout) {
       const remaining = maxStdout - stdoutBuf.length;
       if (chunk.length <= remaining) {
@@ -145,7 +176,7 @@ export async function runSimpleProcess(options: SimpleProcessOptions): Promise<S
   });
 
   child.stderr?.on("data", (chunk: Buffer) => {
-    stderrStream?.write(chunk);
+    logCapture.append(options.stderrPath, chunk);
     if (stderrBuf.length < maxStderr) {
       const remaining = maxStderr - stderrBuf.length;
       if (chunk.length <= remaining) {
@@ -169,7 +200,6 @@ export async function runSimpleProcess(options: SimpleProcessOptions): Promise<S
       resolveExit(code);
     };
     child.once("close", (code) => finish(code));
-    child.once("exit", (code) => finish(code));
     child.once("error", (error) => {
       spawnError = error.message;
       finish(null);
@@ -178,17 +208,18 @@ export async function runSimpleProcess(options: SimpleProcessOptions): Promise<S
 
   clearTimeout(timeoutTimer);
   if (forceTimer) clearTimeout(forceTimer);
-  stdoutStream?.destroy();
-  stderrStream?.destroy();
+  logCapture.flush(exactRedactionValues);
+  const stdout = redactProcessOutput(stdoutBuf.toString("utf-8"), exactRedactionValues);
+  const stderr = redactProcessOutput(stderrBuf.toString("utf-8"), exactRedactionValues);
 
   return {
     exitCode,
-    stdout: stdoutBuf.toString("utf-8"),
-    stderr: stderrBuf.toString("utf-8"),
+    stdout: stdout.length > maxStdout ? stdout.slice(0, maxStdout) : stdout,
+    stderr: stderr.length > maxStderr ? stderr.slice(0, maxStderr) : stderr,
     spawnError,
     timedOut,
-    stdoutTruncated,
-    stderrTruncated,
+    stdoutTruncated: stdoutTruncated || stdout.length > maxStdout,
+    stderrTruncated: stderrTruncated || stderr.length > maxStderr,
   };
 }
 
@@ -203,10 +234,13 @@ function forceKill(child: ChildProcess): void {
   if (!child.pid) return;
   try {
     if (process.platform === "win32") {
-      const result = spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
+      const systemRoot = process.env.SystemRoot || process.env.WINDIR || "C:\\Windows";
+      const taskkill = resolveTrustedExecutable(`${systemRoot}\\System32\\taskkill.exe`, process.cwd());
+      const result = spawnSync(taskkill, ["/PID", String(child.pid), "/T", "/F"], {
         stdio: "ignore",
         timeout: 5000,
         windowsHide: true,
+        env: buildChildEnvironment({ cwd: process.cwd() }),
       });
       if (result.status !== 0) child.kill("SIGKILL");
     } else {
@@ -217,7 +251,8 @@ function forceKill(child: ChildProcess): void {
   }
 }
 
-function writeFileSyncAppend(path: string, content: string): void {
-  const existing = existsSync(path) ? readFileSync(path, "utf-8") : "";
-  writeFileSync(path, existing + content, "utf-8");
+function errorCode(error: unknown): string | null {
+  return error && typeof error === "object" && "code" in error
+    ? String((error as NodeJS.ErrnoException).code || "")
+    : null;
 }

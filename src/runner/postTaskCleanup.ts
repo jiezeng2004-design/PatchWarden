@@ -1,29 +1,45 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, readdirSync, rmSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { platform } from "node:os";
+import { buildGitEnvironment, resolveTrustedExecutable } from "./processSecurity.js";
+import { atomicWriteJsonFileSync } from "../utils/atomicFile.js";
 
 const isWindows = platform() === "win32";
 
 /**
  * Remove a file or directory, working around Node.js fs.rmSync issues on Windows
  * where recursive directory deletion silently fails (Node v22+).
- * Falls back to `rmdir /s /q` on Windows if rmSync doesn't remove the path.
+ * On Windows, clears read-only attributes before one bounded native retry.
  */
 function safeRemoveSync(targetPath: string): void {
   rmSync(targetPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   if (isWindows && existsSync(targetPath)) {
-    try {
-      const stat = statSync(targetPath);
-      if (stat.isDirectory()) {
-        execFileSync("cmd", ["/c", "rmdir", "/s", "/q", targetPath], { windowsHide: true });
-      } else {
-        execFileSync("cmd", ["/c", "del", "/f", "/q", targetPath], { windowsHide: true });
-      }
-    } catch {
-      // Best effort — caller will verify via existsSync if needed
-    }
+    makeWritableSync(targetPath);
+    rmSync(targetPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 150 });
   }
+  if (existsSync(targetPath)) {
+    throw new Error(`Cleanup path still exists after bounded retries: ${targetPath}`);
+  }
+}
+
+function makeWritableSync(targetPath: string): void {
+  let stat: ReturnType<typeof lstatSync>;
+  try {
+    stat = lstatSync(targetPath);
+  } catch {
+    return;
+  }
+  if (stat.isSymbolicLink()) return;
+  try { chmodSync(targetPath, stat.isDirectory() ? 0o700 : 0o600); } catch { /* best effort */ }
+  if (!stat.isDirectory()) return;
+  let entries: string[];
+  try {
+    entries = readdirSync(targetPath);
+  } catch {
+    return;
+  }
+  for (const entry of entries) makeWritableSync(join(targetPath, entry));
 }
 
 const EXCLUDED_DIRS = new Set([".git", ".patchwarden", ".venv", "node_modules", "samples", "docs"]);
@@ -76,7 +92,7 @@ export function runPostTaskCleanup(repoPath: string, taskDir: string): PostTaskC
       });
     }
   }
-  writeFileSync(join(taskDir, "post-task-cleanup.json"), JSON.stringify(report, null, 2), "utf-8");
+  atomicWriteJsonFileSync(join(taskDir, "post-task-cleanup.json"), report);
   return report;
 }
 
@@ -117,10 +133,12 @@ function walk(dir: string, visit: (path: string, isDir: boolean) => void): void 
 function hasTrackedGitContent(root: string, rel: string): boolean {
   if (!isGitWorktree(root)) return false;
   try {
-    const output = execFileSync("git", ["ls-files", "--", rel], {
+    const env = buildGitEnvironment(root);
+    const output = execFileSync(resolveTrustedExecutable("git", root, { pathValue: env.PATH }), ["ls-files", "--", rel], {
       cwd: root,
       encoding: "utf-8",
       windowsHide: true,
+      env,
     });
     return output.trim().length > 0;
   } catch {
@@ -130,19 +148,23 @@ function hasTrackedGitContent(root: string, rel: string): boolean {
 
 function isIgnoredOrUntracked(root: string, rel: string): boolean {
   if (!isGitWorktree(root)) return true;
+  const env = buildGitEnvironment(root);
+  const git = resolveTrustedExecutable("git", root, { pathValue: env.PATH });
   try {
-    execFileSync("git", ["check-ignore", "-q", "--", rel], {
+    execFileSync(git, ["check-ignore", "-q", "--", rel], {
       cwd: root,
       stdio: "ignore",
       windowsHide: true,
+      env,
     });
     return true;
   } catch {
     try {
-      const output = execFileSync("git", ["ls-files", "--others", "--exclude-standard", "--", rel], {
+      const output = execFileSync(git, ["ls-files", "--others", "--exclude-standard", "--", rel], {
         cwd: root,
         encoding: "utf-8",
         windowsHide: true,
+        env,
       });
       return output.trim().length > 0 || !existsSync(resolve(root, rel));
     } catch {
@@ -153,10 +175,12 @@ function isIgnoredOrUntracked(root: string, rel: string): boolean {
 
 function isGitWorktree(root: string): boolean {
   try {
-    return execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
+    const env = buildGitEnvironment(root);
+    return execFileSync(resolveTrustedExecutable("git", root, { pathValue: env.PATH }), ["rev-parse", "--is-inside-work-tree"], {
       cwd: root,
       encoding: "utf-8",
       windowsHide: true,
+      env,
     }).trim() === "true";
   } catch {
     return false;

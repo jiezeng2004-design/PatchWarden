@@ -14,6 +14,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  node18:
+    name: Node 18 compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 18
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and run compatibility checks
+        run: |
+          npm run build
+          npm run test:unit
+          npm run doctor:ci
+
   test:
     name: Node 20 on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -39,19 +62,19 @@ jobs:
         run: npm test
 
       - name: MCP smoke
-        run: npm run test:mcp
+        run: npm run test:mcp:built
 
       - name: HTTP MCP smoke
-        run: npm run test:http-mcp
+        run: npm run test:http-mcp:built
 
       - name: Redacted doctor
         run: npm run doctor:ci
 
       - name: Verify clean package
-        run: npm run pack:clean
+        run: npm run pack:clean:built
 
       - name: Verify npm package surface
-        run: npm run verify:package
+        run: npm run verify:package:built
 
   secrets:
     name: Secret scan
@@ -92,10 +115,19 @@ jobs:
       - name: Install isolated desktop dependencies
         run: npm ci --prefix desktop
 
-      - name: Build core and run desktop tests
+      - name: Run clean desktop preflight
+        run: npm run desktop:preflight:release
+
+      - name: Verify desktop preflight receipt
+        shell: pwsh
         run: |
-          npm run build
-          npm run desktop:test
+          $reports = @(Get-ChildItem -LiteralPath release -Recurse -Filter preflight-report.json)
+          if ($reports.Count -ne 1) { throw "Expected exactly one desktop preflight report." }
+          $report = Get-Content -LiteralPath $reports[0].FullName -Raw | ConvertFrom-Json
+          if ($report.status -ne 'passed') { throw "Desktop preflight did not pass." }
+          if ($report.source.dirty) { throw "Desktop release preflight used a dirty source tree." }
+          if (-not $report.ui_smoke.ok) { throw "Desktop unpacked UI smoke did not pass." }
+          if ($report.runtime_manifest.tool_count -ne 26) { throw "Packaged runtime tool count changed." }
 
       - name: Build unsigned NSIS installer
         run: npm run desktop:package
@@ -112,12 +144,13 @@ jobs:
   gate:
     name: CI gate
     if: always()
-    needs: [test, desktop, secrets]
+    needs: [node18, test, desktop, secrets]
     runs-on: ubuntu-latest
     steps:
       - name: Require all checks
         shell: bash
         run: |
           test "${{ needs.test.result }}" = "success"
+          test "${{ needs.node18.result }}" = "success"
           test "${{ needs.desktop.result }}" = "success"
           test "${{ needs.secrets.result }}" = "success"

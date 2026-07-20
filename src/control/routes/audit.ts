@@ -9,7 +9,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { type ServerResponse } from "node:http";
-import { type TaskEntry, listTasks } from "../../tools/listTasks.js";
+import { type TaskEntry, listTasks } from "../../tools/tasks/listTasks.js";
 import { type WatcherStatusSnapshot } from "../../watcherStatus.js";
 import { redactSensitiveContent } from "../../security/contentRedaction.js";
 import { getDirectSessionsDir, getTasksDir } from "../../config.js";
@@ -23,6 +23,7 @@ import {
   config,
   errorMessage,
   findLatestLog,
+  guardControlPath,
   getControlCenterLogDir,
   getRuntimeRoot,
   readFileTail,
@@ -100,7 +101,8 @@ export function handleAudit(res: ServerResponse): void {
         taskEntries = [];
       }
       for (const entry of taskEntries) {
-        const taskDir = join(tasksDir, entry.name);
+        const taskDir = guardControlPath(join(tasksDir, entry.name), config.tasksDir);
+        if (!taskDir) continue;
 
         // independent-review.md
         const reviewFile = join(taskDir, "independent-review.md");
@@ -141,7 +143,9 @@ export function handleAudit(res: ServerResponse): void {
         sessionEntries = [];
       }
       for (const entry of sessionEntries) {
-        const auditFile = join(sessionsDir, entry.name, "audit.json");
+        const sessionDir = guardControlPath(join(sessionsDir, entry.name), config.directSessionsDir);
+        if (!sessionDir) continue;
+        const auditFile = join(sessionDir, "audit.json");
         if (!existsSync(auditFile)) continue;
         const data = readJsonFileSafe<Record<string, unknown>>(auditFile);
         if (data) {
@@ -220,7 +224,9 @@ export function handleWarnings(res: ServerResponse): void {
       const taskId = task.task_id;
 
       // 1. Read audit.json for warning strings
-      const auditFile = join(tasksDir, taskId, "audit.json");
+      const taskDir = guardControlPath(join(tasksDir, taskId), config.tasksDir);
+      if (!taskDir) continue;
+      const auditFile = join(taskDir, "audit.json");
       const audit = readJsonFileSafe<Record<string, unknown>>(auditFile);
       if (audit) {
         const warningTexts: string[] = [];

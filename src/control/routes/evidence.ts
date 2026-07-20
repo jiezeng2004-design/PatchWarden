@@ -13,7 +13,7 @@ import {
   listEvidencePacks,
   readEvidencePack,
   type SafeEvidencePack,
-} from "../../tools/evidencePack.js";
+} from "../../tools/tasks/evidencePack.js";
 import { errorMessage, sendJson, config } from "../shared.js";
 
 function augmentEvidencePackSummary(pack: SafeEvidencePack): SafeEvidencePack & {

@@ -7,14 +7,17 @@
  * file mtime, id validation). These are pure helpers consumed by the route
  * modules; they hold no HTTP-layer concerns beyond reusing `sendJson`.
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { get as httpGet } from "node:http";
-import { listTasks, type TaskEntry } from "../tools/listTasks.js";
-import { listAgents, type AgentAvailability } from "../tools/listAgents.js";
+import { listTasks, type TaskEntry } from "../tools/tasks/listTasks.js";
+import { listAgents, type AgentAvailability } from "../tools/workspace/listAgents.js";
 import { readWatcherStatus, type WatcherStatusSnapshot } from "../watcherStatus.js";
 import { resolveWorkspaceRoot } from "../config.js";
 import { PATCHWARDEN_VERSION } from "../version.js";
+import { isValidDirectSessionId as isValidStoredDirectSessionId } from "../direct/directSessionStore.js";
+import { atomicWriteFileSync, atomicWriteJsonFileSync } from "../utils/atomicFile.js";
+import { withFileLockSync } from "../utils/lockedJsonFile.js";
 import { logger } from "../logging.js";
 import {
   config,
@@ -323,7 +326,7 @@ export function writeStatusFile(): void {
   };
   try {
     mkdirSync(getControlCenterLogDir(), { recursive: true });
-    writeFileSync(controlCenterStatusPath, JSON.stringify(status, null, 2), "utf-8");
+    atomicWriteJsonFileSync(controlCenterStatusPath, status);
   } catch (err) {
     logger.error("[control-center] Failed to write status file", { error: errorMessage(err) });
   }
@@ -359,29 +362,24 @@ export function recordEvent(type: string, payload?: Record<string, unknown>): vo
   };
   try {
     mkdirSync(getControlCenterLogDir(), { recursive: true });
-    appendFileSync(controlCenterEventsPath, JSON.stringify(event) + "\n", "utf-8");
+    withFileLockSync(controlCenterEventsPath, () => {
+      appendFileSync(controlCenterEventsPath, JSON.stringify(event) + "\n", "utf-8");
+      const stat = statSync(controlCenterEventsPath);
+      if (stat.size > 512 * 1024) trimEventsFileUnlocked();
+    });
   } catch (err) {
     logger.error("[control-center] Failed to write event", { error: errorMessage(err) });
   }
-  // Lazy trim: only when the file grows well past the cap.
-  try {
-    const stat = statSync(controlCenterEventsPath);
-    if (stat.size > 512 * 1024) {
-      trimEventsFile();
-    }
-  } catch {
-    /* ignore */
-  }
 }
 
-function trimEventsFile(): void {
+function trimEventsFileUnlocked(): void {
   try {
     if (!existsSync(controlCenterEventsPath)) return;
     const raw = readFileSync(controlCenterEventsPath, "utf-8");
     const lines = raw.split(/\r?\n/).filter((l) => l.length > 0);
     if (lines.length <= MAX_EVENT_LINES) return;
     const trimmed = lines.slice(lines.length - MAX_EVENT_LINES);
-    writeFileSync(controlCenterEventsPath, trimmed.join("\n") + "\n", "utf-8");
+    atomicWriteFileSync(controlCenterEventsPath, trimmed.join("\n") + "\n");
   } catch (err) {
     logger.error("[control-center] Failed to trim events file", { error: errorMessage(err) });
   }
@@ -412,13 +410,52 @@ export function readEvents(limit: number): ControlCenterEvent[] {
 export function readHiddenStaleIds(): string[] {
   const p = join(getControlCenterLogDir(), "hidden-stale-ids.json");
   if (!existsSync(p)) return [];
-  return readJsonFileSafe<string[]>(p) || [];
+  return readStoredStringArray(p);
+}
+
+export function reconstructTaskEntry(
+  taskId: string,
+  statusData: Record<string, unknown>,
+  runtimeData: Record<string, unknown> = {},
+  watcher: WatcherStatusSnapshot = readWatcherStatusSafe(),
+): TaskEntry {
+  const validAcceptance = new Set(["pending", "accepted", "rejected", "needs_fix", "blocked"]);
+  const taskStatus = String(statusData.status || "pending");
+  const acceptanceStatus = taskStatus === "done_by_agent"
+    ? (typeof statusData.acceptance_status === "string" && validAcceptance.has(statusData.acceptance_status)
+        ? statusData.acceptance_status
+        : "pending")
+    : null;
+  return {
+    task_id: taskId,
+    plan_id: String(statusData.plan_id || ""),
+    title: "",
+    agent: String(statusData.agent || ""),
+    status: taskStatus as TaskEntry["status"],
+    phase: String(runtimeData.phase || statusData.phase || "queued") as TaskEntry["phase"],
+    acceptance_status: acceptanceStatus as TaskEntry["acceptance_status"],
+    created_at: String(statusData.created_at || ""),
+    updated_at: String(statusData.updated_at || ""),
+    workspace_root: String(statusData.workspace_root || config.workspaceRoot),
+    repo_path: String(statusData.repo_path || "."),
+    resolved_repo_path: String(statusData.resolved_repo_path || statusData.repo_path || config.workspaceRoot),
+    test_command: String(statusData.test_command || ""),
+    verify_commands: Array.isArray(statusData.verify_commands)
+      ? statusData.verify_commands.filter((command): command is string => typeof command === "string")
+      : [],
+    error: statusData.error ? String(statusData.error) : null,
+    last_heartbeat_at: String(runtimeData.last_heartbeat_at || statusData.last_heartbeat_at || statusData.updated_at || ""),
+    current_command: runtimeData.current_command === undefined ? null : String(runtimeData.current_command || "") || null,
+    timeout_seconds: Number(statusData.timeout_seconds) || config.defaultTaskTimeoutSeconds,
+    pending_reason: null,
+    watcher_status: watcher.status,
+  };
 }
 
 export function writeHiddenStaleIds(ids: string[]): void {
   const dir = getControlCenterLogDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "hidden-stale-ids.json"), JSON.stringify(ids, null, 2));
+  atomicWriteJsonFileSync(join(dir, "hidden-stale-ids.json"), normalizeStoredIds(ids));
 }
 
 // ── Hidden direct session IDs (local UI state) ────────────────────
@@ -426,32 +463,31 @@ export function writeHiddenStaleIds(ids: string[]): void {
 export function readHiddenDirectSessionIds(): string[] {
   const p = join(getControlCenterLogDir(), "hidden-direct-session-ids.json");
   if (!existsSync(p)) return [];
-  return readJsonFileSafe<string[]>(p) || [];
+  return readStoredStringArray(p);
 }
 
 export function writeHiddenDirectSessionIds(ids: string[]): void {
   const dir = getControlCenterLogDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "hidden-direct-session-ids.json"), JSON.stringify(ids, null, 2));
+  atomicWriteJsonFileSync(join(dir, "hidden-direct-session-ids.json"), normalizeStoredIds(ids));
 }
 
 export function isValidDirectSessionId(sessionId: string): boolean {
-  // Allow alphanumeric, dash, underscore only — reject path traversal and NUL.
-  return (
-    sessionId.length > 0 &&
-    /^[A-Za-z0-9_-]+$/.test(sessionId) &&
-    !sessionId.includes("\0")
-  );
+  return isValidStoredDirectSessionId(sessionId);
 }
 
 export function isValidTaskId(taskId: string): boolean {
-  return !(
-    taskId === "." ||
-    taskId === ".." ||
-    taskId.includes("/") ||
-    taskId.includes("\\") ||
-    taskId.includes("\0")
-  );
+  return /^[A-Za-z0-9][A-Za-z0-9_-]{0,159}$/.test(taskId);
+}
+
+function readStoredStringArray(path: string): string[] {
+  const value = readJsonFileSafe<unknown>(path);
+  if (!Array.isArray(value)) return [];
+  return normalizeStoredIds(value);
+}
+
+function normalizeStoredIds(value: unknown[]): string[] {
+  return [...new Set(value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0))];
 }
 
 // ── Small shared helpers ──────────────────────────────────────────

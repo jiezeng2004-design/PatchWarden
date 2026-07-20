@@ -1,17 +1,18 @@
 import {
   mkdirSync,
-  writeFileSync,
   existsSync,
   readFileSync,
-  renameSync,
 } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { resolve, join } from "node:path";
 import { getAssessmentsDir, getConfig, getRepoAllowedTestCommands, PatchWardenConfig } from "../config.js";
 import { guardPath } from "../security/pathGuard.js";
 import { PatchWardenError } from "../errors.js";
+import { redactSensitiveContent } from "../security/contentRedaction.js";
+import { atomicWriteJsonFileSync } from "../utils/atomicFile.js";
+import { withFileLockSync } from "../utils/lockedJsonFile.js";
 import { TOOL_SCHEMA_EPOCH } from "../version.js";
-import { getLastToolCatalogSnapshot } from "../tools/toolCatalog.js";
+import { getLastToolCatalogSnapshot } from "../tools/catalog/toolCatalog.js";
 import { captureRepoSnapshot, type RepoSnapshot } from "../runner/changeCapture.js";
 import type { RiskAssessmentResult } from "../security/riskEngine.js";
 import type { TaskTemplateName, ChangePolicy } from "../tools/taskTemplates.js";
@@ -203,7 +204,7 @@ export function createAssessment(input: AssessmentCreateInput): AssessmentRecord
     repo_path: input.repo_path,
     resolved_repo_path: input.resolved_repo_path,
     template: input.template || null,
-    goal: input.goal || null,
+    goal: input.goal ? redactSensitiveContent(input.goal).content : null,
     test_command: input.test_command || null,
     verify_commands: input.verify_commands || [],
     agent: input.agent,
@@ -216,7 +217,7 @@ export function createAssessment(input: AssessmentCreateInput): AssessmentRecord
     agent_assessment_summary: input.agent_assessment_summary || null,
   };
 
-  writeFileSync(join(dir, "assessment.json"), JSON.stringify(record, null, 2), "utf-8");
+  atomicWriteJsonFileSync(join(dir, "assessment.json"), record);
 
   return record;
 }
@@ -323,6 +324,10 @@ export async function confirmAssessment(assessmentId: string): Promise<Assessmen
     );
   }
 
+  const config = getConfig();
+  const assessmentFile = resolve(getAssessmentsDir(config), assessmentId, "assessment.json");
+  guardPath(assessmentFile, config.workspaceRoot, config.assessmentsDir);
+
   const assessment = readAssessment(assessmentId);
   if (assessment.decision !== "needs_confirm" || !assessment.requires_confirm) {
     throw new PatchWardenError(
@@ -335,43 +340,50 @@ export async function confirmAssessment(assessmentId: string): Promise<Assessmen
   }
 
   const snapshot = await captureRepoSnapshot(assessment.resolved_repo_path);
-  const validation = validateAssessmentFreshness(assessmentId, snapshot, {
-    allow_unconfirmed: true,
-    // A standalone CLI has no active MCP profile snapshot. The execute path
-    // still performs the full tool-manifest check before creating the task.
-    skip_tool_manifest: true,
+
+  // Re-read and write while holding one cross-process lock. Concurrent local
+  // confirmers may compute snapshots in parallel, but they cannot replace one
+  // another's confirmation metadata from a stale assessment record.
+  return withFileLockSync(assessmentFile, () => {
+    const validation = validateAssessmentFreshness(assessmentId, snapshot, {
+      allow_unconfirmed: true,
+      // A standalone CLI has no active MCP profile snapshot. The execute path
+      // still performs the full tool-manifest check before creating the task.
+      skip_tool_manifest: true,
+    });
+    if (!validation.valid || !validation.assessment) {
+      throw new PatchWardenError(
+        validation.failure_reason || "assessment_validation_failed",
+        `Assessment "${assessmentId}" cannot be confirmed: ${validation.failure_reason || "validation_failed"}.`,
+        "Run create_task with execution_mode=assess_only again, then confirm the new assessment locally."
+      );
+    }
+    if (validation.assessment.decision !== "needs_confirm" || !validation.assessment.requires_confirm) {
+      throw new PatchWardenError(
+        "assessment_confirmation_not_allowed",
+        `Assessment "${assessmentId}" is no longer eligible for local confirmation.`,
+        "Run create_task with execution_mode=assess_only again."
+      );
+    }
+
+    const confirmedAt = validation.assessment.confirmed_at || new Date().toISOString();
+    const confirmedRecord: AssessmentRecord = {
+      ...validation.assessment,
+      confirmed: true,
+      confirmed_at: confirmedAt,
+      confirm_code: validation.assessment.confirm_code || randomBytes(8).toString("hex"),
+    };
+    atomicWriteJsonFileSync(assessmentFile, confirmedRecord);
+
+    return {
+      assessment_id: assessmentId,
+      decision: "needs_confirm",
+      confirmed: true,
+      confirmed_at: confirmedAt,
+      expires_at: confirmedRecord.expires_at,
+      next_action: "Call create_task with only execution_mode=execute and this full assessment_id.",
+    };
   });
-  if (!validation.valid || !validation.assessment) {
-    throw new PatchWardenError(
-      validation.failure_reason || "assessment_validation_failed",
-      `Assessment "${assessmentId}" cannot be confirmed: ${validation.failure_reason || "validation_failed"}.`,
-      "Run create_task with execution_mode=assess_only again, then confirm the new assessment locally."
-    );
-  }
-
-  const confirmedAt = validation.assessment.confirmed_at || new Date().toISOString();
-  const confirmedRecord: AssessmentRecord = {
-    ...validation.assessment,
-    confirmed: true,
-    confirmed_at: confirmedAt,
-    confirm_code: validation.assessment.confirm_code || randomBytes(8).toString("hex"),
-  };
-  const config = getConfig();
-  const assessmentFile = resolve(getAssessmentsDir(config), assessmentId, "assessment.json");
-  guardPath(assessmentFile, config.workspaceRoot, config.assessmentsDir);
-  const temporaryFile = `${assessmentFile}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  guardPath(temporaryFile, config.workspaceRoot, config.assessmentsDir);
-  writeFileSync(temporaryFile, JSON.stringify(confirmedRecord, null, 2), "utf-8");
-  renameSync(temporaryFile, assessmentFile);
-
-  return {
-    assessment_id: assessmentId,
-    decision: "needs_confirm",
-    confirmed: true,
-    confirmed_at: confirmedAt,
-    expires_at: confirmedRecord.expires_at,
-    next_action: "Call create_task with only execution_mode=execute and this full assessment_id.",
-  };
 }
 
 export function computeWorkspaceFingerprint(snapshot: RepoSnapshot): string {

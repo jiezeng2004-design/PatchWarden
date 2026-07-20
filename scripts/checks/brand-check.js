@@ -12,6 +12,9 @@ const allowedLegacyFiles = new Set([
   "docs/release-v0.3.0.md",
   "docs/release-v0.4.0.md",
   "docs/release-v0.6.0.md",
+  "docs/archive/releases/release-v0.6.0.md",
+  "docs/archive/releases/release-v0.6.1.md",
+  "docs/archive/releases/release-v0.6.4.md",
   "scripts/checks/brand-check.js",
   "scripts/release/pack-clean.js",
 ]);

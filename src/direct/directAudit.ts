@@ -1,15 +1,16 @@
-import { writeFileSync } from "node:fs";
 import { join, resolve, relative, isAbsolute } from "node:path";
-import { getConfig } from "../config.js";
 import { isSensitivePath } from "../security/sensitiveGuard.js";
 import { PatchWardenError } from "../errors.js";
 import {
   readDirectSession,
   getDirectSessionDir,
+  updateDirectSession,
+  withDirectSessionMutationLock,
   type DirectSessionRecord,
   type DirectSessionVerificationRun,
 } from "./directSessionStore.js";
 import type { ChangedFile, ChangeArtifacts } from "../runner/changeCapture.js";
+import { atomicWriteFileSync, atomicWriteJsonFileSync } from "../utils/atomicFile.js";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -39,7 +40,7 @@ export interface DirectSessionAuditOutput {
 // ── Main audit function ────────────────────────────────────────────
 
 export function auditDirectSession(sessionId: string): DirectSessionAuditOutput {
-  const config = getConfig();
+  return withDirectSessionMutationLock(sessionId, () => {
   const session = readDirectSession(sessionId);
   const sessionDir = getDirectSessionDir(sessionId);
 
@@ -96,6 +97,15 @@ export function auditDirectSession(sessionId: string): DirectSessionAuditOutput 
           ? "No sensitive files modified."
           : `Sensitive files modified: ${sensitiveFiles.join(", ")}`,
       reason_code: sensitiveFiles.length > 0 ? "sensitive_file_modified" : undefined,
+    });
+
+    checks.push({
+      name: "sensitive_content",
+      result: artifacts.diff_redacted ? "fail" : "pass",
+      detail: artifacts.diff_redacted
+        ? `Credential-like content was redacted from diff evidence (${(artifacts.diff_redaction_categories ?? []).join(", ") || "sensitive_content"}).`
+        : "No credential-like content was detected in diff evidence.",
+      reason_code: artifacts.diff_redacted ? "sensitive_content_detected" : undefined,
     });
 
     // Check 5: node_modules modification
@@ -304,14 +314,12 @@ export function auditDirectSession(sessionId: string): DirectSessionAuditOutput 
   };
 
   // Write audit.json and audit.md
-  writeFileSync(
-    join(sessionDir, "audit.json"),
-    JSON.stringify(output, null, 2),
-    "utf-8"
-  );
-  writeFileSync(auditPath, formatAuditMd(output, checks, session), "utf-8");
+  atomicWriteJsonFileSync(join(sessionDir, "audit.json"), output);
+  atomicWriteFileSync(auditPath, formatAuditMd(output, checks, session));
+  updateDirectSession(sessionId, { audited: true });
 
   return output;
+  });
 }
 
 // ── Helper functions ───────────────────────────────────────────────

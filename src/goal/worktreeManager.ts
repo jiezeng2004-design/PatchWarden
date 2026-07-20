@@ -23,17 +23,18 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  renameSync,
-  writeFileSync,
   rmSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, normalize } from "node:path";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { getConfig } from "../config.js";
-import { guardWorkspacePath } from "../security/pathGuard.js";
+import { guardPath, guardWorkspacePath } from "../security/pathGuard.js";
 import { guardSensitivePath } from "../security/sensitiveGuard.js";
 import { PatchWardenError } from "../errors.js";
+import { buildGitEnvironment, resolveTrustedExecutable } from "../runner/processSecurity.js";
+import { atomicWriteJsonFileSync } from "../utils/atomicFile.js";
+import { withFileLockSync } from "../utils/lockedJsonFile.js";
 
 // ── 类型定义 ──────────────────────────────────────────────────────
 
@@ -56,14 +57,33 @@ export const WorktreeDir = "_workspacetrees";
 
 /** 归档目录名（discard 后保留状态），位于 .patchwarden 下，始终为安全路径。 */
 const WORKTREE_ARCHIVE_DIR = ".patchwarden/worktree-archive";
+const WORKTREE_LOCK_DIR = ".patchwarden/worktree-locks";
 
 const GIT_TIMEOUT_MS = 30000;
 const GIT_BRANCH_TIMEOUT_MS = 15000;
+const WORKTREE_ID_MAX_LENGTH = 32;
+const WORKTREE_ID_PATTERN = /^wt_[a-z0-9]{1,16}_[a-f0-9]{12}$/;
 
 // ── 辅助：解析 workspaceRoot ──────────────────────────────────────
 
 function resolveWorkspaceRoot(workspaceRoot?: string): string {
   return workspaceRoot ?? getConfig().workspaceRoot;
+}
+
+/** Accept only IDs emitted by generateWorktreeId(). */
+export function assertValidWorktreeId(worktreeId: string): void {
+  if (
+    worktreeId.length > WORKTREE_ID_MAX_LENGTH ||
+    !WORKTREE_ID_PATTERN.test(worktreeId)
+  ) {
+    throw new PatchWardenError(
+      "invalid_worktree_id",
+      "Invalid worktree id. Expected the wt_<base36 timestamp>_<12 hex chars> format.",
+      "Use the worktree_id returned by create_subgoal_task.",
+      true,
+      { worktree_id_length: worktreeId.length }
+    );
+  }
 }
 
 // ── 目录路径解析 ──────────────────────────────────────────────────
@@ -72,14 +92,21 @@ function resolveWorkspaceRoot(workspaceRoot?: string): string {
  * 返回 `<workspaceRoot>/_workspacetrees` 目录路径。不自动创建目录。
  */
 export function getWorktreesDir(workspaceRoot?: string): string {
-  return join(resolveWorkspaceRoot(workspaceRoot), WorktreeDir);
+  const wsRoot = resolveWorkspaceRoot(workspaceRoot);
+  return guardPath(join(wsRoot, WorktreeDir), wsRoot, WorktreeDir);
 }
 
 /**
  * 返回 `<getWorktreesDir()>/<worktreeId>` 路径。
  */
 export function getWorktreeDir(worktreeId: string, workspaceRoot?: string): string {
-  return join(getWorktreesDir(workspaceRoot), worktreeId);
+  assertValidWorktreeId(worktreeId);
+  const wsRoot = resolveWorkspaceRoot(workspaceRoot);
+  return guardPath(
+    join(getWorktreesDir(wsRoot), worktreeId),
+    wsRoot,
+    WorktreeDir
+  );
 }
 
 // ── ID 与 branch 生成 ─────────────────────────────────────────────
@@ -105,23 +132,110 @@ function sanitizeBranchSegment(value: string): string {
   return cleaned === "" ? "x" : cleaned;
 }
 
+function samePath(left: string, right: string): boolean {
+  const normalizedLeft = normalize(left);
+  const normalizedRight = normalize(right);
+  return process.platform === "win32"
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+}
+
+function withWorktreeRepositoryLock<R>(workspaceRoot: string, action: () => R): R {
+  const wsRoot = resolveWorkspaceRoot(workspaceRoot);
+  const lockDir = guardPath(join(wsRoot, WORKTREE_LOCK_DIR), wsRoot, WORKTREE_LOCK_DIR);
+  mkdirSync(lockDir, { recursive: true });
+  return withFileLockSync(join(lockDir, "repository-mutation"), action, {
+    waitMs: 0,
+    busyError: () => new PatchWardenError(
+      "worktree_busy",
+      "Another managed worktree operation is already changing this repository.",
+      "Retry after the active create, merge, or discard operation finishes.",
+      true,
+    ),
+  });
+}
+
+function invalidWorktreeStatus(
+  worktreeId: string,
+  message: string
+): never {
+  throw new PatchWardenError(
+    "invalid_worktree_status",
+    `Invalid worktree status for "${worktreeId}": ${message}`,
+    "Do not edit worktree_status.json manually; recreate the isolated worktree.",
+    true,
+    { worktree_id: worktreeId }
+  );
+}
+
+function validateWorktreeStatus(
+  value: unknown,
+  worktreeId: string,
+  workspaceRoot: string,
+  expectedPath: string
+): WorktreeStatus {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return invalidWorktreeStatus(worktreeId, "expected a JSON object");
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const statusValues = new Set(["active", "merged", "discarded"]);
+  if (
+    typeof candidate.worktree_id !== "string" ||
+    typeof candidate.goal_id !== "string" ||
+    typeof candidate.subgoal_id !== "string" ||
+    typeof candidate.path !== "string" ||
+    typeof candidate.created_at !== "string" ||
+    typeof candidate.status !== "string" ||
+    !statusValues.has(candidate.status) ||
+    typeof candidate.branch !== "string"
+  ) {
+    return invalidWorktreeStatus(worktreeId, "missing or invalid required fields");
+  }
+
+  if (candidate.worktree_id !== worktreeId) {
+    return invalidWorktreeStatus(worktreeId, "worktree_id does not match its directory");
+  }
+
+  let guardedStatusPath: string;
+  try {
+    guardedStatusPath = guardPath(candidate.path, workspaceRoot, WorktreeDir);
+  } catch {
+    return invalidWorktreeStatus(worktreeId, "path is outside the managed worktree root");
+  }
+  if (!samePath(guardedStatusPath, expectedPath)) {
+    return invalidWorktreeStatus(worktreeId, "path does not match its directory");
+  }
+
+  const expectedBranch = `pw-${sanitizeBranchSegment(candidate.goal_id)}-${sanitizeBranchSegment(candidate.subgoal_id)}`;
+  if (candidate.branch !== expectedBranch) {
+    return invalidWorktreeStatus(worktreeId, "branch does not match goal and subgoal metadata");
+  }
+
+  if (
+    (candidate.merged_at !== undefined && typeof candidate.merged_at !== "string") ||
+    (candidate.discarded_at !== undefined && typeof candidate.discarded_at !== "string")
+  ) {
+    return invalidWorktreeStatus(worktreeId, "invalid lifecycle timestamp");
+  }
+
+  return candidate as unknown as WorktreeStatus;
+}
+
 // ── 原子写 ────────────────────────────────────────────────────────
 
-/**
- * 原子写入 status 文件：先写到 `.tmp` 文件，再 renameSync。
- * 参考 goalStore.ts writeGoalStatus 的模式。
- */
 function writeStatusAtomic(statusFilePath: string, status: WorktreeStatus): void {
-  const tmpPath = statusFilePath + ".tmp";
-  writeFileSync(tmpPath, JSON.stringify(status, null, 2) + "\n", "utf-8");
-  renameSync(tmpPath, statusFilePath);
+  atomicWriteJsonFileSync(statusFilePath, status);
 }
 
 function runGit(args: string[], cwd: string, timeoutMs: number): void {
-  execFileSync("git", args, {
+  const env = buildGitEnvironment(cwd);
+  execFileSync(resolveTrustedExecutable("git", cwd, { pathValue: env.PATH }), args, {
     cwd,
     timeout: timeoutMs,
     stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
+    env,
   });
 }
 
@@ -157,6 +271,7 @@ export function createWorktree(
   subgoalId: string,
   workspaceRoot: string
 ): { worktreeId: string; worktreePath: string; branch: string } {
+  return withWorktreeRepositoryLock(workspaceRoot, () => {
   const wsRoot = resolveWorkspaceRoot(workspaceRoot);
 
   const worktreeId = generateWorktreeId();
@@ -222,6 +337,7 @@ export function createWorktree(
       }
     );
   }
+  });
 }
 
 /**
@@ -241,12 +357,13 @@ export function readWorktreeStatus(
   const statusFilePath = join(worktreePath, "worktree_status.json");
   if (!existsSync(statusFilePath)) return null;
 
+  let parsed: unknown;
   try {
-    const raw = readFileSync(statusFilePath, "utf-8");
-    return JSON.parse(raw) as WorktreeStatus;
+    parsed = JSON.parse(readFileSync(statusFilePath, "utf-8"));
   } catch {
-    return null;
+    return invalidWorktreeStatus(worktreeId, "file is not valid JSON");
   }
+  return validateWorktreeStatus(parsed, worktreeId, wsRoot, worktreePath);
 }
 
 /**
@@ -264,6 +381,7 @@ export function mergeWorktree(
   worktreeId: string,
   workspaceRoot: string
 ): { status: "merged" } {
+  return withWorktreeRepositoryLock(workspaceRoot, () => {
   const wsRoot = resolveWorkspaceRoot(workspaceRoot);
   const worktreePath = getWorktreeDir(worktreeId, workspaceRoot);
 
@@ -313,6 +431,7 @@ export function mergeWorktree(
   writeStatusAtomic(statusFilePath, updatedStatus);
 
   return { status: "merged" };
+  });
 }
 
 /**
@@ -333,6 +452,7 @@ export function discardWorktree(
   worktreeId: string,
   workspaceRoot: string
 ): { status: "discarded" } {
+  return withWorktreeRepositoryLock(workspaceRoot, () => {
   const wsRoot = resolveWorkspaceRoot(workspaceRoot);
   const worktreePath = getWorktreeDir(worktreeId, workspaceRoot);
 
@@ -364,10 +484,6 @@ export function discardWorktree(
   try {
     runGit(["worktree", "remove", "--force", worktreePath], wsRoot, GIT_TIMEOUT_MS);
   } catch (err) {
-    // git remove 失败时再尝试直接删目录（best effort），然后抛错
-    try {
-      rmSync(worktreePath, { recursive: true, force: true });
-    } catch { /* ignore */ }
     throw new PatchWardenError(
       "worktree_discard_failed",
       `Failed to remove worktree "${worktreeId}": ${gitErrorMessage(err)}`,
@@ -391,7 +507,7 @@ export function discardWorktree(
 
   const archiveDir = join(wsRoot, WORKTREE_ARCHIVE_DIR);
   guardWorkspacePath(archiveDir, wsRoot);
-  // .patchwarden 路径在 sensitiveGuard 中始终视为安全（SAFE_PREFIX），无需额外校验
+  // The archive path is workspace-confined and contains only managed status metadata.
 
   try {
     mkdirSync(archiveDir, { recursive: true });
@@ -401,4 +517,5 @@ export function discardWorktree(
   writeStatusAtomic(archiveFilePath, archivedStatus);
 
   return { status: "discarded" };
+  });
 }

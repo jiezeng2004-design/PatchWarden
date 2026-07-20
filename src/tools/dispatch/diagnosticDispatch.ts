@@ -5,23 +5,25 @@
  * invoke_discovered_tool consumes a discovery token and dispatches to
  * the target tool via handleToolCall.
  *
- * Note: This module imports getToolDefs and handleToolCall from
- * registry.ts. The import is a live ESM binding resolved at runtime,
- * so the circular dependency (registry → diagnosticDispatch → registry)
- * is safe: neither binding is touched during module evaluation.
+ * The registry injects the audited dispatcher used by invoke_discovered_tool,
+ * avoiding a registry -> diagnosticDispatch -> registry import cycle.
  */
 
-import { discoverTools } from "../discoverTools.js";
-import { explainTool } from "../explainTool.js";
-import { invokeDiscoveredTool } from "../invokeDiscoveredTool.js";
+import { discoverTools } from "../discovery/discoverTools.js";
+import { explainTool } from "../discovery/explainTool.js";
+import { invokeDiscoveredTool } from "../discovery/invokeDiscoveredTool.js";
 import { getConfig } from "../../config.js";
-import { resolveToolProfile } from "../toolCatalog.js";
-import { getToolDefs, handleToolCall } from "../registry.js";
+import { resolveToolProfile } from "../catalog/toolCatalog.js";
+import type { ToolRisk } from "../catalog/toolRegistry.js";
+import { getToolDefs } from "../definitions/toolDefs.js";
 import type { ToolHandlerMap } from "./types.js";
 import { toResult } from "./types.js";
 
-export const diagnosticHandlers: ToolHandlerMap = {
-  discover_tools: async (args) => {
+export function buildDiagnosticHandlers(
+  dispatchTool: (name: string, args: Record<string, unknown> | undefined) => Promise<unknown>,
+): ToolHandlerMap {
+  return {
+    discover_tools: async (args) => {
     const profile =
       args?.profile === "full" ||
       args?.profile === "chatgpt_core" ||
@@ -37,15 +39,17 @@ export const diagnosticHandlers: ToolHandlerMap = {
       args?.mode === "diagnostic"
         ? args.mode
         : undefined;
-    const riskCeiling = [
+    const riskCeilings = new Set<string>([
       "readonly",
       "workspace_read_sensitive",
       "workspace_write",
       "command",
       "release",
       "credential_sensitive",
-    ].includes(String(args?.riskCeiling ?? ""))
-      ? (String(args?.riskCeiling) as any)
+    ]);
+    const requestedRiskCeiling = String(args?.riskCeiling ?? "");
+    const riskCeiling = riskCeilings.has(requestedRiskCeiling)
+      ? (requestedRiskCeiling as ToolRisk)
       : undefined;
     return toResult(
       discoverTools(
@@ -61,9 +65,9 @@ export const diagnosticHandlers: ToolHandlerMap = {
         getToolDefs(),
       ),
     );
-  },
+    },
 
-  explain_tool: async (args) => {
+    explain_tool: async (args) => {
     return toResult(
       explainTool(
         {
@@ -74,9 +78,9 @@ export const diagnosticHandlers: ToolHandlerMap = {
         getToolDefs(),
       ),
     );
-  },
+    },
 
-  invoke_discovered_tool: async (args) => {
+    invoke_discovered_tool: async (args) => {
     const profile = resolveToolProfile(getConfig().toolProfile);
     const result = await invokeDiscoveredTool(
       {
@@ -92,10 +96,11 @@ export const diagnosticHandlers: ToolHandlerMap = {
         tools: getToolDefs(),
         profile,
         dispatch: async (name, dispatchArgs) => {
-          return handleToolCall(name, dispatchArgs);
+          return dispatchTool(name, dispatchArgs);
         },
       },
     );
     return toResult(result);
-  },
-};
+    },
+  };
+}

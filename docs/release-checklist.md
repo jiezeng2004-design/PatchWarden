@@ -3,7 +3,7 @@
 PatchWarden releases remain confirmation-gated. Creating a tag or GitHub Release does not publish npm automatically.
 
 1. Work on a release branch and update `package.json`, changelog/release notes, README, examples, and tool manifests together.
-2. Run the complete local quality gates from `AGENTS.md`.
+2. Run the complete local quality gates from `AGENTS.md`. For Desktop, run `npm.cmd run desktop:preflight:release` from a clean checkout before creating the installer.
 3. Open a pull request, wait for `CI gate`, review the diff and package contents, then merge.
 4. Create the version tag from the verified merge commit.
 5. Create the GitHub Release and attach only reviewed release artifacts and checksums.

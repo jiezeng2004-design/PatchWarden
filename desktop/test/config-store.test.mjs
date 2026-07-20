@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync } from "node:fs";
+import { mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -14,7 +14,7 @@ import {
   updatePreferences,
   updateAgentSettings,
   updateRuntimeSettings,
-} from "../src/config-store.mjs";
+} from "../dist/config-store.js";
 
 describe("desktop config store", () => {
   it("uses PATCHWARDEN_CONFIG before the LocalAppData default", () => {
@@ -29,7 +29,7 @@ describe("desktop config store", () => {
     atomicWriteJson(configPath, { workspaceRoot: "two" }, true);
     assert.equal(readJson(configPath).workspaceRoot, "two");
     assert.equal(readdirSync(root).filter((name) => name.includes(".bak-")).length, 1);
-    assert.equal(existsSync(`${configPath}.tmp-${process.pid}`), false);
+    assert.equal(readdirSync(root).filter((name) => name.includes(`.tmp-${process.pid}-`)).length, 0);
   });
 
   it("accepts only fixed desktop preferences", () => {
@@ -110,5 +110,17 @@ describe("desktop config store", () => {
     atomicWriteJson(path, config, false);
     updateAgentSettings(path, [{ id: "codex", available: false, command: null }], [{ id: "codex", enabled: true, model: null }]);
     assert.deepEqual(readJson(path).agents.codex, config.agents.codex);
+  });
+
+  it("preserves an explicit provider environment allowlist when refreshing a managed agent", () => {
+    const root = mkdtempSync(join(tmpdir(), "patchwarden-desktop-agent-env-"));
+    const path = join(root, "patchwarden.config.json");
+    const config = buildConfig("C:\\workspace", [
+      { id: "codex", available: true, command: "C:\\tools\\codex.exe", prefixArgs: [] },
+    ]);
+    config.agents.codex.envAllowlist = ["OPENAI_API_KEY", "HTTPS_PROXY"];
+    atomicWriteJson(path, config, false);
+    updateAgentSettings(path, [{ id: "codex", available: true, command: "C:\\tools\\codex.exe", prefixArgs: [] }], [{ id: "codex", enabled: true, model: "gpt-codex" }]);
+    assert.deepEqual(readJson(path).agents.codex.envAllowlist, ["OPENAI_API_KEY", "HTTPS_PROXY"]);
   });
 });

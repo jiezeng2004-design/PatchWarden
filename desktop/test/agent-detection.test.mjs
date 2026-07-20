@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { AGENT_ADAPTERS, buildAgentRegistration, selectAgentExecutable } from "../src/agent-detection.mjs";
+import { AGENT_ADAPTERS, buildAgentRegistration, selectAgentExecutable } from "../dist/agent-detection.js";
 
 describe("desktop agent detection", () => {
   it("rejects the WindowsApps desktop alias", () => {

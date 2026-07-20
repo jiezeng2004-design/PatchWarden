@@ -1,63 +1,23 @@
 # PatchWarden Architecture
 
-PatchWarden is designed as a narrow control layer between an MCP client and
-local coding agents.
+PatchWarden 是一个本地优先的 MCP（Model Context Protocol）安全桥接器，通过 5 种运行角色（MCP Server / Watcher / Agent / Control Center / Desktop App）协同，为 AI agent 提供任务编排、安全守卫、变更证据收集与审计能力。
 
-## Roles
+## 详细文档
 
-```text
-ChatGPT / Codex / OpenCode / another MCP client
-                    |
-                    v
-          PatchWarden MCP Server
-                    |
-          save_plan / create_task
-                    |
-                    v
-       .patchwarden/tasks/<task_id>/
-                    |
-              Watcher finds task
-                    |
-                    v
-       Local agent (OpenCode / Codex)
-                    |
-                    v
- result.json / diff.patch / verify.json / status.json
-                    |
-                    v
-       MCP client reads safe summaries and audit evidence
-```
+- [Code Wiki](./CODE_WIKI.md) —— 完整项目架构、模块职责、关键类与函数说明、依赖关系、运行方式、现有缺陷
+- [Threat Model](./threat-model.md) —— 安全威胁模型与防护设计
+- [Control Center](./control-center/README.md) —— Control Center HTTP 管理界面文档
+- [Desktop App](./desktop-app.md) —— Electron 桌面应用文档
+- [Direct Session Workflow](./direct-session-workflow.md) —— Direct 模式会话工作流
+- [Task Safe Review Workflow](./task-safe-review-workflow.md) —— 任务安全审查工作流
 
-## Core Components
+## 一致性与资源边界
 
-| Component | Responsibility |
-| --- | --- |
-| MCP server | Exposes constrained planning, task, summary, audit, and status tools. |
-| Watcher | Polls queued tasks and starts preconfigured local agents. |
-| Agent registry | Defines trusted agent commands and argument templates. |
-| Command guard | Allows only exact verification commands from trusted configuration. |
-| Path guard | Keeps task paths under `workspaceRoot` and reports out-of-scope changes. |
-| Sensitive path guard | Blocks known credential and private-data file names. |
-| Evidence writer | Records status, result, verification, changed files, and audit artifacts. |
-| Control Center | Provides safe-first local review pages for tasks, direct sessions, lineage, warnings, and evidence packs. |
+- `.patchwarden/` 只是证据存储位置，不是敏感路径豁免区；敏感文件名在任意目录深度都阻断。
+- Goal 状态变更由跨进程 mutation lock 串行化并原子落盘；非空 Goal 的子目标全部 accepted 后自动转为 `completed`。
+- 子目标任务以 Goal 保存的 `repo_path` 为权威并拒绝 mismatch；worktree create/merge/discard 共享该仓库的 lifecycle lock。
+- task diff/summary/log tail 采用有界读取，`audit_task` 对文档数量和总字节设置预算，持续 invocation/reconcile 日志采用锁内有界追加并明确标记截断。
 
-## Data Flow
+## 历史版本
 
-1. A client saves a plan or creates a task with an explicit `repo_path`.
-2. PatchWarden validates the repository path and requested verification
-   commands.
-3. The task is written under `.patchwarden/tasks/<task_id>/`.
-4. The Watcher starts the selected registered agent.
-5. PatchWarden captures task status, changed files, Git diff evidence where
-   available, verification output, and audit summaries.
-6. The client reviews safe summaries first and asks for deeper artifacts only
-   when needed.
-
-## Safety Design
-
-PatchWarden treats model instructions as untrusted input. The local maintainer
-controls the workspace root, allowed commands, registered agents, and release
-process. The project intentionally keeps push, publish, tag, GitHub Release,
-and live service changes outside ordinary task execution.
-
-For the security model, see `docs/threat-model.md`.
+历史架构文档与阶段性设计已归档至 [archive/](./archive/)。
