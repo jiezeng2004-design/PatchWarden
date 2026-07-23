@@ -32,6 +32,10 @@ export interface TaskFilters {
   acceptance_status?: string;
   agent?: string;
   warning_type?: string;
+  date_from?: string;
+  date_to?: string;
+  limit?: number;
+  cursor?: string;
 }
 
 export function handleTasks(res: ServerResponse, filters?: TaskFilters): void {
@@ -40,6 +44,7 @@ export function handleTasks(res: ServerResponse, filters?: TaskFilters): void {
     const watcher = result.watcher;
     const now = Date.now();
     let augmented = result.tasks.map((t) => augmentTaskWithStale(t, watcher, now));
+    const facetSource = augmented.slice();
     // Apply optional filters from query params.
     if (filters) {
       if (filters.repo_path) {
@@ -66,21 +71,58 @@ export function handleTasks(res: ServerResponse, filters?: TaskFilters): void {
       }
       if (filters.warning_type) {
         const wt = filters.warning_type;
-        if (wt === "stale") {
+        if (wt === "stale" || wt === "stale_task") {
           augmented = augmented.filter((t) => t.is_stale);
         } else if (wt === "error") {
           augmented = augmented.filter((t) => t.error !== null && t.error !== "");
+        } else if (wt === "failed_verification") {
+          augmented = augmented.filter((t) => t.status === wt);
         } else {
-          // Treat as a specific stale_reason token to match against.
-          augmented = augmented.filter((t) => Array.isArray(t.stale_reasons) && t.stale_reasons.includes(wt));
+          augmented = augmented.filter((t) =>
+            t.status === wt || t.acceptance_status === wt ||
+            (Array.isArray(t.stale_reasons) && t.stale_reasons.includes(wt)),
+          );
         }
       }
+      if (filters.date_from || filters.date_to) {
+        const from = filters.date_from ? Date.parse(`${filters.date_from}T00:00:00`) : Number.NEGATIVE_INFINITY;
+        const to = filters.date_to ? Date.parse(`${filters.date_to}T23:59:59`) : Number.POSITIVE_INFINITY;
+        augmented = augmented.filter((task) => {
+          const timestamp = Date.parse(String(task.updated_at || task.created_at || ""));
+          return Number.isFinite(timestamp) && timestamp >= from && timestamp <= to;
+        });
+      }
     }
+    augmented.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")) || String(b.task_id).localeCompare(String(a.task_id)));
     const staleCount = augmented.filter((t) => t.is_stale).length;
+    const limit = Math.max(10, Math.min(filters?.limit || 25, 100));
+    const offset = filters?.cursor && /^\d+$/.test(filters.cursor) ? Number(filters.cursor) : 0;
+    const page = augmented.slice(offset, offset + limit);
+    const nextCursor = offset + page.length < augmented.length ? String(offset + page.length) : null;
+    const facets = {
+      repos: [...new Set(facetSource.map((task) => String(task.repo_path || ".")))].sort(),
+      statuses: [...new Set(facetSource.map((task) => String(task.status || "unknown")))].sort(),
+      agents: [...new Set(facetSource.map((task) => String(task.agent || "unknown")))].sort(),
+    };
     sendJson(res, 200, {
-      tasks: augmented,
+      tasks: page,
       total: augmented.length,
-      returned: augmented.length,
+      returned: page.length,
+      nextCursor,
+      next_cursor: nextCursor,
+      filters: {
+        applied: {
+          repo_path: filters?.repo_path || null,
+          status: filters?.status || null,
+          acceptance_status: filters?.acceptance_status || null,
+          agent: filters?.agent || null,
+          warning_type: filters?.warning_type || null,
+          date_from: filters?.date_from || null,
+          date_to: filters?.date_to || null,
+        },
+        options: facets,
+      },
+      facets,
       watcher,
       stale_count: staleCount,
     });
@@ -89,6 +131,10 @@ export function handleTasks(res: ServerResponse, filters?: TaskFilters): void {
       tasks: [],
       total: 0,
       returned: 0,
+      nextCursor: null,
+      next_cursor: null,
+      filters: { applied: {}, options: { repos: [], statuses: [], agents: [] } },
+      facets: { repos: [], statuses: [], agents: [] },
       watcher: null,
       stale_count: 0,
       error: errorMessage(err),

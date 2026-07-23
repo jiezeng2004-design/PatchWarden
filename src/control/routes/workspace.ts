@@ -19,6 +19,7 @@ import { config, errorMessage, sendJson } from "../shared.js";
 export function handleWorkspace(res: ServerResponse): void {
   let workspaceRoot: string | null = null;
   let directories: string[] = [];
+  let internalDirectories: string[] = [];
   let agents: AgentAvailability[] = [];
   let configSummary: { toolProfile: string | null; allowedTestCommandsCount: number; enableDirectProfile: boolean } | null = null;
 
@@ -29,10 +30,16 @@ export function handleWorkspace(res: ServerResponse): void {
   }
   if (workspaceRoot) {
     try {
-      directories = readdirSync(workspaceRoot, { withFileTypes: true })
-        .filter((e) => e.isDirectory())
-        .map((e) => e.name)
-        .sort();
+      const entries = readdirSync(workspaceRoot, { withFileTypes: true }).filter((e) => e.isDirectory());
+      for (const entry of entries) {
+        const child = join(workspaceRoot, entry.name);
+        const isInternal = entry.name.startsWith(".") || entry.name.startsWith("_");
+        const isGitRepo = existsSync(join(child, ".git"));
+        if (isGitRepo && !isInternal) directories.push(entry.name);
+        else internalDirectories.push(entry.name);
+      }
+      directories.sort();
+      internalDirectories.sort();
     } catch {
       directories = [];
     }
@@ -51,7 +58,7 @@ export function handleWorkspace(res: ServerResponse): void {
   } catch {
     configSummary = null;
   }
-  sendJson(res, 200, { workspace_root: workspaceRoot, directories, agents, config: configSummary });
+  sendJson(res, 200, { workspace_root: workspaceRoot, directories, internal_directories: internalDirectories, agents, config: configSummary });
 }
 
 interface WorkspaceRepoEntry {

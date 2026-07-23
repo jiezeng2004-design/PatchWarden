@@ -71,6 +71,8 @@ export function handleLogs(res: ServerResponse, category: LogCategory, tailLines
         stderr: "",
         category,
         tail: tailLines,
+        historical_snapshot: true,
+        redacted: true,
         reason: "log file not found",
       });
       return;
@@ -80,9 +82,9 @@ export function handleLogs(res: ServerResponse, category: LogCategory, tailLines
     const stderrRaw = stderrExists ? readFileTail(stderrPath, tailLines) : "";
     const stdout = redactSensitiveContent(stdoutRaw).content;
     const stderr = redactSensitiveContent(stderrRaw).content;
-    sendJson(res, 200, { stdout, stderr, category, tail: tailLines, reason: null });
+    sendJson(res, 200, { stdout, stderr, category, tail: tailLines, historical_snapshot: true, redacted: true, reason: null });
   } catch (err) {
-    sendJson(res, 200, { stdout: "", stderr: "", category, tail: tailLines, reason: errorMessage(err) });
+    sendJson(res, 200, { stdout: "", stderr: "", category, tail: tailLines, historical_snapshot: true, redacted: true, reason: errorMessage(err) });
   }
 }
 

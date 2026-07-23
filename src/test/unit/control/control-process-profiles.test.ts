@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { buildManageEnvironment, classifySupervisorFailure, resolveManageProfiles } from "../../../control/routes/process.js";
-import { buildSuggestions, reconcileTunnelStatus } from "../../../control/routes/status.js";
+import { buildExperienceStatus, buildSuggestions, reconcileTunnelStatus } from "../../../control/routes/status.js";
 import { config } from "../../../control/shared.js";
 
 describe("Control Center profile selection", () => {
@@ -141,5 +141,95 @@ describe("Control Center tunnel status", () => {
       direct_profile_enabled: true,
     });
     assert.equal(suggestions.find((item) => item.code === "watcher_stale")?.action, "/api/core/restart");
+  });
+});
+
+describe("Control Center experience status", () => {
+  const watcher = {
+    status: "healthy" as const,
+    available: true,
+    stale_after_seconds: 30,
+    last_heartbeat_at: new Date().toISOString(),
+    heartbeat_age_seconds: 0,
+    heartbeat_pid: 123,
+    instance_id: "test",
+    launcher_pid: 122,
+    reason: null,
+    activity: null,
+  };
+
+  it("treats disabled Direct and historical evidence as non-blocking", () => {
+    const result = buildExperienceStatus({
+      core: { available: true, reason: null, healthz: { status: 200 }, readyz: { status: 200 } },
+      direct: { available: false, reason: "disabled", healthz: null, readyz: null },
+      watcher,
+      tunnel: { core: { ready: true }, direct: { ready: false } },
+      agents: [
+        {
+          name: "opencode",
+          available: true,
+          configured: true,
+          command: "opencode.exe",
+          adapter: "opencode",
+          model: null,
+          capabilities: { model_override: true },
+          reason: null,
+          checked_at: new Date().toISOString(),
+        },
+      ],
+      tasks: { total: 0, active: 0, stale: 2, stale_task_ids: [], tasks: [], reason: null },
+      direct_profile_enabled: false,
+    });
+    assert.equal(result.readiness, "ready");
+    assert.equal(result.live_checks.find((check) => check.key === "direct")?.state, "optional");
+    assert.equal(result.historical_summary.stale_tasks, 2);
+  });
+
+  it("blocks only when the current workspace has no available agent", () => {
+    const result = buildExperienceStatus({
+      core: { available: false, reason: "stopped", healthz: null, readyz: null },
+      direct: { available: false, reason: "disabled", healthz: null, readyz: null },
+      watcher,
+      tunnel: { core: { ready: false }, direct: { ready: false } },
+      agents: [],
+      tasks: { total: 0, active: 0, stale: 0, stale_task_ids: [], tasks: [], reason: null },
+      direct_profile_enabled: false,
+    });
+    assert.equal(result.readiness, "blocked");
+  });
+
+  it("reports an enabled but unhealthy Direct profile as a non-blocking action", () => {
+    const result = buildExperienceStatus({
+      core: { available: true, reason: null, healthz: { status: 200 }, readyz: { status: 200 } },
+      direct: { available: false, reason: "stopped", healthz: null, readyz: null },
+      watcher,
+      tunnel: { core: { ready: true }, direct: { ready: false } },
+      agents: [{
+        name: "opencode", available: true, configured: true, command: "opencode.exe", adapter: "opencode", model: null,
+        capabilities: { model_override: true }, reason: null, checked_at: new Date().toISOString(),
+      }],
+      tasks: { total: 1, active: 0, stale: 0, stale_task_ids: [], tasks: [{ task_id: "task_failed", status: "failed" }], reason: null },
+      direct_profile_enabled: true,
+    });
+    assert.equal(result.readiness, "needs_action");
+    assert.equal(result.live_checks.find((check) => check.key === "direct")?.state, "needs_action");
+    assert.equal(result.historical_summary.failed_tasks, 1);
+  });
+
+  it("keeps a missing Watcher distinct from Core and historical health", () => {
+    const result = buildExperienceStatus({
+      core: { available: true, reason: null, healthz: { status: 200 }, readyz: { status: 200 } },
+      direct: { available: false, reason: "disabled", healthz: null, readyz: null },
+      watcher: { ...watcher, status: "missing", available: false },
+      tunnel: { core: { ready: true }, direct: { ready: false } },
+      agents: [{
+        name: "opencode", available: true, configured: true, command: "opencode.exe", adapter: "opencode", model: null,
+        capabilities: { model_override: true }, reason: null, checked_at: new Date().toISOString(),
+      }],
+      tasks: { total: 0, active: 0, stale: 0, stale_task_ids: [], tasks: [], reason: null },
+      direct_profile_enabled: false,
+    });
+    assert.equal(result.readiness, "needs_action");
+    assert.equal(result.live_checks.find((check) => check.key === "watcher")?.state, "needs_action");
   });
 });

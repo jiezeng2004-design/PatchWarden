@@ -90,6 +90,10 @@ export function buildRoutes(parsedUrl: URL): Route[] {
           acceptance_status: query.get("acceptance_status") || undefined,
           agent: query.get("agent") || undefined,
           warning_type: query.get("warning_type") || undefined,
+          date_from: query.get("date_from") || undefined,
+          date_to: query.get("date_to") || undefined,
+          limit: query.get("limit") ? Number(query.get("limit")) : undefined,
+          cursor: query.get("cursor") || undefined,
         }),
     },
     // /api/tasks/stale MUST precede /api/tasks/:id (stale matches the :id pattern).
@@ -185,7 +189,18 @@ export function buildRoutes(parsedUrl: URL): Route[] {
         handleWorkspaceRepoStatus(res, repoParam);
       },
     },
-    { method: "GET", pattern: /^\/api\/direct-sessions$/, handler: (res) => handleDirectSessions(res) },
+    {
+      method: "GET",
+      pattern: /^\/api\/direct-sessions$/,
+      handler: (res) => handleDirectSessions(res, {
+        state: (query.get("state") || undefined) as "active" | "archive" | "finalized" | "audited" | "expired" | undefined,
+        repo_path: query.get("repo_path") || undefined,
+        date_from: query.get("date_from") || undefined,
+        date_to: query.get("date_to") || undefined,
+        limit: query.get("limit") ? Number(query.get("limit")) : undefined,
+        cursor: query.get("cursor") || undefined,
+      }),
+    },
     // /api/direct-sessions/:id/summary MUST precede /api/direct-sessions/:id.
     {
       method: "GET",
