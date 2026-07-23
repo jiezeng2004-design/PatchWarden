@@ -15,11 +15,13 @@
  * GITHUB_TOKEN is used as Bearer auth but never logged or returned.
  */
 
-import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { get } from "node:https";
+import { resolveTrustedCommandLine } from "../runner/processSecurity.js";
+import { runSimpleProcessSync } from "../runner/simpleProcess.js";
+import { atomicWriteJsonFileSync } from "../utils/atomicFile.js";
 
 // ── Public types ───────────────────────────────────────────────────
 
@@ -49,7 +51,7 @@ export interface PackedCheckResult extends StageCheckResult {
 
 export interface HttpResponse {
   statusCode: number;
-  data: any;
+  data: unknown;
 }
 
 export type HttpGetFn = (
@@ -86,6 +88,7 @@ const STAGE_ORDER: ReleaseStage[] = [
 
 const LOCAL_TIMEOUT_MS = 300000;
 const REMOTE_TIMEOUT_MS = 10000;
+const MAX_REMOTE_RESPONSE_BYTES = 5 * 1024 * 1024;
 const USER_AGENT = "PatchWarden-ReleaseGate";
 
 const PACK_FORBIDDEN_PATTERNS: RegExp[] = [
@@ -121,6 +124,13 @@ export async function httpsGetJson(
 ): Promise<HttpResponse> {
   const timeout = timeoutMs ?? REMOTE_TIMEOUT_MS;
   return new Promise<HttpResponse>((resolve, reject) => {
+    let settled = false;
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    };
     const timer = setTimeout(() => {
       req.destroy(new Error(`Request timed out after ${timeout}ms`));
     }, timeout);
@@ -135,12 +145,32 @@ export async function httpsGetJson(
         },
       },
       (res) => {
+        const declaredLength = Number(res.headers["content-length"]);
+        if (Number.isFinite(declaredLength) && declaredLength > MAX_REMOTE_RESPONSE_BYTES) {
+          res.destroy();
+          fail(new Error(`Response exceeds ${MAX_REMOTE_RESPONSE_BYTES} bytes`));
+          return;
+        }
         const chunks: Buffer[] = [];
-        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        let totalBytes = 0;
+        let oversized = false;
+        res.on("data", (chunk: Buffer) => {
+          if (oversized) return;
+          totalBytes += chunk.length;
+          if (totalBytes > MAX_REMOTE_RESPONSE_BYTES) {
+            oversized = true;
+            res.destroy();
+            fail(new Error(`Response exceeds ${MAX_REMOTE_RESPONSE_BYTES} bytes`));
+            return;
+          }
+          chunks.push(chunk);
+        });
         res.on("end", () => {
+          if (oversized || settled) return;
+          settled = true;
           clearTimeout(timer);
           const body = Buffer.concat(chunks).toString("utf-8");
-          let data: any = null;
+          let data: unknown = null;
           if (body.length > 0) {
             try {
               data = JSON.parse(body);
@@ -150,12 +180,11 @@ export async function httpsGetJson(
           }
           resolve({ statusCode: res.statusCode ?? 0, data });
         });
+        res.on("aborted", () => fail(new Error("Response was aborted before completion")));
+        res.on("error", fail);
       },
     );
-    req.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
+    req.on("error", fail);
   });
 }
 
@@ -203,12 +232,12 @@ export function checkLocalReady(repoPath: string): StageCheckResult {
   const commands = ["npm.cmd run build", "npm.cmd test", "npm.cmd run doctor:ci"];
   for (const cmdStr of commands) {
     try {
-      execSync(cmdStr, {
-        cwd: repoPath,
-        encoding: "utf-8",
-        timeout: LOCAL_TIMEOUT_MS,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      const result = runLocalCommand(repoPath, cmdStr, LOCAL_TIMEOUT_MS);
+      if (result.spawnError) throw new Error(result.spawnError);
+      if (result.timedOut) throw new Error(`Command timed out after ${LOCAL_TIMEOUT_MS}ms`);
+      if (result.exitCode !== 0) {
+        throw Object.assign(new Error(`Command exited with code ${result.exitCode ?? -1}`), { status: result.exitCode ?? -1 });
+      }
     } catch (err) {
       if (err && typeof err === "object" && "status" in err) {
         const code = (err as { status: unknown }).status;
@@ -235,12 +264,11 @@ export function checkLocalReady(repoPath: string): StageCheckResult {
 export function checkPackedReady(repoPath: string): PackedCheckResult {
   let packOutput: string;
   try {
-    packOutput = execSync("npm.cmd pack --dry-run --json", {
-      cwd: repoPath,
-      encoding: "utf-8",
-      timeout: LOCAL_TIMEOUT_MS,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const result = runLocalCommand(repoPath, "npm.cmd pack --dry-run --json", LOCAL_TIMEOUT_MS, 10 * 1024 * 1024);
+    if (result.spawnError) throw new Error(result.spawnError);
+    if (result.timedOut) throw new Error(`npm pack timed out after ${LOCAL_TIMEOUT_MS}ms`);
+    if (result.exitCode !== 0) throw new Error(`npm pack exited with code ${result.exitCode ?? -1}`);
+    packOutput = result.stdout;
   } catch (err) {
     return {
       status: "failed",
@@ -309,7 +337,7 @@ export function checkPackedReady(repoPath: string): PackedCheckResult {
 
   const manifestPath = join(repoPath, "release-artifact-manifest.json");
   try {
-    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf-8");
+    atomicWriteJsonFileSync(manifestPath, manifest);
   } catch (err) {
     return {
       status: "failed",
@@ -335,6 +363,18 @@ export function checkPackedReady(repoPath: string): PackedCheckResult {
   return { status: "passed", manifestPath };
 }
 
+function runLocalCommand(repoPath: string, commandLine: string, timeoutMs: number, maxStdoutBytes = 512 * 1024) {
+  const invocation = resolveTrustedCommandLine(commandLine, repoPath);
+  return runSimpleProcessSync({
+    command: invocation.command,
+    args: invocation.argsPrefix,
+    cwd: repoPath,
+    timeoutMs,
+    maxStdoutBytes,
+    maxStderrBytes: 512 * 1024,
+  });
+}
+
 /**
  * Stage 3: published_verified
  * Queries the npm registry and confirms the given version exists.
@@ -355,11 +395,12 @@ export async function checkPublishedVerified(
     if (res.statusCode === 404) {
       return { status: "failed", reason: `Package "${packageName}" not found on npm registry` };
     }
-    const data = res.data;
-    if (!data || !data.versions || typeof data.versions !== "object") {
+    const data = asRecord(res.data);
+    const versions = asRecord(data?.versions);
+    if (!versions) {
       return { status: "failed", reason: "npm registry response missing versions object" };
     }
-    if (Object.prototype.hasOwnProperty.call(data.versions, version)) {
+    if (Object.prototype.hasOwnProperty.call(versions, version)) {
       return { status: "passed" };
     }
     return {
@@ -423,12 +464,12 @@ export async function checkCiVerified(
     if (res.statusCode !== 200) {
       return { status: "not_checked", reason: `GitHub API returned ${res.statusCode}` };
     }
-    const data = res.data;
+    const data = asRecord(res.data);
     const runs = Array.isArray(data?.workflow_runs) ? data.workflow_runs : [];
     if (runs.length === 0) {
       return { status: "not_checked", reason: `No CI runs found for branch "${branch}"` };
     }
-    const conclusion = runs[0]?.conclusion;
+    const conclusion = asRecord(runs[0])?.conclusion;
     if (conclusion === "success") {
       return { status: "passed" };
     }
@@ -445,6 +486,12 @@ export async function checkCiVerified(
       reason: `Network error: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
 }
 
 // ── Orchestrator ───────────────────────────────────────────────────

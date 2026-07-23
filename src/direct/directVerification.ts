@@ -1,11 +1,12 @@
-import { writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { getConfig } from "../config.js";
 import { guardDirectCommand } from "../security/commandGuard.js";
 import { redactSensitiveContent } from "../security/contentRedaction.js";
 import { runSimpleProcess } from "../runner/simpleProcess.js";
+import { resolveTrustedCommandLine } from "../runner/processSecurity.js";
 import { getDirectSessionDir } from "./directSessionStore.js";
 import type { DirectSessionVerificationRun } from "./directSessionStore.js";
+import { atomicWriteJsonFileSync } from "../utils/atomicFile.js";
 
 const MAX_TAIL_CHARS = 10_000;
 const DEFAULT_TIMEOUT_SECONDS = 120;
@@ -36,7 +37,7 @@ export async function runDirectVerification(
   const timeoutMs = timeoutSeconds * 1000;
 
   // Parse command into command + args
-  const parts = parseCommand(allowedCommand);
+  const parts = parseCommand(allowedCommand, input.resolvedRepoPath);
   if (!parts) {
     throw new Error(`Failed to parse command: "${allowedCommand}"`);
   }
@@ -104,11 +105,7 @@ export async function runDirectVerification(
     spawn_error: result.spawnError,
   };
 
-  writeFileSync(
-    join(sessionDir, "verification.json"),
-    JSON.stringify(verificationJson, null, 2),
-    "utf-8"
-  );
+  atomicWriteJsonFileSync(join(sessionDir, "verification.json"), verificationJson);
 
   return { run, log_path: logPath };
 }
@@ -116,26 +113,15 @@ export async function runDirectVerification(
 // ── Helpers ────────────────────────────────────────────────────────
 
 function parseCommand(
-  command: string
+  command: string,
+  cwd: string,
 ): { command: string; args: string[] } | null {
   const trimmed = command.trim();
   if (!trimmed) return null;
-
-  // Simple split by spaces - sufficient for allowlisted commands like "npm test"
-  const parts = trimmed.split(/\s+/);
-
-  // On Windows, npm/npx are batch files (.cmd) and spawn() cannot find them
-  // without shell resolution. Wrap with cmd.exe /c for those commands.
-  if (process.platform === "win32" && (parts[0] === "npm" || parts[0] === "npx")) {
-    return {
-      command: "cmd",
-      args: ["/c", ...parts],
-    };
-  }
-
+  const invocation = resolveTrustedCommandLine(trimmed, cwd);
   return {
-    command: parts[0],
-    args: parts.slice(1),
+    command: invocation.command,
+    args: invocation.argsPrefix,
   };
 }
 

@@ -13,7 +13,7 @@
  *   4. 所有检查通过 → ACCEPTED
  */
 
-import type { AcceptanceStatus } from "../tools/createTask.js";
+import type { AcceptanceStatus } from "../tools/tasks/createTask.js";
 
 // ── 类型定义 ──────────────────────────────────────────────────────
 

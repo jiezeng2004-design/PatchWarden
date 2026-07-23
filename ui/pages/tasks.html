@@ -452,6 +452,9 @@ html.dark {
             </tbody>
           </table>
         </div>
+        <div id="loadMoreWrap" class="hidden px-4 py-3 text-center" style="border-top: 1px solid var(--pw-border-subtle);">
+          <button id="loadMoreBtn" class="px-3 py-1.5 rounded-md text-xs font-semibold" type="button" style="background-color: var(--pw-bg-hover); color: var(--pw-text-secondary); border: 1px solid var(--pw-border-subtle); font-family: var(--pw-font-sans);">加载更多</button>
+        </div>
       </div>
 
       <!-- ===== SAFE MODAL ===== -->
@@ -568,6 +571,22 @@ html.dark {
       border-width: 1px;
       border-style: solid;
     }
+    #taskTableBody td:nth-child(2) {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    @media (max-width: 1100px) {
+      #tableWrapper { overflow-x: visible; padding: 10px; }
+      #tableWrapper table { min-width: 0 !important; display: block; }
+      #tableWrapper thead { display: none; }
+      #taskTableBody, #taskTableBody tr { display: block; }
+      #taskTableBody tr { margin-bottom: 10px; padding: 12px; border: 1px solid var(--pw-border-subtle); border-radius: 6px; }
+      #taskTableBody td { display: block; padding: 4px 0 !important; text-align: left !important; max-width: none !important; }
+      #taskTableBody td:nth-child(5), #taskTableBody td:nth-child(6), #taskTableBody td:nth-child(7), #taskTableBody td:nth-child(9) { display: none; }
+      #taskTableBody td:nth-child(10) > div { display: flex; justify-content: flex-start; flex-wrap: wrap; }
+    }
   </style>
 
   <script>
@@ -603,6 +622,8 @@ html.dark {
       };
 
       var allTasks = [];
+      var nextCursor = null;
+      var totalTasks = 0;
       // currentFilters holds the active filter values for all dimensions.
       // repo_path / status / acceptance_status / agent are sent to the backend.
       // warning_type / date_from / date_to are applied client-side.
@@ -778,6 +799,7 @@ html.dark {
         hide($('errorState'));
         hide($('emptyState'));
         hide($('tableWrapper'));
+        hide($('loadMoreWrap'));
         $('countSummary').textContent = '--';
       }
 
@@ -795,6 +817,7 @@ html.dark {
         hide($('errorState'));
         show($('emptyState'));
         hide($('tableWrapper'));
+        hide($('loadMoreWrap'));
       }
 
       function showTable() {
@@ -878,8 +901,8 @@ html.dark {
 
         // Quick action buttons
         var quickActions =
-            '<button class="pw-quick-btn" data-safe-action="safe-result" data-task-id="' + escapeAttr(taskId) + '" title="safe result" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></button>'
-          + '<button class="pw-quick-btn" data-safe-action="safe-audit" data-task-id="' + escapeAttr(taskId) + '" title="safe audit" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></button>'
+            '<button class="pw-quick-btn" data-safe-action="safe-result" data-task-id="' + escapeAttr(taskId) + '" title="查看安全结果" aria-label="查看安全结果" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></button>'
+          + '<button class="pw-quick-btn" data-safe-action="safe-audit" data-task-id="' + escapeAttr(taskId) + '" title="查看安全审计" aria-label="查看安全审计" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></button>'
           + '<button class="pw-quick-btn" data-safe-action="safe-test-summary" data-task-id="' + escapeAttr(taskId) + '" title="safe test summary" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></button>'
           + '<button class="pw-quick-btn" data-safe-action="safe-diff-summary" data-task-id="' + escapeAttr(taskId) + '" title="safe diff summary" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg></button>'
           + '<button class="pw-quick-btn" data-copy-id="' + escapeAttr(taskId) + '" title="复制 task_id" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>'
@@ -996,14 +1019,16 @@ html.dark {
           showTable();
           wireQuickActions();
         }
+        var more = $('loadMoreWrap');
+        if (more) nextCursor ? show(more) : hide(more);
 
         // Count summary
         var hasFilters = currentFilters.repo_path || currentFilters.status || currentFilters.acceptance_status ||
                          currentFilters.agent || currentFilters.warning_type || currentFilters.date_from || currentFilters.date_to;
         if (hasFilters) {
-          $('countSummary').textContent = '显示 ' + filtered.length + ' / ' + allTasks.length + ' 条';
+          $('countSummary').textContent = '显示 ' + filtered.length + ' / ' + totalTasks + ' 条';
         } else {
-          $('countSummary').textContent = '共 ' + filtered.length + ' 条';
+          $('countSummary').textContent = '已加载 ' + filtered.length + ' / ' + totalTasks + ' 条';
         }
       }
 
@@ -1041,6 +1066,10 @@ html.dark {
         if (currentFilters.agent) {
           params.push('agent=' + encodeURIComponent(currentFilters.agent));
         }
+        if (currentFilters.warning_type) params.push('warning_type=' + encodeURIComponent(currentFilters.warning_type));
+        if (currentFilters.date_from) params.push('date_from=' + encodeURIComponent(currentFilters.date_from));
+        if (currentFilters.date_to) params.push('date_to=' + encodeURIComponent(currentFilters.date_to));
+        params.push('limit=50');
         return params.length ? ('?' + params.join('&')) : '';
       }
 
@@ -1094,10 +1123,11 @@ html.dark {
         }
       }
 
-      function fetchTasks() {
-        showLoading();
+      function fetchTasks(cursor, append) {
+        if (!append) showLoading();
         setRefreshing(true);
-        var url = API_URL + buildFilterQueryString();
+        var query = buildFilterQueryString();
+        var url = API_URL + query + (query ? '&' : '?') + (cursor ? 'cursor=' + encodeURIComponent(cursor) : '');
         fetch(url, {
           method: 'GET',
           headers: { 'Accept': 'application/json' },
@@ -1112,7 +1142,10 @@ html.dark {
             return res.json();
           })
           .then(function (data) {
-            allTasks = (data && Array.isArray(data.tasks)) ? data.tasks : [];
+            var page = (data && Array.isArray(data.tasks)) ? data.tasks : [];
+            allTasks = append ? allTasks.concat(page) : page;
+            nextCursor = data && (data.nextCursor || data.next_cursor) ? (data.nextCursor || data.next_cursor) : null;
+            totalTasks = data && typeof data.total === 'number' ? data.total : allTasks.length;
             renderWatcher(data && data.watcher);
             renderTasks();
             updateFilterStatusText();
@@ -1189,6 +1222,7 @@ html.dark {
       });
 
       $('refreshBtn').addEventListener('click', fetchTasks);
+      $('loadMoreBtn').addEventListener('click', function () { if (nextCursor) fetchTasks(nextCursor, true); });
 
       var retryBtn = $('retryBtn');
       if (retryBtn) {

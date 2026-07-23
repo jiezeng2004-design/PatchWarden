@@ -27,22 +27,22 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { loadConfig, getConfig, getTasksDir, reloadConfig } from "./config.js";
-import { savePlan } from "./tools/savePlan.js";
-import { getPlan } from "./tools/getPlan.js";
-import { createTask } from "./tools/createTask.js";
-import type { CreateTaskOutput, AssessOnlyOutput } from "./tools/createTask.js";
+import { savePlan } from "./tools/goals/savePlan.js";
+import { getPlan } from "./tools/goals/getPlan.js";
+import { createTask } from "./tools/tasks/createTask.js";
+import type { CreateTaskOutput, AssessOnlyOutput } from "./tools/tasks/createTask.js";
 import { confirmAssessment, readAssessment, computeWorkspaceFingerprint, createAssessment, type AssessmentRecord } from "./assessments/assessmentStore.js";
 import { captureRepoSnapshot } from "./runner/changeCapture.js";
-import { getTaskStatus } from "./tools/getTaskStatus.js";
-import { getResult, getDiff, getTestLog } from "./tools/taskOutputs.js";
-import { listWorkspace } from "./tools/listWorkspace.js";
-import { readWorkspaceFile } from "./tools/readWorkspaceFile.js";
-import { listTasks } from "./tools/listTasks.js";
-import { cancelTask } from "./tools/cancelTask.js";
-import { retryTask } from "./tools/retryTask.js";
-import { getTaskStdoutTail } from "./tools/getTaskStdoutTail.js";
-import { auditTask } from "./tools/auditTask.js";
-import { getTaskSummary } from "./tools/getTaskSummary.js";
+import { getTaskStatus } from "./tools/tasks/getTaskStatus.js";
+import { getResult, getDiff, getTestLog } from "./tools/tasks/taskOutputs.js";
+import { listWorkspace } from "./tools/workspace/listWorkspace.js";
+import { readWorkspaceFile } from "./tools/workspace/readWorkspaceFile.js";
+import { listTasks } from "./tools/tasks/listTasks.js";
+import { cancelTask } from "./tools/tasks/cancelTask.js";
+import { retryTask } from "./tools/tasks/retryTask.js";
+import { getTaskStdoutTail } from "./tools/tasks/getTaskStdoutTail.js";
+import { auditTask } from "./tools/diagnostics/auditTask.js";
+import { getTaskSummary } from "./tools/tasks/getTaskSummary.js";
 import { guardAgentCommand } from "./security/commandGuard.js";
 import { getToolDefs } from "./tools/registry.js";
 import {
@@ -50,15 +50,15 @@ import {
   CHATGPT_CORE_TOOL_NAMES,
   CHATGPT_DIRECT_TOOL_NAMES,
   selectToolsForProfile,
-} from "./tools/toolCatalog.js";
+} from "./tools/catalog/toolCatalog.js";
 import { errorPayload } from "./errors.js";
 import { readWatcherStatus } from "./watcherStatus.js";
-import { createDirectSession } from "./tools/createDirectSession.js";
-import { searchWorkspace } from "./tools/searchWorkspace.js";
-import { applyPatch } from "./tools/applyPatch.js";
-import { runVerification } from "./tools/runVerification.js";
-import { finalizeDirectSession } from "./tools/finalizeDirectSession.js";
-import { auditSession } from "./tools/auditSession.js";
+import { createDirectSession } from "./tools/direct/createDirectSession.js";
+import { searchWorkspace } from "./tools/workspace/searchWorkspace.js";
+import { applyPatch } from "./tools/workspace/applyPatch.js";
+import { runVerification } from "./tools/tasks/runVerification.js";
+import { finalizeDirectSession } from "./tools/direct/finalizeDirectSession.js";
+import { auditSession } from "./tools/diagnostics/auditSession.js";
 import { readDirectSession, updateDirectSession } from "./direct/directSessionStore.js";
 import { createHash } from "node:crypto";
 
@@ -463,6 +463,8 @@ const sensitiveFiles = [
   "cookies.sqlite",
   ".git-credentials",
   "config.json",
+  ".patchwarden/.env",
+  ".patchwarden/credentials.json",
 ];
 
 for (const sf of sensitiveFiles) {
@@ -471,9 +473,8 @@ for (const sf of sensitiveFiles) {
   });
 }
 
-// Files inside .patchwarden should always be allowed
-await test("C. readWorkspaceFile allows .patchwarden/plans/...", () => {
-  // This should work because .patchwarden files are whitelisted
+// Ordinary PatchWarden artifacts remain readable through their dedicated tool.
+await test("C. getPlan reads ordinary .patchwarden/plans artifacts", () => {
   const plan = savePlan({ title: "Allowlist Test", content: "test" });
   const result = getPlan({ plan_id: plan.plan_id });
   if (!result.content.includes("test")) throw new Error("Should allow .patchwarden reads");

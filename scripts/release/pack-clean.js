@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import {
-  cpSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -16,7 +16,8 @@ import { fileURLToPath } from "node:url";
 
 const scriptDir = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const root = resolve(scriptDir, "..", "..");
-const releaseDir = resolve(root, "release");
+const releaseRoot = resolve(root, "release");
+const releaseDir = resolve(releaseRoot, "package");
 const archivePath = resolve(root, "patchwarden-release.tar.gz");
 
 // Read version from package.json for zip naming
@@ -31,11 +32,6 @@ const include = [
   "src",
   "ui",
   "PatchWarden.cmd",
-  "PatchWarden-Control.cmd",
-  "PatchWarden-Control-Tray.cmd",
-  "PatchWarden-Desktop.cmd",
-  "Restart-PatchWarden-Control.cmd",
-  "Stop-PatchWarden.cmd",
   ".gitignore",
   "LICENSE",
   "README.md",
@@ -57,6 +53,8 @@ const forbidden = [
   /(^|[\\/])\.env$/,
   /\.log$/,
   /^docs[\\/]optimization-proposal\.md$/i,
+  /^docs[\\/]archive(?:[\\/]|$)/i,
+  /^(?:dist|src)[\\/]test(?:[\\/]|$)/i,
   /(^|[\\/])kill-patchwarden\.(cmd|ps1)$/i,
 ];
 
@@ -173,9 +171,15 @@ function readZipEntryNames(zipPath) {
   return names;
 }
 
+const stageRelativeToRoot = toPosix(relative(root, releaseDir));
+if (stageRelativeToRoot !== "release/package") {
+  throw new Error(`Refusing to clean non-isolated release staging path: ${stageRelativeToRoot}`);
+}
+
 console.log("[pack-clean] Preparing clean release directory...");
 rmSync(releaseDir, { recursive: true, force: true });
 rmSync(archivePath, { force: true });
+mkdirSync(releaseRoot, { recursive: true });
 mkdirSync(releaseDir, { recursive: true });
 
 for (const item of include) {
@@ -185,17 +189,26 @@ for (const item of include) {
     console.log(`  skip missing: ${item}`);
     continue;
   }
-  cpSync(source, target, {
-    recursive: true,
-    filter(sourcePath) {
-      const rel = toPosix(relative(root, sourcePath));
-      return !isForbidden(rel);
-    },
-  });
+  copyAllowedEntry(source, target);
   console.log(`  copied: ${item}`);
 }
 
+// Keep an independent second boundary before the fail-closed validation. This
+// protects package contents if a future copy implementation changes behavior.
+pruneForbiddenEntries(releaseDir);
+
 const releaseFiles = listFiles(releaseDir);
+const requiredReleaseEntries = ["package.json", "README.md", "dist/index.js"];
+const missingReleaseEntries = requiredReleaseEntries.filter(
+  (entry) => !existsSync(resolve(releaseDir, entry))
+);
+if (releaseFiles.length === 0 || missingReleaseEntries.length > 0) {
+  console.error("[pack-clean] Release directory is incomplete:");
+  for (const entry of missingReleaseEntries) {
+    console.error(`  missing: ${entry}`);
+  }
+  process.exit(1);
+}
 const badReleaseEntries = releaseFiles.filter((file) =>
   isForbidden(toPosix(relative(releaseDir, file)))
 );
@@ -294,6 +307,38 @@ function listFiles(dir) {
     }
   }
   return entries;
+}
+
+function copyAllowedEntry(source, target) {
+  const rel = toPosix(relative(root, source));
+  if (isForbidden(rel)) {
+    return;
+  }
+
+  const stat = statSync(source);
+  if (stat.isDirectory()) {
+    mkdirSync(target, { recursive: true });
+    for (const name of readdirSync(source)) {
+      copyAllowedEntry(join(source, name), join(target, name));
+    }
+    return;
+  }
+
+  copyFileSync(source, target);
+}
+
+function pruneForbiddenEntries(dir) {
+  for (const name of readdirSync(dir)) {
+    const fullPath = join(dir, name);
+    const rel = toPosix(relative(releaseDir, fullPath));
+    if (isForbidden(rel)) {
+      rmSync(fullPath, { recursive: true, force: true });
+      continue;
+    }
+    if (statSync(fullPath).isDirectory()) {
+      pruneForbiddenEntries(fullPath);
+    }
+  }
 }
 
 function isForbidden(value) {

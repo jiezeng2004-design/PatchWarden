@@ -1,7 +1,8 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { dirname, resolve } from "node:path";
 import { PatchWardenError } from "../errors.js";
+import { atomicWriteFileSync } from "../utils/atomicFile.js";
+import { redactSensitiveContent } from "../security/contentRedaction.js";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -36,6 +37,12 @@ export function computeContentSha256(content: string): string {
   return createHash("sha256").update(content, "utf-8").digest("hex");
 }
 
+export interface ApplyPatchOptions {
+  expectedSha256?: string;
+  maxFileBytes?: number;
+  revalidatePath?: () => string;
+}
+
 export function validateExpectedSha256(
   filePath: string,
   expectedSha256: string
@@ -68,7 +75,8 @@ export function validateExpectedSha256(
 
 export function applyPatchOperations(
   filePath: string,
-  operations: PatchOperation[]
+  operations: PatchOperation[],
+  options: ApplyPatchOptions = {},
 ): ApplyPatchResult {
   if (!existsSync(filePath)) {
     throw new PatchWardenError(
@@ -80,8 +88,40 @@ export function applyPatchOperations(
     );
   }
 
-  const beforeContent = readFileSync(filePath, "utf-8");
-  const beforeSha256 = computeContentSha256(beforeContent);
+  let descriptor: number | null = null;
+  let beforeBytes: Buffer;
+  let existingMode: number;
+  try {
+    descriptor = openSync(filePath, "r");
+    const metadata = fstatSync(descriptor);
+    if (!metadata.isFile()) {
+      throw new PatchWardenError(
+        "direct_target_not_file",
+        `Patch target is not a regular file: "${filePath}".`,
+        "Choose an existing text file inside the Direct session repository.",
+      );
+    }
+    guardFileByteLimit(metadata.size, options.maxFileBytes);
+    existingMode = metadata.mode;
+    beforeBytes = readFileSync(descriptor);
+  } finally {
+    if (descriptor !== null) closeSync(descriptor);
+  }
+  guardFileByteLimit(beforeBytes.length, options.maxFileBytes);
+  const beforeSha256 = createHash("sha256").update(beforeBytes).digest("hex");
+  if (options.expectedSha256 && beforeSha256 !== options.expectedSha256) {
+    throw fileHashMismatch(options.expectedSha256, beforeSha256);
+  }
+  const beforeContent = beforeBytes.toString("utf-8");
+  if (!Buffer.from(beforeContent, "utf-8").equals(beforeBytes)) {
+    throw new PatchWardenError(
+      "unsupported_text_encoding",
+      `File "${filePath}" is not valid UTF-8 text.`,
+      "Use a normal task or convert the file to UTF-8 before Direct editing.",
+      true,
+      { path: filePath },
+    );
+  }
   let content = beforeContent;
   let operationsApplied = 0;
 
@@ -91,13 +131,33 @@ export function applyPatchOperations(
   }
 
   const afterSha256 = computeContentSha256(content);
+  guardFileByteLimit(Buffer.byteLength(content, "utf-8"), options.maxFileBytes);
+  const sensitive = redactSensitiveContent(content);
+  if (sensitive.redacted) {
+    throw new PatchWardenError(
+      "sensitive_content_blocked",
+      `Patch result contains credential-like content (${sensitive.redaction_categories.join(", ")}).`,
+      "Remove the sensitive value and retry with placeholders or environment-variable references.",
+      true,
+      { path: filePath, redaction_categories: sensitive.redaction_categories },
+    );
+  }
   const bytesChanged = Math.abs(
     Buffer.byteLength(content, "utf-8") - Buffer.byteLength(beforeContent, "utf-8")
   );
 
-  // Ensure parent directory exists (should already exist for existing files)
-  mkdirSync(dirname(filePath), { recursive: true });
-  writeFileSync(filePath, content, "utf-8");
+  if (options.revalidatePath && !samePath(options.revalidatePath(), filePath)) {
+    throw new PatchWardenError(
+      "direct_path_changed_during_write",
+      `Patch target path changed while preparing "${filePath}".`,
+      "Retry only after concurrent filesystem changes stop.",
+      true,
+      { path: filePath, operation: "apply_patch" },
+    );
+  }
+  const currentSha256 = computeFileSha256(filePath);
+  if (currentSha256 !== beforeSha256) throw fileHashMismatch(beforeSha256, currentSha256);
+  atomicWriteFileSync(filePath, content, { mode: existingMode });
 
   return {
     before_sha256: beforeSha256,
@@ -105,6 +165,33 @@ export function applyPatchOperations(
     operations_applied: operationsApplied,
     bytes_changed: bytesChanged,
   };
+}
+
+function guardFileByteLimit(fileBytes: number, maxFileBytes: number | undefined): void {
+  if (maxFileBytes === undefined || fileBytes <= maxFileBytes) return;
+  throw new PatchWardenError(
+    "file_too_large",
+    `File size ${fileBytes} bytes exceeds maximum ${maxFileBytes} bytes.`,
+    "Use a normal task for larger files.",
+    true,
+    { file_bytes: fileBytes, max_bytes: maxFileBytes },
+  );
+}
+
+function fileHashMismatch(expectedSha256: string, actualSha256: string): PatchWardenError {
+  return new PatchWardenError(
+    "file_hash_mismatch",
+    `File hash mismatch. Expected "${expectedSha256}" but got "${actualSha256}".`,
+    "Re-read the file to get the current sha256, then retry the patch.",
+    true,
+    { expected_sha256: expectedSha256, actual_sha256: actualSha256 },
+  );
+}
+
+function samePath(left: string, right: string): boolean {
+  return process.platform === "win32"
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right;
 }
 
 function applySingleOperation(

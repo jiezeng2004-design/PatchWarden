@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { CHATGPT_CORE_TOOL_NAMES, CHATGPT_DIRECT_TOOL_NAMES, CHATGPT_SEARCH_TOOL_NAMES } from "../../dist/tools/toolCatalog.js";
+import { CHATGPT_CORE_TOOL_NAMES, CHATGPT_DIRECT_TOOL_NAMES, CHATGPT_SEARCH_TOOL_NAMES } from "../../dist/tools/catalog/toolCatalog.js";
 
 const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const jsonOnly = process.argv.includes("--json");

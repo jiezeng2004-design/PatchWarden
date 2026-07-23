@@ -121,9 +121,9 @@ process.on("SIGTERM", () => {
   process.exit(143);
 });
 
-function httpGet(url) {
+function httpGet(url, headers = {}) {
   return new Promise((resolve, reject) => {
-    const req = http.get(url, (res) => {
+    const req = http.get(url, { headers }, (res) => {
       let data = "";
       res.on("data", (chunk) => (data += chunk));
       res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: data }));
@@ -131,6 +131,34 @@ function httpGet(url) {
     req.on("error", reject);
     req.setTimeout(REQUEST_TIMEOUT_MS, () => req.destroy(new Error("timeout")));
   });
+}
+
+async function testLoopbackHostBoundary() {
+  const name = "Control Center rejects DNS-rebinding Host headers and cannot be framed";
+  try {
+    const hostileToken = await httpGet(`${BASE_URL}/control-token.json`, {
+      Host: "patchwarden.attacker.invalid",
+    });
+    const hostilePage = await httpGet(`${BASE_URL}/`, {
+      Host: "127.0.0.1.attacker.invalid",
+    });
+    const localPage = await httpGet(`${BASE_URL}/`);
+    const problems = [];
+    if (hostileToken.status !== 421 || hostileToken.body.includes("token")) {
+      problems.push(`hostile token request returned ${hostileToken.status}: ${hostileToken.body.slice(0, 120)}`);
+    }
+    if (hostilePage.status !== 421) problems.push(`hostile page request returned ${hostilePage.status}`);
+    if (localPage.status !== 200) problems.push(`loopback page returned ${localPage.status}`);
+    if (String(localPage.headers["x-frame-options"] || "").toUpperCase() !== "DENY") {
+      problems.push("X-Frame-Options is not DENY");
+    }
+    if (!String(localPage.headers["content-security-policy"] || "").includes("frame-ancestors 'none'")) {
+      problems.push("CSP does not deny frame ancestors");
+    }
+    record(name, problems.length === 0, problems.join("; "));
+  } catch (err) {
+    record(name, false, `error: ${err.message}`);
+  }
 }
 
 function httpPost(url, headers = {}) {
@@ -258,7 +286,7 @@ async function testStaticFiles() {
     if (gettingStarted.status !== 200 || (gettingStarted.body.match(/class="readiness-item"/g) || []).length !== 4 || !gettingStarted.body.includes("home.manual")) {
       checks.push("desktop getting-started page is missing its four readiness checks or manual ChatGPT state");
     }
-    if (gettingStartedJs.status !== 200 || !gettingStartedJs.body.includes("getTunnelSetupStatus") || !gettingStartedJs.body.includes("health_check")) {
+    if (gettingStartedJs.status !== 200 || !gettingStartedJs.body.includes('fetchJson("/api/status")') || !gettingStartedJs.body.includes("health_check")) {
       checks.push("getting-started controller is missing bounded Tunnel status or health_check guidance");
     }
     if (settings.status !== 200 || !settings.body.includes("/settings.js")) {
@@ -446,6 +474,13 @@ async function testTasksJson() {
     if (!Array.isArray(json.tasks)) problems.push("'tasks' is not an array");
     if (typeof json.total !== "number") problems.push("'total' is not a number");
     if (typeof json.returned !== "number") problems.push("'returned' is not a number");
+    if (!(json.nextCursor === null || typeof json.nextCursor === "string")) problems.push("'nextCursor' is neither null nor string");
+    if (!isObject(json.filters) || !isObject(json.filters.applied) || !isObject(json.filters.options)) problems.push("'filters' contract is missing");
+
+    const traversal = await httpGet(`${BASE_URL}/api/tasks/..%2Foutside`);
+    if (traversal.status !== 400) {
+      problems.push(`encoded task traversal returned ${traversal.status} (expected 400)`);
+    }
 
     if (problems.length === 0) {
       record(name, true);
@@ -858,7 +893,7 @@ async function testStaleTasksApi() {
 
 // ── Test 12: GET /api/workspace/<traversal>/status -> 400 ───────
 async function testWorkspaceRepoPathTraversal() {
-  const name = "Test 12: /api/workspace/<traversal>/status rejected with 400";
+  const name = "Test 12: workspace status rejects traversal without rejecting dotted names";
   // Use percent-encoded dots to bypass URL-parser segment normalization;
   // after decode the repoParam is "../secret" which contains ".." and is
   // rejected by the server's traversal guard.
@@ -868,7 +903,12 @@ async function testWorkspaceRepoPathTraversal() {
     if (res.status === 400) {
       const json = tryJson(res.body);
       if (json && typeof json.error === "string" && /traversal/i.test(json.error)) {
-        record(name, true);
+        const dotted = await httpGet(`${BASE_URL}/api/workspace/release..candidate/status`);
+        if (dotted.status === 404) {
+          record(name, true);
+        } else {
+          record(name, false, `valid dotted repo name returned ${dotted.status} (expected 404 for missing directory)`);
+        }
       } else {
         record(name, false, `status 400 but error field missing/invalid: ${res.body.slice(0, 200)}`);
       }
@@ -917,10 +957,17 @@ async function testDirectSessionsEmptyList() {
     const problems = [];
     if (!Array.isArray(json.sessions)) problems.push("'sessions' is not an array");
     if (typeof json.total !== "number") problems.push("'total' is not a number");
+    if (!(json.nextCursor === null || typeof json.nextCursor === "string")) problems.push("'nextCursor' is neither null nor string");
+    if (!isObject(json.filters) || !isObject(json.filters.options)) problems.push("'filters' contract is missing");
+    if (typeof json.direct_profile_enabled !== "boolean") problems.push("'direct_profile_enabled' is not a boolean");
     if (json.reason !== null && typeof json.reason !== "string") problems.push("'reason' is neither null nor string");
     if (Array.isArray(json.sessions) && json.sessions.length !== json.total) {
       problems.push(`sessions.length (${json.sessions.length}) != total (${json.total})`);
     }
+    const invalidDetail = await httpGet(`${BASE_URL}/api/direct-sessions/invalid.id`);
+    const invalidSummary = await httpGet(`${BASE_URL}/api/direct-sessions/invalid.id/summary`);
+    if (invalidDetail.status !== 400) problems.push(`invalid detail id returned ${invalidDetail.status} (expected 400)`);
+    if (invalidSummary.status !== 400) problems.push(`invalid summary id returned ${invalidSummary.status} (expected 400)`);
     if (problems.length === 0) {
       record(name, true);
     } else {
@@ -950,6 +997,8 @@ async function testLogsTailParam() {
     if (typeof json.stderr !== "string") problems.push("'stderr' is not a string");
     if (json.tail !== 300) problems.push(`'tail' is ${json.tail} (expected 300)`);
     if (json.category !== "core") problems.push(`'category' is ${json.category} (expected "core")`);
+    if (json.historical_snapshot !== true) problems.push("'historical_snapshot' is not true");
+    if (json.redacted !== true) problems.push("'redacted' is not true");
     if (problems.length === 0) {
       record(name, true);
     } else {
@@ -1475,7 +1524,7 @@ async function main() {
     process.exit(1);
   }
 
-  child = spawn("node", [serverPath], {
+  child = spawn(process.execPath, [serverPath], {
     cwd: projectRoot,
     env: {
       ...process.env,
@@ -1515,6 +1564,7 @@ async function main() {
     console.log(`[control-center-smoke] server ready at ${BASE_URL}`);
 
     await testStaticFiles();
+    await testLoopbackHostBoundary();
     await testPageNavigationRoutes();
     await testStatusJson();
     await testTasksJson();

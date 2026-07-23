@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { detectTunnelClient, validateTunnelClientPath } from "../src/runtime-settings.mjs";
+import { detectTunnelClient, validateTunnelClientPath } from "../dist/runtime-settings.js";
 
 describe("desktop tunnel client discovery", () => {
   it("validates only an existing tunnel-client.exe", () => {

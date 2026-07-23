@@ -20,10 +20,16 @@ if (!existsSync(join(repoRoot, "dist", "controlCenter.js"))) {
 
 rmSync(stageRoot, { recursive: true, force: true });
 mkdirSync(coreStage, { recursive: true });
-for (const directory of ["dist", "ui", "scripts/checks", "scripts/control", "scripts/launchers", "scripts/mcp", "examples"]) {
+for (const directory of ["dist", "ui", "scripts/control", "scripts/launchers", "scripts/mcp", "examples"]) {
   cpSync(join(repoRoot, directory), join(coreStage, directory), { recursive: true });
 }
-for (const file of ["package.json", "PatchWarden.cmd", "PatchWarden-Control.cmd", "PatchWarden-Desktop.cmd", "Stop-PatchWarden.cmd"]) {
+rmSync(join(coreStage, "dist", "test"), { recursive: true, force: true });
+mkdirSync(join(coreStage, "scripts", "checks"), { recursive: true });
+cpSync(
+  join(repoRoot, "scripts", "checks", "mcp-manifest-check.js"),
+  join(coreStage, "scripts", "checks", "mcp-manifest-check.js"),
+);
+for (const file of ["package.json", "PatchWarden.cmd"]) {
   cpSync(join(repoRoot, file), join(coreStage, file));
 }
 

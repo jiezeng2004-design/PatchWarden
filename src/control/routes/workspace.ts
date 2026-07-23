@@ -10,14 +10,16 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { type ServerResponse } from "node:http";
-import { type AgentAvailability, listAgents } from "../../tools/listAgents.js";
+import { type AgentAvailability, listAgents } from "../../tools/workspace/listAgents.js";
 import { resolveWorkspaceRoot } from "../../config.js";
 import { guardWorkspacePath } from "../../security/pathGuard.js";
+import { buildGitEnvironment, redactProcessOutput, resolveTrustedExecutable } from "../../runner/processSecurity.js";
 import { config, errorMessage, sendJson } from "../shared.js";
 
 export function handleWorkspace(res: ServerResponse): void {
   let workspaceRoot: string | null = null;
   let directories: string[] = [];
+  let internalDirectories: string[] = [];
   let agents: AgentAvailability[] = [];
   let configSummary: { toolProfile: string | null; allowedTestCommandsCount: number; enableDirectProfile: boolean } | null = null;
 
@@ -28,10 +30,16 @@ export function handleWorkspace(res: ServerResponse): void {
   }
   if (workspaceRoot) {
     try {
-      directories = readdirSync(workspaceRoot, { withFileTypes: true })
-        .filter((e) => e.isDirectory())
-        .map((e) => e.name)
-        .sort();
+      const entries = readdirSync(workspaceRoot, { withFileTypes: true }).filter((e) => e.isDirectory());
+      for (const entry of entries) {
+        const child = join(workspaceRoot, entry.name);
+        const isInternal = entry.name.startsWith(".") || entry.name.startsWith("_");
+        const isGitRepo = existsSync(join(child, ".git"));
+        if (isGitRepo && !isInternal) directories.push(entry.name);
+        else internalDirectories.push(entry.name);
+      }
+      directories.sort();
+      internalDirectories.sort();
     } catch {
       directories = [];
     }
@@ -50,7 +58,7 @@ export function handleWorkspace(res: ServerResponse): void {
   } catch {
     configSummary = null;
   }
-  sendJson(res, 200, { workspace_root: workspaceRoot, directories, agents, config: configSummary });
+  sendJson(res, 200, { workspace_root: workspaceRoot, directories, internal_directories: internalDirectories, agents, config: configSummary });
 }
 
 interface WorkspaceRepoEntry {
@@ -130,8 +138,13 @@ export function handleWorkspaceRepoStatus(res: ServerResponse, repoParam: string
       return;
     }
 
-    // Reject obvious traversal in the raw parameter before resolving.
-    if (repoParam.includes("\0") || repoParam.includes("..")) {
+    // Reject parent traversal segments before resolving without rejecting
+    // otherwise valid names such as "release..candidate".
+    const hasParentTraversal = repoParam
+      .replace(/\\/g, "/")
+      .split("/")
+      .some((segment) => segment === "..");
+    if (repoParam.includes("\0") || hasParentTraversal) {
       sendJson(res, 400, { error: "Invalid repo path: traversal segments are not allowed" });
       return;
     }
@@ -151,31 +164,28 @@ export function handleWorkspaceRepoStatus(res: ServerResponse, repoParam: string
       return;
     }
 
-    // Only `git status --short` is permitted; no arbitrary git subcommand.
+    // Only porcelain status is permitted; no arbitrary git subcommand.
     // Timeout guards against a hung git prompt (e.g. credential dialog).
+    const env = buildGitEnvironment(repoAbs);
+    let git: string;
+    try {
+      git = resolveTrustedExecutable("git", repoAbs, { pathValue: env.PATH });
+    } catch (err) {
+      sendRepoStatusFailure(res, repoParam, repoAbs, err);
+      return;
+    }
     execFile(
-      "git",
-      ["status", "--short"],
-      { cwd: repoAbs, maxBuffer: 1024 * 1024, timeout: 8000, windowsHide: true, encoding: "utf-8" },
+      git,
+      ["status", "--porcelain=v1"],
+      { cwd: repoAbs, env, maxBuffer: 1024 * 1024, timeout: 8000, windowsHide: true, encoding: "utf-8" },
       (err, stdout, stderr) => {
         if (err) {
           // Not a git repo, git missing, or git errored — return a structured
           // failure rather than 500 so the UI can render it gracefully.
-          sendJson(res, 200, {
-            repo_path: repoParam,
-            resolved_repo_path: repoAbs,
-            is_git_repo: false,
-            changed_files_count: 0,
-            untracked_count: 0,
-            modified_count: 0,
-            is_clean: true,
-            short_status: "",
-            error: errorMessage(err),
-            stderr: stderr ? String(stderr).slice(0, 500) : "",
-          });
+          sendRepoStatusFailure(res, repoParam, repoAbs, err, stderr);
           return;
         }
-        const text = String(stdout);
+        const text = redactProcessOutput(String(stdout));
         const lines = text.split(/\r?\n/).filter((l) => l.length > 0);
         let modified = 0;
         let untracked = 0;
@@ -200,4 +210,25 @@ export function handleWorkspaceRepoStatus(res: ServerResponse, repoParam: string
   } catch (err) {
     sendJson(res, 500, { error: errorMessage(err) });
   }
+}
+
+function sendRepoStatusFailure(
+  res: ServerResponse,
+  repoParam: string,
+  repoAbs: string,
+  error: unknown,
+  stderr: unknown = "",
+): void {
+  sendJson(res, 200, {
+    repo_path: repoParam,
+    resolved_repo_path: repoAbs,
+    is_git_repo: false,
+    changed_files_count: 0,
+    untracked_count: 0,
+    modified_count: 0,
+    is_clean: true,
+    short_status: "",
+    error: redactProcessOutput(errorMessage(error)),
+    stderr: redactProcessOutput(String(stderr || "")).slice(0, 500),
+  });
 }

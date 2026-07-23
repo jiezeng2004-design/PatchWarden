@@ -318,6 +318,8 @@ html.dark {
 
             <!-- Project list body -->
             <div id="projects-body" class="p-4" style="font-family: var(--pw-font-mono); font-size: var(--pw-text-sm);">
+              <input id="project-search" type="search" placeholder="搜索 Git 项目" aria-label="搜索 Git 项目" class="w-full mb-3 px-3 py-2 rounded-md text-xs outline-none" style="background-color: var(--pw-bg-elevated); color: var(--pw-text-primary); border: 1px solid var(--pw-border-subtle); font-family: var(--pw-font-sans);">
+              <p class="mb-3 text-xs" style="color:var(--pw-text-tertiary);font-family:var(--pw-font-sans);" data-zh="项目检查为只读操作，不会修改工作区文件。" data-en="Project checks are read-only and never modify workspace files.">项目检查为只读操作，不会修改工作区文件。</p>
               <!-- Loading state -->
               <div id="projects-loading" class="py-10 text-center">
                 <svg class="pw-spin inline-block mb-2" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--pw-text-tertiary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -339,6 +341,10 @@ html.dark {
               </div>
               <!-- Rendered project list -->
               <div id="projects-list" class="hidden flex flex-col gap-1"></div>
+              <details id="internal-directories" class="hidden mt-3 pt-3" style="border-top: 1px solid var(--pw-border-subtle);">
+                <summary class="text-xs cursor-pointer" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);">内部与非项目目录 <span id="internal-count"></span></summary>
+                <div id="internal-list" class="mt-2 text-xs break-words" style="color: var(--pw-text-tertiary);"></div>
+              </details>
             </div>
           </div>
 
@@ -619,6 +625,7 @@ html.dark {
     }
 
     // ---------- Render: Projects ----------
+    var allProjectDirectories = [];
     function renderProjects(directories) {
       var countEl = $('projects-count');
       var listEl = $('projects-list');
@@ -630,7 +637,9 @@ html.dark {
       hide(emptyEl);
       listEl.innerHTML = '';
 
-      var dirs = Array.isArray(directories) ? directories : [];
+      allProjectDirectories = Array.isArray(directories) ? directories.slice() : [];
+      var query = $('project-search') ? $('project-search').value.trim().toLowerCase() : '';
+      var dirs = allProjectDirectories.filter(function (name) { return !query || String(name).toLowerCase().indexOf(query) >= 0; });
       if (countEl) countEl.textContent = dirs.length + ' 个目录';
 
       if (dirs.length === 0) {
@@ -656,6 +665,7 @@ html.dark {
           + '<span class="truncate flex-1 min-w-0" title="' + safeName + '">' + safeName + '/</span>'
           + '<button class="repo-check-btn shrink-0 flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium transition-colors" '
           + 'data-repo="' + safeName + '" '
+          + 'title="只读检查 Git 状态，不会修改文件" aria-label="只读检查 ' + safeName + ' 的 Git 状态" '
           + 'style="background-color: var(--pw-bg-hover); color: var(--pw-text-secondary); border: 1px solid var(--pw-border-subtle); font-family: var(--pw-font-sans);" '
           + 'onmouseover="this.style.backgroundColor=\'var(--pw-bg-active)\'" '
           + 'onmouseout="this.style.backgroundColor=\'var(--pw-bg-hover)\'">'
@@ -676,6 +686,18 @@ html.dark {
           if (repo) checkRepoStatus(repo, ev.currentTarget);
         });
       }
+    }
+
+    function renderInternalDirectories(directories) {
+      var details = $('internal-directories');
+      var list = $('internal-list');
+      var count = $('internal-count');
+      if (!details || !list) return;
+      var dirs = Array.isArray(directories) ? directories : [];
+      if (!dirs.length) { hide(details); return; }
+      list.textContent = dirs.join(' · ');
+      if (count) count.textContent = '(' + dirs.length + ')';
+      show(details);
     }
 
     // ---------- Repo status (on-demand) ----------
@@ -926,6 +948,7 @@ html.dark {
           data = data || {};
           renderWorkspaceRoot(data.workspace_root);
           renderProjects(data.directories);
+          renderInternalDirectories(data.internal_directories);
           renderAgents(data.agents);
           renderConfig(data.config);
           setLastUpdated();
@@ -948,6 +971,8 @@ html.dark {
 
     var retryBtn = $('retry-btn');
     if (retryBtn) retryBtn.addEventListener('click', loadWorkspace);
+    var projectSearch = $('project-search');
+    if (projectSearch) projectSearch.addEventListener('input', function () { renderProjects(allProjectDirectories); });
 
     // Initial load
     loadWorkspace();

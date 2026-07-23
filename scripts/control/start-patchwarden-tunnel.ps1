@@ -106,6 +106,31 @@ if ($ToolProfile -eq "chatgpt_direct") {
   $SkipWatcher = $true
 }
 
+$script:AgentEnvironmentNames = @(
+  ([string]$env:PATCHWARDEN_AGENT_ENV_ALLOWLIST -split ';') |
+    Where-Object { $_ -match '^[A-Za-z_][A-Za-z0-9_]*$' } |
+    Select-Object -Unique
+)
+
+function Suspend-AgentProviderEnvironment {
+  $saved = @{}
+  foreach ($name in $script:AgentEnvironmentNames) {
+    $item = Get-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+    if ($null -ne $item) {
+      $saved[$name] = [string]$item.Value
+      Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+    }
+  }
+  return $saved
+}
+
+function Restore-AgentProviderEnvironment {
+  param([hashtable]$Saved)
+  foreach ($name in $Saved.Keys) {
+    Set-Item -LiteralPath "Env:$name" -Value $Saved[$name]
+  }
+}
+
 function Assert-File {
   param([string]$Path, [string]$Name)
   if (-not (Test-Path -LiteralPath $Path)) {
@@ -274,9 +299,15 @@ function Get-DiagnosticCode {
 function Invoke-TunnelDoctor {
   $doctorArguments = @("doctor", "--profile", $Profile, "--explain", "--json")
   if ($script:UseProxyArgument) { $doctorArguments += @("--http-proxy", "env:HTTPS_PROXY") }
-  $output = (& $TunnelClientExe @doctorArguments 2>&1 | Out-String)
+  $savedAgentEnvironment = Suspend-AgentProviderEnvironment
+  try {
+    $output = (& $TunnelClientExe @doctorArguments 2>&1 | Out-String)
+    $exitCode = $LASTEXITCODE
+  } finally {
+    Restore-AgentProviderEnvironment -Saved $savedAgentEnvironment
+  }
   return [pscustomobject]@{
-    ExitCode = $LASTEXITCODE
+    ExitCode = $exitCode
     Output = $output
     ReasonCode = Get-DiagnosticCode $output
   }
@@ -350,11 +381,15 @@ function Start-OwnedWatcherProcess {
   $previousWatcherLauncherPid = $env:PATCHWARDEN_WATCHER_LAUNCHER_PID
   $previousXdgConfigHome = $env:XDG_CONFIG_HOME
   $previousPath = $env:PATH
+  $previousControlPlaneApiKey = $env:CONTROL_PLANE_API_KEY
+  $previousOwnerToken = $env:PATCHWARDEN_OWNER_TOKEN
   try {
     $env:PATCHWARDEN_WATCHER_INSTANCE_ID = $script:WatcherInstanceId
     $env:PATCHWARDEN_WATCHER_LAUNCHER_PID = [string]$PID
     $env:XDG_CONFIG_HOME = $OpencodeConfigHome
     if ($OpencodeBin) { $env:PATH = "$OpencodeBin;$env:PATH" }
+    Remove-Item Env:CONTROL_PLANE_API_KEY -ErrorAction SilentlyContinue
+    Remove-Item Env:PATCHWARDEN_OWNER_TOKEN -ErrorAction SilentlyContinue
     $script:WatcherProcess = Start-Process -FilePath $node `
       -ArgumentList @((Join-Path $ProjectRoot "dist\runner\watch.js")) `
       -WorkingDirectory $ProjectRoot -PassThru -WindowStyle Hidden `
@@ -363,6 +398,8 @@ function Start-OwnedWatcherProcess {
     if ($null -eq $previousWatcherInstanceId) { Remove-Item Env:PATCHWARDEN_WATCHER_INSTANCE_ID -ErrorAction SilentlyContinue } else { $env:PATCHWARDEN_WATCHER_INSTANCE_ID = $previousWatcherInstanceId }
     if ($null -eq $previousWatcherLauncherPid) { Remove-Item Env:PATCHWARDEN_WATCHER_LAUNCHER_PID -ErrorAction SilentlyContinue } else { $env:PATCHWARDEN_WATCHER_LAUNCHER_PID = $previousWatcherLauncherPid }
     if ($null -eq $previousXdgConfigHome) { Remove-Item Env:XDG_CONFIG_HOME -ErrorAction SilentlyContinue } else { $env:XDG_CONFIG_HOME = $previousXdgConfigHome }
+    if ($null -eq $previousControlPlaneApiKey) { Remove-Item Env:CONTROL_PLANE_API_KEY -ErrorAction SilentlyContinue } else { $env:CONTROL_PLANE_API_KEY = $previousControlPlaneApiKey }
+    if ($null -eq $previousOwnerToken) { Remove-Item Env:PATCHWARDEN_OWNER_TOKEN -ErrorAction SilentlyContinue } else { $env:PATCHWARDEN_OWNER_TOKEN = $previousOwnerToken }
     $env:PATH = $previousPath
   }
   Write-WatcherStatus -Status "starting"
@@ -412,7 +449,12 @@ function Invoke-WatcherSupervisorTick {
 
 function Get-TunnelHealth {
   if (-not (Test-Path -LiteralPath $HealthUrlFile) -or -not (Test-Path -LiteralPath $PidFile)) { return $null }
-  $output = (& $TunnelClientExe health --json --url-file $HealthUrlFile --pid-file $PidFile 2>&1 | Out-String)
+  $savedAgentEnvironment = Suspend-AgentProviderEnvironment
+  try {
+    $output = (& $TunnelClientExe health --json --url-file $HealthUrlFile --pid-file $PidFile 2>&1 | Out-String)
+  } finally {
+    Restore-AgentProviderEnvironment -Saved $savedAgentEnvironment
+  }
   try { return $output | ConvertFrom-Json } catch { return $null }
 }
 
@@ -657,12 +699,17 @@ if (Test-Path -LiteralPath $ProfilePath) {
 
 if ($profileNeedsInit) {
   Write-Host "[init] Creating tunnel-client profile: $Profile"
-  & $TunnelClientExe init `
-    --sample sample_mcp_stdio_local `
-    --profile $Profile `
-    --tunnel-id $TunnelId `
-    --mcp-command $McpStdioLauncherForTunnel `
-    --force
+  $savedAgentEnvironment = Suspend-AgentProviderEnvironment
+  try {
+    & $TunnelClientExe init `
+      --sample sample_mcp_stdio_local `
+      --profile $Profile `
+      --tunnel-id $TunnelId `
+      --mcp-command $McpStdioLauncherForTunnel `
+      --force
+  } finally {
+    Restore-AgentProviderEnvironment -Saved $savedAgentEnvironment
+  }
   Set-ProfileHealthListenAddr -ProfilePath $ProfilePath -HealthListenAddr $HealthListenAddr
 } else {
   Set-ProfileHealthListenAddr -ProfilePath $ProfilePath -HealthListenAddr $HealthListenAddr
@@ -733,8 +780,13 @@ try {
     Write-Host "[run-config] command: tunnel-client $($runArguments -join ' ')"
     $redirectedCommand = '""' + $TunnelClientExe + '" ' + $argumentLine + ' 1>"' + $StdoutLogFile + '" 2>"' + $StderrLogFile + '""'
     $processArgumentLine = '/d /s /c ' + $redirectedCommand
-    $script:TunnelProcess = Start-Process -FilePath $env:ComSpec -ArgumentList $processArgumentLine `
-      -WorkingDirectory $ProjectRoot -PassThru -WindowStyle Hidden
+    $savedAgentEnvironment = Suspend-AgentProviderEnvironment
+    try {
+      $script:TunnelProcess = Start-Process -FilePath $env:ComSpec -ArgumentList $processArgumentLine `
+        -WorkingDirectory $ProjectRoot -PassThru -WindowStyle Hidden
+    } finally {
+      Restore-AgentProviderEnvironment -Saved $savedAgentEnvironment
+    }
     Write-TunnelStatus -Status "connecting" -ReasonCode $null -Ready $false -Attempt $attempt -ProcessId $script:TunnelProcess.Id
     Write-Host "[run] supervised command PID $($script:TunnelProcess.Id), attempt $attempt"
 

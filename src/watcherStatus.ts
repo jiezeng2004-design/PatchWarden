@@ -2,10 +2,11 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getConfig, getTasksDir, type PatchWardenConfig } from "./config.js";
 
-export type WatcherState = "healthy" | "stale" | "missing" | "unreadable";
+export type WatcherState = "healthy" | "degraded" | "stale" | "missing" | "unreadable";
 export type PendingReason =
   | "queued_waiting_for_watcher"
   | "queued_but_watcher_stale"
+  | "queued_but_watcher_degraded"
   | "queued_but_watcher_missing"
   | "queued_but_watcher_unreadable"
   | "agent_running"
@@ -75,6 +76,22 @@ export function readWatcherStatus(
     if (!Number.isFinite(heartbeatMs)) throw new Error("invalid heartbeat timestamp");
     const ageMs = Math.max(0, nowMs - heartbeatMs);
     const ageSeconds = Math.round(ageMs / 1000);
+    if (data.status === "degraded") {
+      return {
+        status: "degraded",
+        available: false,
+        stale_after_seconds: staleAfterSeconds,
+        last_heartbeat_at: String(data.last_heartbeat_at),
+        heartbeat_age_seconds: ageSeconds,
+        heartbeat_pid: Number.isInteger(Number(data.pid)) ? Number(data.pid) : null,
+        instance_id: typeof data.instance_id === "string" ? data.instance_id : null,
+        launcher_pid: Number.isInteger(Number(data.launcher_pid)) ? Number(data.launcher_pid) : null,
+        reason: typeof data.last_error === "string" && data.last_error
+          ? `Watcher is degraded after repeated tick failures: ${data.last_error}`
+          : "Watcher is degraded after repeated tick failures. Restart the PatchWarden watcher.",
+        activity: null,
+      };
+    }
     const healthy = ageMs < staleAfterSeconds * 1000;
     if (healthy) {
       return {
@@ -186,6 +203,7 @@ export function derivePendingReason(
   watcher: WatcherStatusSnapshot
 ): PendingReason {
   if (task.status === "pending") {
+    if (watcher.status === "degraded") return "queued_but_watcher_degraded";
     if (watcher.status === "stale") return "queued_but_watcher_stale";
     if (watcher.status === "missing") return "queued_but_watcher_missing";
     if (watcher.status === "unreadable") return "queued_but_watcher_unreadable";

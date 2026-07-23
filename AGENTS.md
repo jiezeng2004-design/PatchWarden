@@ -35,3 +35,21 @@ Use `npm.cmd run doctor` instead of `doctor:ci` when validating a configured loc
 - Keep README, examples, tool manifests, package metadata, and migration docs aligned.
 - Use branch -> PR -> CI -> merge. Publishing is manual and must separately verify GitHub Release, `patchwarden` on npm, and `dist-tags.latest`.
 - The pre-rename npm package is frozen; do not publish new versions under the legacy name.
+
+## Codex Memory
+
+本项目的长期记忆库位于：
+
+`D:\ai_agent\CodexMemory`
+
+处理复杂任务前请先阅读：
+
+- `D:\ai_agent\CodexMemory\04_Index\00_INDEX.md`
+- `D:\ai_agent\CodexMemory\00_Workspace\CURRENT.md`
+- `D:\ai_agent\CodexMemory\03_Permanent\Projects\PatchWarden.md`
+
+如果本次任务产生长期有效结论，请更新对应项目记忆。
+如果本次任务出现可复用修复经验，请记录到 Bugs_and_Fixes。
+如果本次任务出现失败尝试，请记录到 Failed_Attempts。
+如果本次任务形成稳定部署流程，请记录到 Runbooks。
+禁止记录真实 API Key、Token、Cookie、密码、私钥。

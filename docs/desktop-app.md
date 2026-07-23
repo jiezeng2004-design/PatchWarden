@@ -88,6 +88,14 @@ Uninstalling the app does not remove config, tasks, evidence, or workspace data.
   the port.
 - Closing the window hides it to the tray by default. `Exit desktop app` stops
   only the Control Center child owned by that app process.
+- Desktop-owned utility and PowerShell children receive a minimal runtime and
+  proxy environment. Provider variables require an explicit Agent allow-list,
+  while Control/Tunnel owner credentials are always removed. Windows
+  PowerShell and `where.exe` are resolved from the system directory rather than
+  the selected workspace or its current directory.
+- Backend restarts are serialized. A restart waits for the exact owned child to
+  emit `exit` (or reach a bounded timeout), and a configuration change received
+  during an active restart schedules one further restart instead of racing it.
 - `Stop all and exit` explicitly requests the existing bounded stop action for
   Core/Direct before closing.
 - Start/restart succeeds only after the selected tunnel health endpoint is
@@ -122,6 +130,7 @@ npm.cmd ci
 npm.cmd run build
 npm.cmd install --prefix desktop --cache .\.npm-cache
 npm.cmd run desktop:test
+npm.cmd run desktop:preflight
 npm.cmd run desktop:package
 ```
 
@@ -134,9 +143,31 @@ root package-lock production dependency closure below `resources/core/node_modul
 Validate the unpacked runtime from a directory outside the repository so it
 cannot accidentally resolve dependencies from the developer checkout.
 
+`npm.cmd run desktop:preflight` automates that isolated validation and writes a
+privacy-bounded receipt in a unique `release/desktop-preflight-*` directory.
+The receipt records the branch, commit, dirty-state hashes, toolchain versions,
+check durations, package file count, runtime manifest digest, unpacked
+executable digest, and UI smoke result. It stores no diff content, credentials,
+configuration values, or browser state. The smoke process uses temporary
+`LOCALAPPDATA` / `APPDATA`, a nonexistent isolated config, and launcher-owned
+processes only.
+
+Viewport DOM metrics, page readiness, and the single-instance result are hard
+smoke gates. Electron screenshots are best-effort evidence because Windows
+graphics capture can be unavailable in CI sessions; capture failures are
+counted in the receipt without crashing Desktop. Local visual acceptance can
+pass `--require-screenshots` to `desktop/scripts/smoke-unpacked.mjs`, or use
+`--no-capture` while an external UI automation tool owns Windows Graphics
+Capture.
+
+For a release candidate, run `npm.cmd run desktop:preflight:release`. It rejects
+dirty worktrees. The regular preflight remains available for validating an
+intentional local working-tree baseline before it is committed.
+
 ## Release checklist
 
-1. Run the full core validation chain and `npm.cmd run desktop:package`.
+1. From a clean checkout, run `npm.cmd run desktop:preflight:release`, then the
+   full core validation chain and `npm.cmd run desktop:package`.
 2. Install and uninstall on a clean Windows x64 environment without elevation.
 3. Verify first-run setup, tray behavior, restart, explicit exit, and retained
    user data after uninstall.

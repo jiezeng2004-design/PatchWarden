@@ -11,11 +11,12 @@ import { exportHandoff } from "../../goal/handoffExport.js";
 import { acceptSubgoal, rejectSubgoal, summarizeGoalProgress } from "../../goal/goalProgress.js";
 import { exportGoalReport } from "../../goal/goalReport.js";
 import { importSpecKitTasks, parseSpecKitJson } from "../../goal/specKitImport.js";
-import { createSubgoalTask } from "../goalSubgoalTask.js";
-import { mergeWorktreeTool } from "../mergeWorktree.js";
-import { discardWorktreeTool } from "../discardWorktree.js";
+import { createSubgoalTask } from "../goals/goalSubgoalTask.js";
+import { mergeWorktreeTool } from "../workspace/mergeWorktree.js";
+import { discardWorktreeTool } from "../workspace/discardWorktree.js";
 import type { ToolHandlerMap } from "./types.js";
 import { toResult } from "./types.js";
+import { parseOptionalTaskTemplate } from "./validation.js";
 
 export const goalHandlers: ToolHandlerMap = {
   create_goal: async (args) => {
@@ -45,7 +46,7 @@ export const goalHandlers: ToolHandlerMap = {
         plan_id: args?.plan_id ? String(args.plan_id) : undefined,
         inline_plan: args?.inline_plan ? String(args.inline_plan) : undefined,
         plan_title: args?.plan_title ? String(args.plan_title) : undefined,
-        template: args?.template ? (String(args.template) as any) : undefined,
+        template: parseOptionalTaskTemplate(args?.template),
         goal: args?.goal ? String(args.goal) : undefined,
         agent: args?.agent ? String(args.agent) : undefined,
         repo_path: String(args?.repo_path ?? ""),

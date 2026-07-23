@@ -9,8 +9,8 @@
  */
 import { existsSync } from "node:fs";
 import { type ServerResponse } from "node:http";
-import { type AgentAvailability } from "../../tools/listAgents.js";
-import { type TaskEntry } from "../../tools/listTasks.js";
+import { type AgentAvailability } from "../../tools/workspace/listAgents.js";
+import { type TaskEntry } from "../../tools/tasks/listTasks.js";
 import { type WatcherStatusSnapshot } from "../../watcherStatus.js";
 import { PATCHWARDEN_VERSION, TOOL_SCHEMA_EPOCH } from "../../version.js";
 import { redactSensitiveValue } from "../../security/contentRedaction.js";
@@ -62,6 +62,59 @@ interface StatusSnapshotForSuggestions {
   direct_profile_enabled: boolean;
 }
 
+export interface ExperienceStatus {
+  readiness: "ready" | "needs_action" | "blocked";
+  live_checks: Array<{
+    key: string;
+    label: string;
+    state: "ready" | "needs_action" | "blocked" | "optional";
+    detail: string;
+  }>;
+  historical_summary: {
+    stale_tasks: number;
+    failed_tasks: number;
+    note: string;
+  };
+}
+
+/**
+ * Keep current readiness separate from historical evidence. A month-old failed
+ * task is useful for audit, but must not make a configured local bridge look
+ * unavailable on the first screen.
+ */
+export function buildExperienceStatus(snapshot: StatusSnapshotForSuggestions): ExperienceStatus {
+  const coreReady = snapshot.core.available && snapshot.tunnel.core.ready === true;
+  const watcherReady = snapshot.watcher.status === "healthy";
+  const agentsReady = snapshot.agents.some((agent) => agent.available);
+  const directEnabled = snapshot.direct_profile_enabled;
+  const directReady = snapshot.direct.available && snapshot.tunnel.direct.ready === true;
+  const staleTasks = snapshot.tasks.stale;
+  const failedTasks = snapshot.tasks.tasks.filter((task) => String((task as TaskEntry).status || "").includes("failed")).length;
+
+  const live_checks: ExperienceStatus["live_checks"] = [
+    { key: "workspace_agents", label: "工作区与 Agent", state: agentsReady ? "ready" : "blocked", detail: agentsReady ? "工作区内至少有一个可用 Agent" : "需要配置工作区或可用 Agent" },
+    { key: "core", label: "Core 服务", state: coreReady ? "ready" : "needs_action", detail: coreReady ? "Core 与 Tunnel 已就绪" : "启动 Core 后会继续检查 Tunnel 与 Watcher" },
+    { key: "watcher", label: "任务监视器", state: watcherReady ? "ready" : "needs_action", detail: watcherReady ? "Watcher 心跳正常" : "Core 启动后 Watcher 将处理排队任务" },
+    { key: "direct", label: "Direct 编辑", state: directEnabled ? (directReady ? "ready" : "needs_action") : "optional", detail: directEnabled ? (directReady ? "Direct 已就绪" : "已启用但尚未就绪") : "可选高级能力，未启用不会影响 Core" },
+  ];
+
+  const readiness: ExperienceStatus["readiness"] = !agentsReady
+    ? "blocked"
+    : coreReady && watcherReady && (!directEnabled || directReady)
+      ? "ready"
+      : "needs_action";
+
+  return {
+    readiness,
+    live_checks,
+    historical_summary: {
+      stale_tasks: staleTasks,
+      failed_tasks: failedTasks,
+      note: "历史任务与审计记录不会影响当前实时就绪状态。",
+    },
+  };
+}
+
 export function reconcileTunnelStatus(
   status: Record<string, unknown>,
   health: RuntimeHealth,
@@ -97,7 +150,7 @@ export function buildSuggestions(s: StatusSnapshotForSuggestions): Suggestion[] 
     });
   }
 
-  if (s.watcher.status === "stale" || s.watcher.status === "unreadable") {
+  if (s.watcher.status === "degraded" || s.watcher.status === "stale" || s.watcher.status === "unreadable") {
     out.push({
       code: "watcher_stale",
       severity: "error",
@@ -219,6 +272,7 @@ export async function handleStatus(res: ServerResponse): Promise<void> {
       direct_profile_enabled: config.enableDirectProfile === true,
     };
     const suggestions = buildSuggestions(snapshotForSuggestions);
+    const experience = buildExperienceStatus(snapshotForSuggestions);
     const tunnelClientExe = findTunnelClientExecutable();
 
     // Diff against the previous poll to record observed state-change events.
@@ -240,6 +294,7 @@ export async function handleStatus(res: ServerResponse): Promise<void> {
       workspace_root: workspaceRoot,
       tasks,
       suggestions,
+      experience,
       direct_profile_enabled: config.enableDirectProfile === true,
       setup: {
         tunnel_client: {

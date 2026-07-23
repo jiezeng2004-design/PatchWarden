@@ -15,13 +15,13 @@ PatchWarden has three control layers:
 From the repository root:
 
 ```powershell
-.\PatchWarden-Desktop.cmd
-.\PatchWarden-Control.cmd
-.\PatchWarden-Control-Tray.cmd --foreground
+.\scripts\launchers\PatchWarden-Desktop.cmd
+.\scripts\launchers\PatchWarden-Control.cmd
+.\scripts\launchers\PatchWarden-Control-Tray.cmd --foreground
 .\PatchWarden.cmd status all
 ```
 
-Use `PatchWarden-Control.cmd` for normal desktop use. Use the tray when you only
+Use `scripts\launchers\PatchWarden-Control.cmd` for normal desktop use. Use the tray when you only
 need quick controls. Use `PatchWarden.cmd` when you need explicit CLI output or
 automation-friendly commands.
 

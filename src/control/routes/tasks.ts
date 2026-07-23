@@ -10,9 +10,8 @@
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { type ServerResponse } from "node:http";
-import { listTasks, type TaskEntry } from "../../tools/listTasks.js";
-import type { AcceptanceStatus } from "../../tools/createTask.js";
-import { safeAudit, safeDiffSummary, safeResult, safeTestSummary } from "../../tools/safeViews.js";
+import { listTasks } from "../../tools/tasks/listTasks.js";
+import { safeAudit, safeDiffSummary, safeResult, safeTestSummary } from "../../tools/diagnostics/safeViews.js";
 import { getTasksDir } from "../../config.js";
 import {
   augmentTaskWithStale,
@@ -20,11 +19,12 @@ import {
   fileMtimeIso,
   isValidTaskId,
   parseReviewVerdict,
+  reconstructTaskEntry,
   readWatcherStatusSafe,
   StaleClassification,
   TERMINAL_TASK_STATUSES,
 } from "../runtime.js";
-import { config, errorMessage, readJsonFileSafe, readTextFileSafe, sendJson } from "../shared.js";
+import { config, errorMessage, guardControlPath, readJsonFileSafe, readTextFileSafe, sendJson } from "../shared.js";
 
 export interface TaskFilters {
   repo_path?: string;
@@ -32,6 +32,10 @@ export interface TaskFilters {
   acceptance_status?: string;
   agent?: string;
   warning_type?: string;
+  date_from?: string;
+  date_to?: string;
+  limit?: number;
+  cursor?: string;
 }
 
 export function handleTasks(res: ServerResponse, filters?: TaskFilters): void {
@@ -40,6 +44,7 @@ export function handleTasks(res: ServerResponse, filters?: TaskFilters): void {
     const watcher = result.watcher;
     const now = Date.now();
     let augmented = result.tasks.map((t) => augmentTaskWithStale(t, watcher, now));
+    const facetSource = augmented.slice();
     // Apply optional filters from query params.
     if (filters) {
       if (filters.repo_path) {
@@ -66,21 +71,58 @@ export function handleTasks(res: ServerResponse, filters?: TaskFilters): void {
       }
       if (filters.warning_type) {
         const wt = filters.warning_type;
-        if (wt === "stale") {
+        if (wt === "stale" || wt === "stale_task") {
           augmented = augmented.filter((t) => t.is_stale);
         } else if (wt === "error") {
           augmented = augmented.filter((t) => t.error !== null && t.error !== "");
+        } else if (wt === "failed_verification") {
+          augmented = augmented.filter((t) => t.status === wt);
         } else {
-          // Treat as a specific stale_reason token to match against.
-          augmented = augmented.filter((t) => Array.isArray(t.stale_reasons) && t.stale_reasons.includes(wt));
+          augmented = augmented.filter((t) =>
+            t.status === wt || t.acceptance_status === wt ||
+            (Array.isArray(t.stale_reasons) && t.stale_reasons.includes(wt)),
+          );
         }
       }
+      if (filters.date_from || filters.date_to) {
+        const from = filters.date_from ? Date.parse(`${filters.date_from}T00:00:00`) : Number.NEGATIVE_INFINITY;
+        const to = filters.date_to ? Date.parse(`${filters.date_to}T23:59:59`) : Number.POSITIVE_INFINITY;
+        augmented = augmented.filter((task) => {
+          const timestamp = Date.parse(String(task.updated_at || task.created_at || ""));
+          return Number.isFinite(timestamp) && timestamp >= from && timestamp <= to;
+        });
+      }
     }
+    augmented.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")) || String(b.task_id).localeCompare(String(a.task_id)));
     const staleCount = augmented.filter((t) => t.is_stale).length;
+    const limit = Math.max(10, Math.min(filters?.limit || 25, 100));
+    const offset = filters?.cursor && /^\d+$/.test(filters.cursor) ? Number(filters.cursor) : 0;
+    const page = augmented.slice(offset, offset + limit);
+    const nextCursor = offset + page.length < augmented.length ? String(offset + page.length) : null;
+    const facets = {
+      repos: [...new Set(facetSource.map((task) => String(task.repo_path || ".")))].sort(),
+      statuses: [...new Set(facetSource.map((task) => String(task.status || "unknown")))].sort(),
+      agents: [...new Set(facetSource.map((task) => String(task.agent || "unknown")))].sort(),
+    };
     sendJson(res, 200, {
-      tasks: augmented,
+      tasks: page,
       total: augmented.length,
-      returned: augmented.length,
+      returned: page.length,
+      nextCursor,
+      next_cursor: nextCursor,
+      filters: {
+        applied: {
+          repo_path: filters?.repo_path || null,
+          status: filters?.status || null,
+          acceptance_status: filters?.acceptance_status || null,
+          agent: filters?.agent || null,
+          warning_type: filters?.warning_type || null,
+          date_from: filters?.date_from || null,
+          date_to: filters?.date_to || null,
+        },
+        options: facets,
+      },
+      facets,
       watcher,
       stale_count: staleCount,
     });
@@ -89,6 +131,10 @@ export function handleTasks(res: ServerResponse, filters?: TaskFilters): void {
       tasks: [],
       total: 0,
       returned: 0,
+      nextCursor: null,
+      next_cursor: null,
+      filters: { applied: {}, options: { repos: [], statuses: [], agents: [] } },
+      facets: { repos: [], statuses: [], agents: [] },
       watcher: null,
       stale_count: 0,
       error: errorMessage(err),
@@ -156,9 +202,13 @@ export function handleStaleTasks(res: ServerResponse): void {
 
 export function handleTaskDetail(res: ServerResponse, taskId: string): void {
   try {
+    if (!isValidTaskId(taskId)) {
+      sendJson(res, 400, { error: "Invalid task id" });
+      return;
+    }
     const tasksDir = getTasksDir(config);
-    const taskDir = join(tasksDir, taskId);
-    if (!existsSync(taskDir) || !statSync(taskDir).isDirectory()) {
+    const taskDir = guardControlPath(join(tasksDir, taskId), config.tasksDir);
+    if (!taskDir || !existsSync(taskDir) || !statSync(taskDir).isDirectory()) {
       sendJson(res, 404, { error: "Task not found" });
       return;
     }
@@ -204,33 +254,7 @@ export function handleTaskDetail(res: ServerResponse, taskId: string): void {
     let stale: StaleClassification | null = null;
     if (statusData) {
       const watcher = readWatcherStatusSafe();
-      const VALID_ACCEPTANCE2 = ["pending", "accepted", "rejected", "needs_fix", "blocked"];
-      const taskStatus2 = String(statusData.status || "pending");
-      const taskAcceptanceStatus2 = taskStatus2 === "done_by_agent"
-        ? (typeof statusData.acceptance_status === "string" && VALID_ACCEPTANCE2.includes(statusData.acceptance_status) ? (statusData.acceptance_status as AcceptanceStatus) : "pending" as AcceptanceStatus)
-        : null;
-      const entry: TaskEntry = {
-        task_id: taskId,
-        plan_id: String(statusData.plan_id || ""),
-        title: "",
-        agent: String(statusData.agent || ""),
-        status: taskStatus2 as TaskEntry["status"],
-        phase: String(runtimeData?.phase || statusData.phase || "queued") as TaskEntry["phase"],
-        acceptance_status: taskAcceptanceStatus2,
-        created_at: String(statusData.created_at || ""),
-        updated_at: String(statusData.updated_at || ""),
-        workspace_root: String(statusData.workspace_root || config.workspaceRoot),
-        repo_path: String(statusData.repo_path || "."),
-        resolved_repo_path: String(statusData.resolved_repo_path || statusData.repo_path || config.workspaceRoot),
-        test_command: String(statusData.test_command || ""),
-        verify_commands: Array.isArray(statusData.verify_commands) ? (statusData.verify_commands as string[]) : [],
-        error: statusData.error ? String(statusData.error) : null,
-        last_heartbeat_at: String(runtimeData?.last_heartbeat_at || statusData.last_heartbeat_at || statusData.updated_at || ""),
-        current_command: runtimeData?.current_command === undefined ? null : String(runtimeData.current_command || "") || null,
-        timeout_seconds: Number(statusData.timeout_seconds) || config.defaultTaskTimeoutSeconds,
-        pending_reason: null,
-        watcher_status: watcher.status,
-      };
+      const entry = reconstructTaskEntry(taskId, statusData, runtimeData ?? {}, watcher);
       stale = classifyStaleTask(entry, watcher);
     }
 
@@ -264,11 +288,7 @@ export function handleTaskSafeResult(res: ServerResponse, taskId: string): void 
       sendJson(res, 400, { error: "Invalid task id" });
       return;
     }
-    try {
-      sendJson(res, 200, safeResult(taskId, { max_items: 12 }));
-    } catch (err) {
-      sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
-    }
+    sendJson(res, 200, safeResult(taskId, { max_items: 12 }));
   } catch (err) {
     sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
   }
@@ -280,11 +300,7 @@ export function handleTaskSafeAudit(res: ServerResponse, taskId: string): void {
       sendJson(res, 400, { error: "Invalid task id" });
       return;
     }
-    try {
-      sendJson(res, 200, safeAudit(taskId, { max_items: 12 }));
-    } catch (err) {
-      sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
-    }
+    sendJson(res, 200, safeAudit(taskId, { max_items: 12 }));
   } catch (err) {
     sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
   }
@@ -296,11 +312,7 @@ export function handleTaskSafeTestSummary(res: ServerResponse, taskId: string): 
       sendJson(res, 400, { error: "Invalid task id" });
       return;
     }
-    try {
-      sendJson(res, 200, safeTestSummary(taskId));
-    } catch (err) {
-      sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
-    }
+    sendJson(res, 200, safeTestSummary(taskId));
   } catch (err) {
     sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
   }
@@ -312,11 +324,7 @@ export function handleTaskSafeDiffSummary(res: ServerResponse, taskId: string): 
       sendJson(res, 400, { error: "Invalid task id" });
       return;
     }
-    try {
-      sendJson(res, 200, safeDiffSummary(taskId, { max_items: 12 }));
-    } catch (err) {
-      sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
-    }
+    sendJson(res, 200, safeDiffSummary(taskId, { max_items: 12 }));
   } catch (err) {
     sendJson(res, 200, { task_id: taskId, error: errorMessage(err) });
   }

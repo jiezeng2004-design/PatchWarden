@@ -6,11 +6,13 @@
   "agents": {
     "codex": {
       "command": "codex",
-      "args": ["exec", "--cd", "{repo}", "{prompt}"]
+      "args": ["exec", "--cd", "{repo}", "{prompt}"],
+      "envAllowlist": []
     },
     "opencode": {
       "command": "opencode",
-      "args": ["run", "{prompt}"]
+      "args": ["run", "{prompt}"],
+      "envAllowlist": []
     }
   },
   "allowedTestCommands": [

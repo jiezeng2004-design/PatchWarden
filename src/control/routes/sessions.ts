@@ -10,7 +10,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { type ServerResponse } from "node:http";
 import { getDirectSessionsDir } from "../../config.js";
-import { safeAuditDirectSession, safeDirectSummary, safeFinalizeDirectSession } from "../../tools/safeViews.js";
+import { safeAuditDirectSession, safeDirectSummary, safeFinalizeDirectSession } from "../../tools/diagnostics/safeViews.js";
 import {
   fileMtimeIso,
   isValidDirectSessionId,
@@ -18,7 +18,7 @@ import {
   recordEvent,
   writeHiddenDirectSessionIds,
 } from "../runtime.js";
-import { config, errorMessage, readJsonFileSafe, readTextFileSafe, sendJson } from "../shared.js";
+import { config, errorMessage, guardControlPath, readJsonFileSafe, readTextFileSafe, sendJson } from "../shared.js";
 
 interface DirectSessionSummary {
   session_id: string;
@@ -91,19 +91,28 @@ function readDirectSessionSummary(sessionDir: string, sessionId: string): Direct
   };
 }
 
-export function handleDirectSessions(res: ServerResponse): void {
+export interface DirectSessionFilters {
+  state?: "active" | "archive" | "finalized" | "audited" | "expired";
+  repo_path?: string;
+  date_from?: string;
+  date_to?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export function handleDirectSessions(res: ServerResponse, filters?: DirectSessionFilters): void {
   try {
     const sessionsDir = getDirectSessionsDir(config);
     if (!existsSync(sessionsDir)) {
       // Directory missing -> empty list, never 500.
-      sendJson(res, 200, { sessions: [], total: 0, reason: null });
+      sendJson(res, 200, emptyDirectSessionResponse(filters));
       return;
     }
     let entries: import("node:fs").Dirent[] = [];
     try {
       entries = readdirSync(sessionsDir, { withFileTypes: true }).filter((e) => e.isDirectory());
     } catch (err) {
-      sendJson(res, 200, { sessions: [], total: 0, reason: errorMessage(err) });
+      sendJson(res, 200, { ...emptyDirectSessionResponse(filters), reason: errorMessage(err) });
       return;
     }
     // Filter out sessions hidden from the dashboard via POST .../hide.
@@ -111,32 +120,92 @@ export function handleDirectSessions(res: ServerResponse): void {
     const summaries: DirectSessionSummary[] = [];
     for (const entry of entries) {
       if (hiddenIds.has(entry.name)) continue;
-      const summary = readDirectSessionSummary(join(sessionsDir, entry.name), entry.name);
+      const sessionDir = guardControlPath(join(sessionsDir, entry.name), config.directSessionsDir);
+      if (!sessionDir) continue;
+      const summary = readDirectSessionSummary(sessionDir, entry.name);
       if (summary) summaries.push(summary);
     }
-    // Sort by created_at descending.
+    // Sort by created_at descending, then apply archive filters and pagination.
     summaries.sort((a, b) => b.created_at.localeCompare(a.created_at));
-    sendJson(res, 200, { sessions: summaries, total: summaries.length, reason: null });
+    const now = Date.now();
+    let filtered = summaries;
+    if (filters?.state) {
+      filtered = filtered.filter((session) => {
+        const expired = Boolean(session.expires_at) && Date.parse(session.expires_at) < now;
+        if (filters.state === "archive") return session.finalized || session.audited || expired;
+        if (filters.state === "expired") return expired;
+        if (filters.state === "audited") return session.audited && !expired;
+        if (filters.state === "finalized") return session.finalized && !session.audited && !expired;
+        return !session.finalized && !expired;
+      });
+    }
+    if (filters?.repo_path) filtered = filtered.filter((session) => session.repo_path === filters.repo_path);
+    if (filters?.date_from || filters?.date_to) {
+      const from = filters.date_from ? Date.parse(`${filters.date_from}T00:00:00`) : Number.NEGATIVE_INFINITY;
+      const to = filters.date_to ? Date.parse(`${filters.date_to}T23:59:59`) : Number.POSITIVE_INFINITY;
+      filtered = filtered.filter((session) => {
+        const timestamp = Date.parse(session.created_at);
+        return Number.isFinite(timestamp) && timestamp >= from && timestamp <= to;
+      });
+    }
+    const limit = Math.max(10, Math.min(filters?.limit || 30, 100));
+    const offset = filters?.cursor && /^\d+$/.test(filters.cursor) ? Number(filters.cursor) : 0;
+    const sessions = filtered.slice(offset, offset + limit);
+    const nextCursor = offset + sessions.length < filtered.length ? String(offset + sessions.length) : null;
+    const repos = [...new Set(summaries.map((session) => session.repo_path).filter(Boolean))].sort();
+    sendJson(res, 200, {
+      sessions,
+      total: filtered.length,
+      returned: sessions.length,
+      nextCursor,
+      next_cursor: nextCursor,
+      filters: {
+        applied: {
+          state: filters?.state || null,
+          repo_path: filters?.repo_path || null,
+          date_from: filters?.date_from || null,
+          date_to: filters?.date_to || null,
+        },
+        options: { repos, states: ["active", "archive", "finalized", "audited", "expired"] },
+      },
+      direct_profile_enabled: config.enableDirectProfile === true,
+      reason: null,
+    });
   } catch (err) {
-    sendJson(res, 200, { sessions: [], total: 0, reason: errorMessage(err) });
+    sendJson(res, 200, { ...emptyDirectSessionResponse(filters), reason: errorMessage(err) });
   }
+}
+
+function emptyDirectSessionResponse(filters?: DirectSessionFilters): Record<string, unknown> {
+  return {
+    sessions: [],
+    total: 0,
+    returned: 0,
+    nextCursor: null,
+    next_cursor: null,
+    filters: {
+      applied: {
+        state: filters?.state || null,
+        repo_path: filters?.repo_path || null,
+        date_from: filters?.date_from || null,
+        date_to: filters?.date_to || null,
+      },
+      options: { repos: [], states: ["active", "archive", "finalized", "audited", "expired"] },
+    },
+    direct_profile_enabled: config.enableDirectProfile === true,
+    reason: null,
+  };
 }
 
 export function handleDirectSessionDetail(res: ServerResponse, sessionId: string): void {
   try {
-    if (
-      sessionId === "." ||
-      sessionId === ".." ||
-      sessionId.includes("/") ||
-      sessionId.includes("\\") ||
-      sessionId.includes("\0")
-    ) {
+    if (!isValidDirectSessionId(sessionId)) {
       sendJson(res, 400, { error: "Invalid session id" });
       return;
     }
     const sessionsDir = getDirectSessionsDir(config);
-    const sessionDir = join(sessionsDir, sessionId);
-    if (!existsSync(sessionDir) || !statSync(sessionDir).isDirectory()) {
+    const sessionDir = guardControlPath(join(sessionsDir, sessionId), config.directSessionsDir);
+    if (!sessionDir || !existsSync(sessionDir) || !statSync(sessionDir).isDirectory()) {
       sendJson(res, 404, { error: "Direct session not found" });
       return;
     }
@@ -158,13 +227,7 @@ export function handleDirectSessionDetail(res: ServerResponse, sessionId: string
 
 export function handleDirectSessionSafeSummary(res: ServerResponse, sessionId: string): void {
   try {
-    if (
-      sessionId === "." ||
-      sessionId === ".." ||
-      sessionId.includes("/") ||
-      sessionId.includes("\\") ||
-      sessionId.includes("\0")
-    ) {
+    if (!isValidDirectSessionId(sessionId)) {
       sendJson(res, 400, { error: "Invalid session id" });
       return;
     }

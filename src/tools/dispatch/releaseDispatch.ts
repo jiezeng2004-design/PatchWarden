@@ -10,16 +10,17 @@ import {
   releasePrepare,
   releaseVerify,
   releaseCleanup,
-} from "../releaseMode.js";
+} from "../release/releaseMode.js";
 import type { ToolHandlerMap } from "./types.js";
 import { toResult } from "./types.js";
+import { parseReleaseStage } from "./validation.js";
 
 export const releaseHandlers: ToolHandlerMap = {
   release_check: async (args) => {
     return toResult(
       await releaseCheck({
         repo_path: String(args?.repo_path ?? ""),
-        target_stage: String(args?.target_stage ?? "local_ready") as any,
+        target_stage: parseReleaseStage(args?.target_stage),
         package_name: args?.package_name ? String(args.package_name) : undefined,
         version: args?.version ? String(args.version) : undefined,
         github_repo: args?.github_repo ? String(args.github_repo) : undefined,

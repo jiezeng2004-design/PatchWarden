@@ -32,3 +32,7 @@ safe-bifrost-*.tgz
 /CODE_WIKI.md
 /PatchWarden-UI.zip
 /patchwarden-v*-SHA256SUMS.txt
+/result.json
+/diff.patch
+/file-stats.json
+/verify.json

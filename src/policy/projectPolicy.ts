@@ -334,10 +334,13 @@ function pathMatchesPattern(relPath: string, pattern: string): boolean {
 }
 
 function parseGithubRepo(repository: unknown): string | null {
+  const repositoryObject = repository && typeof repository === "object" && !Array.isArray(repository)
+    ? repository as Record<string, unknown>
+    : null;
   const raw = typeof repository === "string"
     ? repository
-    : repository && typeof repository === "object" && typeof (repository as any).url === "string"
-      ? (repository as any).url
+    : typeof repositoryObject?.url === "string"
+      ? repositoryObject.url
       : "";
   const match = raw.match(/github\.com[:/](.+?\/.+?)(?:\.git)?(?:[#?].*)?$/i);
   return match ? match[1] : null;

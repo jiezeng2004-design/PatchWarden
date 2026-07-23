@@ -11,7 +11,7 @@
 
 import { PatchWardenError } from "../errors.js";
 import { addSubgoal, type GoalStatus } from "./goalStatus.js";
-import { readGoalStatus, writeGoalStatus } from "./goalStore.js";
+import { mutateGoalStatus } from "./goalStore.js";
 
 // ── 类型定义 ──────────────────────────────────────────────────────
 
@@ -207,8 +207,8 @@ export function importSpecKitTasks(
 
   const workspaceRoot = options?.workspaceRoot;
 
-  // ── 读取现有 GoalStatus ────────────────────────────────────
-  let goalStatus: GoalStatus = readGoalStatus(goalId, workspaceRoot);
+  return mutateGoalStatus(goalId, (currentGoalStatus) => {
+  let goalStatus: GoalStatus = currentGoalStatus;
 
   // ── 构建 external_ref → subgoal_id 映射（现有 subgoal）─────
   const refToSubgoalId = new Map<string, string>();
@@ -341,15 +341,15 @@ export function importSpecKitTasks(
     };
   }
 
-  // ── 持久化（原子写）────────────────────────────────────────
-  writeGoalStatus(goalId, goalStatus, workspaceRoot);
-
-  // ── 返回结果 ───────────────────────────────────────────────
   return {
-    goal_id: goalId,
-    spec_name: input.spec,
-    created_count: createdIds.length,
-    existing_count: existingCount,
-    subgoal_ids: createdIds,
+    next: goalStatus,
+    result: {
+      goal_id: goalId,
+      spec_name: input.spec,
+      created_count: createdIds.length,
+      existing_count: existingCount,
+      subgoal_ids: createdIds,
+    },
   };
+  }, workspaceRoot);
 }

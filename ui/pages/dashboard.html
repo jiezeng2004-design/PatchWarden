@@ -292,10 +292,11 @@ html.dark {
       <!-- ===== ERROR BANNER ===== -->
       <div id="error-banner" class="hidden mb-4 rounded-lg px-4 py-3 text-sm" style="background-color: var(--pw-state-error-bg); border: 1px solid var(--pw-state-error); color: var(--pw-state-error); font-family: var(--pw-font-sans);"></div>
 
-      <!-- ===== HEALTH SCORE CARD ===== -->
+      <!-- ===== LIVE READINESS CARD ===== -->
+      <div class="mb-2"><h2 class="text-xs font-semibold uppercase tracking-wide" style="color:var(--pw-text-tertiary);" data-zh="运行状态" data-en="Live status">运行状态</h2></div>
       <div id="health-score-card" class="rounded-lg mb-4" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
         <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
-          <h2 class="text-sm font-semibold truncate" data-zh="健康评分" data-en="Health Score" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">健康评分</h2>
+          <h2 class="text-sm font-semibold truncate" data-zh="实时就绪状态" data-en="Live Readiness" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">实时就绪状态</h2>
           <span id="health-score-badge" class="text-xs font-semibold px-2.5 py-1 rounded-full whitespace-nowrap" style="color: var(--pw-text-tertiary); background-color: var(--pw-bg-hover);">—</span>
         </div>
         <div id="health-score-body" class="px-4 py-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2">
@@ -326,6 +327,7 @@ html.dark {
       </div>
 
       <!-- ===== HEALTH SUGGESTIONS CARD ===== -->
+      <div class="mb-2"><h2 class="text-xs font-semibold uppercase tracking-wide" style="color:var(--pw-text-tertiary);" data-zh="待处理项" data-en="Needs attention">待处理项</h2></div>
       <div id="suggestions-card" class="hidden rounded-lg mb-6" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
         <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
           <h2 class="text-sm font-semibold truncate" data-zh="健康建议" data-en="Health Suggestions" style="color: var(--pw-text-primary);">健康建议</h2>
@@ -335,6 +337,7 @@ html.dark {
       </div>
 
       <!-- ===== V1.5 RELEASE / POLICY / LINEAGE / EVIDENCE OVERVIEW ===== -->
+      <div class="mb-2 flex items-center justify-between gap-3"><h2 class="text-xs font-semibold uppercase tracking-wide" style="color:var(--pw-text-tertiary);" data-zh="历史概览" data-en="History overview">历史概览</h2><span class="text-xs" style="color:var(--pw-text-tertiary);" data-zh="历史任务、审计和发布检查不影响实时健康" data-en="History, audits, and release checks do not affect live health">历史任务、审计和发布检查不影响实时健康</span></div>
       <div class="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-6">
         <div class="rounded-lg" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
           <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
@@ -1502,55 +1505,26 @@ html.dark {
         + section('Direct Verification', directSessions, directRow);
     }
 
-    // ---------- Health Score ----------
-    // Computes a health score from the /api/status payload and supplementary data.
-    // Returns: { level: 'healthy'|'warning'|'degraded'|'blocked', dimensions: [{key,label,ok,detail}] }
-    function calculateHealthScore(status, opts) {
-      opts = opts || {};
-      const staleCount = typeof opts.staleTaskCount === 'number' ? opts.staleTaskCount : 0;
-      const failedCount = typeof opts.failedTaskCount === 'number' ? opts.failedTaskCount : 0;
-      const policyValid = opts.policyValid === true;
-      const releaseReady = opts.releaseReady === true;
-      const directProfileEnabled = opts.directProfileEnabled === true;
-
-      const watcher = (status && status.watcher) || {};
-      const tunnel = (status && status.tunnel) || {};
-      const agents = (status && status.agents) || [];
-
-      const watcherHealthy = watcher.status === 'healthy';
-      const coreReady = !!(tunnel.core && tunnel.core.ready);
-      const directReady = !!(tunnel.direct && tunnel.direct.ready);
-      const tunnelReady = coreReady && (!directProfileEnabled || directReady);
-      const agentsAvailable = Array.isArray(agents) && agents.some(function (a) { return a && a.available; });
-
-      const dimensions = [
-        { key: 'watcher_healthy',    label: '任务监视器',          ok: watcherHealthy,        detail: watcher.status || '未知' },
-        { key: 'tunnel_ready',       label: '隧道就绪',            ok: tunnelReady,           detail: 'Core ' + (coreReady ? '已就绪' : '未就绪') + ' / Direct ' + (directProfileEnabled ? (directReady ? '已就绪' : '未就绪') : '可选，未启用') },
-        { key: 'agents_available',   label: '本地 Agent',          ok: agentsAvailable,       detail: Array.isArray(agents) ? agents.length + ' 个可用' : '0 个' },
-        { key: 'stale_tasks',        label: '过期任务',            ok: staleCount === 0,       detail: String(staleCount) },
-        { key: 'failed_tasks',       label: '失败任务',            ok: failedCount === 0,      detail: String(failedCount) },
-        { key: 'policy_valid',       label: '安全策略',            ok: policyValid,            detail: policyValid ? '有效' : '无效' },
-        { key: 'release_ready',      label: '发布检查',            ok: releaseReady,           detail: opts.releaseReadyState || '未知' },
-        { key: 'direct_profile',     label: 'Direct 配置',         ok: true,                   detail: directProfileEnabled ? '已启用' : '可选，未启用' }
-      ];
-
-      // Scoring logic (order: blocked > degraded > warning > healthy)
-      let level = 'healthy';
-      const watcherDownAndFailed = (!watcherHealthy && failedCount > 0);
-      const tunnelDownNoAgents = (!tunnelReady && !agentsAvailable);
-      if (watcherDownAndFailed || tunnelDownNoAgents) {
-        level = 'blocked';
-      } else if (failedCount > 2 || staleCount > 3 || !watcherHealthy) {
-        level = 'degraded';
-      } else if (staleCount > 0 || failedCount > 0 || !releaseReady) {
-        level = 'warning';
+    // ---------- Live readiness ----------
+    // The status route owns this classification. Historic task records remain
+    // visible elsewhere and never change the live readiness result.
+    function calculateHealthScore(status) {
+      const experience = status && status.experience;
+      if (!experience || !Array.isArray(experience.live_checks)) {
+        return { level: 'blocked', dimensions: [] };
       }
-
-      return { level: level, dimensions: dimensions };
+      return {
+        level: experience.readiness === 'ready' ? 'healthy' : experience.readiness,
+        dimensions: experience.live_checks.map(function (check) {
+          return { key: check.key, label: check.label, ok: check.state === 'ready' || check.state === 'optional', optional: check.state === 'optional', detail: check.detail };
+        }),
+        history: experience.historical_summary || null
+      };
     }
 
     function healthScoreColor(level) {
       if (level === 'healthy')  return { color: 'var(--pw-state-success)', bg: 'var(--pw-state-success-bg)' };
+      if (level === 'needs_action') return { color: 'var(--pw-state-warning)', bg: 'var(--pw-state-warning-bg)' };
       if (level === 'warning')  return { color: 'var(--pw-state-warning)', bg: 'var(--pw-state-warning-bg)' };
       if (level === 'degraded') return { color: '#f97316', bg: 'rgba(249, 115, 22, 0.1)' };
       if (level === 'blocked')  return { color: 'var(--pw-state-error)', bg: 'var(--pw-state-error-bg)' };
@@ -1570,8 +1544,8 @@ html.dark {
 
       let html = '';
       score.dimensions.forEach(function (d) {
-        const okColor = d.ok ? 'var(--pw-state-success)' : 'var(--pw-state-error)';
-        const icon = d.ok ? '✓' : '✗';
+        const okColor = d.optional ? 'var(--pw-text-tertiary)' : (d.ok ? 'var(--pw-state-success)' : 'var(--pw-state-error)');
+        const icon = d.optional ? '○' : (d.ok ? '✓' : '✗');
         html +=
           '<div class="flex items-center gap-2 px-2 py-1.5 rounded" style="background-color: var(--pw-bg-hover); border: 1px solid var(--pw-border-subtle);">'
           + '<span class="shrink-0 text-xs font-semibold" style="color: ' + okColor + '; font-family: var(--pw-font-mono);">' + icon + '</span>'
@@ -1581,6 +1555,9 @@ html.dark {
           + '</div>'
           + '</div>';
       });
+      if (score.history) {
+        html += '<div class="md:col-span-2 lg:col-span-4 text-xs px-2 py-1" style="color: var(--pw-text-tertiary);">历史摘要：' + escapeHtml(String(score.history.stale_tasks || 0)) + ' 个过期任务，' + escapeHtml(String(score.history.failed_tasks || 0)) + ' 个失败任务</div>';
+      }
       body.innerHTML = html;
     }
 
@@ -1588,61 +1565,8 @@ html.dark {
       const card = $('health-score-card');
       if (!card) return;
       try {
-        // Fetch all required data in parallel
-        const [statusRes, staleRes, policyRes, releaseRes, diagRes] = await Promise.allSettled([
-          fetchJson('/api/status'),
-          fetchJson('/api/tasks/stale'),
-          fetchJson('/api/project-policy?repo_path=' + encodeURIComponent(currentRepoPath)),
-          fetchJson('/api/release/status?repo_path=' + encodeURIComponent(currentRepoPath)),
-          fetchJson('/api/diagnostics')
-        ]);
-
-        const status = statusRes.status === 'fulfilled' ? statusRes.value : null;
-        const staleData = staleRes.status === 'fulfilled' ? staleRes.value : null;
-        const policyData = policyRes.status === 'fulfilled' ? policyRes.value : null;
-        const releaseData = releaseRes.status === 'fulfilled' ? releaseRes.value : null;
-        const diagData = diagRes.status === 'fulfilled' ? diagRes.value : null;
-
-        // stale task count
-        let staleTaskCount = 0;
-        if (staleData) {
-          const arr = Array.isArray(staleData.stale_tasks) ? staleData.stale_tasks
-                    : (Array.isArray(staleData.tasks) ? staleData.tasks : []);
-          staleTaskCount = arr.length;
-        }
-
-        // failed task count - derive from status.tasks
-        let failedTaskCount = 0;
-        if (status && status.tasks && Array.isArray(status.tasks.tasks)) {
-          failedTaskCount = status.tasks.tasks.filter(function (t) {
-            const s = String(t && t.status || '').toLowerCase();
-            return s.indexOf('fail') >= 0;
-          }).length;
-        }
-
-        // policy valid
-        const policyValid = !!(policyData && policyData.valid !== false);
-
-        // release ready
-        const readyState = releaseData ? (releaseData.ready_state || 'unknown') : 'unknown';
-        const releaseReady = readyState === 'ready';
-
-        // direct profile enabled - from diagnostics or status
-        let directProfileEnabled = false;
-        if (diagData && typeof diagData.direct_profile_enabled === 'boolean') {
-          directProfileEnabled = diagData.direct_profile_enabled;
-        } else if (status && typeof status.direct_profile_enabled === 'boolean') {
-          directProfileEnabled = status.direct_profile_enabled;
-        }
-
-        const score = calculateHealthScore(status, {
-          staleTaskCount: staleTaskCount,
-          failedTaskCount: failedTaskCount,
-          policyValid: policyValid,
-          releaseReady: releaseReady,
-          releaseReadyState: readyState,
-          directProfileEnabled: directProfileEnabled
-        });
+        const status = await fetchJson('/api/status');
+        const score = calculateHealthScore(status);
         renderHealthScore(score);
       } catch (err) {
         const body = $('health-score-body');

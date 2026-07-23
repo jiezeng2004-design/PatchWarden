@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import http from "node:http";
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -11,7 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
-import { CHATGPT_CORE_TOOL_NAMES } from "../../dist/tools/toolCatalog.js";
+import { CHATGPT_CORE_TOOL_NAMES } from "../../dist/tools/catalog/toolCatalog.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "..", "..");
@@ -96,6 +98,25 @@ function toolJson(result) {
   return JSON.parse(toolText(result));
 }
 
+function requestWithHost(path, hostHeader) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const request = http.request({
+      hostname: host,
+      port,
+      path,
+      method: "GET",
+      headers: { Host: hostHeader },
+    }, (response) => {
+      let body = "";
+      response.setEncoding("utf-8");
+      response.on("data", (chunk) => { body += chunk; });
+      response.on("end", () => resolvePromise({ status: response.statusCode, body }));
+    });
+    request.on("error", rejectPromise);
+    request.end();
+  });
+}
+
 console.log("\n=== PatchWarden HTTP MCP Smoke Tests ===\n");
 
 try {
@@ -126,7 +147,7 @@ try {
   );
 
   console.log(`Starting HTTP MCP server on ${mcpUrl}...`);
-  serverProcess = spawn("node", [serverPath], {
+  serverProcess = spawn(process.execPath, [serverPath], {
     cwd: root,
     env: {
       ...process.env,
@@ -160,6 +181,13 @@ try {
     const data = await response.json();
     if (!response.ok || data.mcp_server?.available !== true || data.workspace_root?.available !== true) {
       throw new Error(`Unexpected health response: ${JSON.stringify(data)}`);
+    }
+  });
+
+  await test("HTTP MCP rejects DNS-rebinding Host headers", async () => {
+    const response = await requestWithHost("/healthz", "patchwarden.attacker.invalid");
+    if (response.status !== 421 || !response.body.includes("Untrusted Host")) {
+      throw new Error(`Unexpected hostile Host response: ${JSON.stringify(response)}`);
     }
   });
 
@@ -262,7 +290,7 @@ try {
 
   // Start server WITH owner token
   console.log("\n  Starting server with owner token...");
-  serverProcess = spawn("node", [serverPath], {
+  serverProcess = spawn(process.execPath, [serverPath], {
     cwd: root,
     env: {
       ...process.env,
@@ -278,7 +306,7 @@ try {
   // Wait for server to be ready
   for (let i = 0; i < 10; i++) {
     try {
-      const r = await fetch(`${mcpUrl}/healthz`);
+      const r = await fetch(`http://${host}:${port}/healthz`);
       if (r.status === 200) break;
     } catch {}
     await sleep(500);
@@ -326,6 +354,56 @@ try {
     if (!result.tools || result.tools.length === 0) {
       throw new Error("Expected tools list with valid custom header token");
     }
+  });
+
+  const acceptanceTaskId = "task_http_acceptance";
+  const acceptanceTaskDir = join(workspaceRoot, ".patchwarden", "tasks", acceptanceTaskId);
+  mkdirSync(acceptanceTaskDir, { recursive: true });
+  writeFileSync(join(acceptanceTaskDir, "status.json"), JSON.stringify({
+    task_id: acceptanceTaskId,
+    status: "done_by_agent",
+    acceptance_status: "pending",
+  }), "utf-8");
+
+  await test("admin acceptance requires the owner token", async () => {
+    const response = await fetch(`http://${host}:${port}/admin/tasks/${acceptanceTaskId}/accept`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ notes: "reviewed" }),
+    });
+    if (response.status !== 401) throw new Error(`Expected 401, got ${response.status}`);
+  });
+
+  await test("admin acceptance writes bounded atomic evidence", async () => {
+    const secret = `ghp_${"a".repeat(24)}`;
+    const response = await fetch(`http://${host}:${port}/admin/tasks/${acceptanceTaskId}/accept`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        Authorization: `Bearer ${OWNER_TOKEN}`,
+      },
+      body: JSON.stringify({ notes: `reviewed ${secret}` }),
+    });
+    if (response.status !== 200) throw new Error(`Expected 200, got ${response.status}: ${await response.text()}`);
+    const acceptance = JSON.parse(readFileSync(join(acceptanceTaskDir, "acceptance.json"), "utf-8"));
+    const status = JSON.parse(readFileSync(join(acceptanceTaskDir, "status.json"), "utf-8"));
+    if (acceptance.status !== "accepted" || status.acceptance_status !== "accepted") {
+      throw new Error("Acceptance state was not persisted consistently");
+    }
+    if (JSON.stringify(acceptance).includes(secret)) throw new Error("Acceptance notes persisted a token");
+    if (existsSync(join(acceptanceTaskDir, "status.json.lock"))) throw new Error("Status lock was not released");
+  });
+
+  await test("admin acceptance rejects oversized request bodies", async () => {
+    const response = await fetch(`http://${host}:${port}/admin/tasks/${acceptanceTaskId}/reject`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        Authorization: `Bearer ${OWNER_TOKEN}`,
+      },
+      body: JSON.stringify({ reason: "x".repeat(70 * 1024) }),
+    });
+    if (response.status !== 413) throw new Error(`Expected 413, got ${response.status}`);
   });
 
 } catch (error) {

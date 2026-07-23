@@ -5,7 +5,7 @@
  * assets, css) with path-traversal protection, plus the inline SVG favicon.
  * Content types are mapped from `CONTENT_TYPES` in shared.ts.
  */
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { extname, isAbsolute, relative, resolve } from "node:path";
 import { type ServerResponse } from "node:http";
 import {
@@ -51,9 +51,22 @@ export function serveStatic(res: ServerResponse, urlPath: string): void {
       sendJson(res, 404, { error: "Not found" });
       return;
     }
-    const ext = extname(candidate).toLowerCase();
+    // Resolve links before reading. Lexical `..` checks alone do not stop a
+    // symlink or junction inside `ui/` from pointing outside the bundle.
+    const realRoot = realpathSync(uiRoot);
+    const realCandidate = realpathSync(candidate);
+    const realRelative = relative(realRoot, realCandidate);
+    if (realRelative === "" || realRelative.startsWith("..") || isAbsolute(realRelative)) {
+      sendJson(res, 403, { error: "Forbidden" });
+      return;
+    }
+    if (!statSync(realCandidate).isFile()) {
+      sendJson(res, 404, { error: "Not found" });
+      return;
+    }
+    const ext = extname(realCandidate).toLowerCase();
     const contentType = CONTENT_TYPES[ext] || "application/octet-stream";
-    const content = readFileSync(candidate);
+    const content = readFileSync(realCandidate);
     res.writeHead(200, { "Content-Type": contentType });
     res.end(content);
   } catch (err) {

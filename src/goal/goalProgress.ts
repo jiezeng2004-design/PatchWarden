@@ -15,7 +15,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { getConfig } from "../config.js";
 import { PatchWardenError } from "../errors.js";
-import { readGoalStatus, writeGoalStatus } from "./goalStore.js";
+import { mutateGoalStatus, readGoalStatus } from "./goalStore.js";
 import { updateSubgoalStatus, type GoalStatus, type Subgoal } from "./goalStatus.js";
 import { getBlockedSubgoals } from "./goalGraph.js";
 
@@ -93,7 +93,7 @@ export function acceptSubgoal(
   subgoalId: string,
   workspaceRoot?: string
 ): { subgoal_id: string; status: "accepted"; accepted_at: string } {
-  const goalStatus = readGoalStatus(goalId, workspaceRoot);
+  return mutateGoalStatus(goalId, (goalStatus) => {
 
   const subgoal = goalStatus.subgoals.find((s) => s.id === subgoalId);
   if (!subgoal) {
@@ -146,14 +146,16 @@ export function acceptSubgoal(
   // 校验 3：通过状态机转换（要求 subgoal 当前为 done_by_agent）
   const updatedGoalStatus = updateSubgoalStatus(goalStatus, subgoalId, "accepted");
 
-  writeGoalStatus(goalId, updatedGoalStatus, workspaceRoot);
-
   const updatedSubgoal = updatedGoalStatus.subgoals.find((s) => s.id === subgoalId)!;
   return {
-    subgoal_id: subgoalId,
-    status: "accepted",
-    accepted_at: updatedSubgoal.accepted_at!,
+    next: updatedGoalStatus,
+    result: {
+      subgoal_id: subgoalId,
+      status: "accepted" as const,
+      accepted_at: updatedSubgoal.accepted_at!,
+    },
   };
+  }, workspaceRoot);
 }
 
 /**
@@ -175,7 +177,7 @@ export function rejectSubgoal(
   reason: string,
   workspaceRoot?: string
 ): { subgoal_id: string; status: "rejected"; rejected_reason: string } {
-  const goalStatus = readGoalStatus(goalId, workspaceRoot);
+  return mutateGoalStatus(goalId, (goalStatus) => {
 
   const index = goalStatus.subgoals.findIndex((s) => s.id === subgoalId);
   if (index === -1) {
@@ -222,13 +224,15 @@ export function rejectSubgoal(
     updated_at: new Date().toISOString(),
   };
 
-  writeGoalStatus(goalId, updatedGoalStatus, workspaceRoot);
-
   return {
-    subgoal_id: subgoalId,
-    status: "rejected",
-    rejected_reason: reason,
+    next: updatedGoalStatus,
+    result: {
+      subgoal_id: subgoalId,
+      status: "rejected" as const,
+      rejected_reason: reason,
+    },
   };
+  }, workspaceRoot);
 }
 
 /**

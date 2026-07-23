@@ -1,10 +1,11 @@
-import { writeFileSync } from "node:fs";
-import { resolve, relative, isAbsolute } from "node:path";
+import { resolve, relative, isAbsolute, sep } from "node:path";
 import { PatchWardenConfig } from "../config.js";
 import { buildAgentInvocation, buildAssessmentPrompt } from "../runner/agentInvocation.js";
 import { runSimpleProcessSync } from "../runner/simpleProcess.js";
 import { captureRepoSnapshot, compareSnapshots, type RepoSnapshot, type ChangedFile } from "../runner/changeCapture.js";
 import type { AgentAssessmentOutput, AgentAssessmentSummary } from "./assessmentStore.js";
+import { atomicWriteFileSync, atomicWriteJsonFileSync } from "../utils/atomicFile.js";
+import { redactSensitiveContent } from "../security/contentRedaction.js";
 
 const ASSESSMENT_MARKER = "===ASSESSMENT_JSON===";
 
@@ -45,9 +46,11 @@ export async function runAgentAssessment(input: AgentAssessorInput): Promise<Age
   };
 
   // ── 1. Build prompt and write to file for {prompt_file} support ──
-  const assessmentPrompt = buildAssessmentPrompt(input.goal, input.planContent, input.repoPath);
+  const safeGoal = redactSensitiveContent(input.goal).content.slice(0, 10_000);
+  const safePlan = redactSensitiveContent(input.planContent).content.slice(0, 1024 * 1024);
+  const assessmentPrompt = buildAssessmentPrompt(safeGoal, safePlan, input.repoPath);
   const promptFilePath = resolve(input.assessmentDir, "agent-assessment-prompt.md");
-  writeFileSync(promptFilePath, assessmentPrompt, "utf-8");
+  atomicWriteFileSync(promptFilePath, assessmentPrompt);
   logPaths.prompt = promptFilePath;
 
   // ── 2. Before snapshot (repo-scoped) ──
@@ -89,6 +92,8 @@ export async function runAgentAssessment(input: AgentAssessorInput): Promise<Age
     maxStderrBytes: Math.max(16384, Math.floor(input.maxOutputBytes / 4)),
     stdoutPath: logPaths.stdout,
     stderrPath: logPaths.stderr,
+    environmentVariableNames: invocation.environmentVariableNames,
+    blockedEnvironmentVariableNames: invocation.blockedEnvironmentVariableNames,
   });
 
   // ── 5. After snapshot + read-only violation check ──
@@ -123,11 +128,11 @@ export async function runAgentAssessment(input: AgentAssessorInput): Promise<Age
       stderr_truncated: result.stderrTruncated,
       log_paths: { ...logPaths, violation: resolve(input.assessmentDir, "agent-assessment-violation.json") },
     };
-    writeFileSync(summary.log_paths.violation!, JSON.stringify({
+    atomicWriteJsonFileSync(summary.log_paths.violation!, {
       violation: "read_only_violation",
       files: violationFiles,
       exit_code: result.exitCode,
-    }, null, 2), "utf-8");
+    });
     writeSummary(logPaths.assessment, summary);
     return summary;
   }
@@ -253,12 +258,16 @@ function parseAssessmentJson(stdout: string, repoPath: string): ParsedAssessment
   const jsonEnd = jsonText.lastIndexOf("}");
   if (jsonStart < 0 || jsonEnd < 0 || jsonEnd <= jsonStart) return { output: null, sanitized_reasons };
 
-  let parsed: any;
+  let parsedValue: unknown;
   try {
-    parsed = JSON.parse(jsonText.slice(jsonStart, jsonEnd + 1));
+    parsedValue = JSON.parse(jsonText.slice(jsonStart, jsonEnd + 1));
   } catch {
     return { output: null, sanitized_reasons };
   }
+  if (!parsedValue || typeof parsedValue !== "object" || Array.isArray(parsedValue)) {
+    return { output: null, sanitized_reasons };
+  }
+  const parsed = parsedValue as Record<string, unknown>;
 
   // ── Strict validation ──
   if (parsed.risk_level !== "low" && parsed.risk_level !== "medium" && parsed.risk_level !== "high") {
@@ -272,7 +281,9 @@ function parseAssessmentJson(stdout: string, repoPath: string): ParsedAssessment
 
   if (!Array.isArray(parsed.reason_codes)) return { output: null, sanitized_reasons };
   if (parsed.reason_codes.length > 50) return { output: null, sanitized_reasons };
-  const reasonCodes = parsed.reason_codes.filter((r: any) => typeof r === "string" && r.length <= 100);
+  const reasonCodes = parsed.reason_codes.filter((reason): reason is string =>
+    typeof reason === "string" && reason.length <= 100
+  );
   if (reasonCodes.length !== parsed.reason_codes.length) {
     sanitized_reasons.push("reason_codes_filtered");
   }
@@ -287,7 +298,10 @@ function parseAssessmentJson(stdout: string, repoPath: string): ParsedAssessment
     if (isAbsolute(p)) { pathsSanitized = true; continue; }
     const resolved = resolve(repoPath, p);
     const rel = relative(repoPath, resolved);
-    if (rel.startsWith("..")) { pathsSanitized = true; continue; }
+    if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+      pathsSanitized = true;
+      continue;
+    }
     affectedPaths.push(p);
   }
   if (pathsSanitized) {
@@ -297,7 +311,7 @@ function parseAssessmentJson(stdout: string, repoPath: string): ParsedAssessment
   if (!Array.isArray(parsed.destructive_actions)) return { output: null, sanitized_reasons };
   if (parsed.destructive_actions.length > 20) return { output: null, sanitized_reasons };
   const destructiveActions = parsed.destructive_actions.filter(
-    (d: any) => typeof d === "string" && d.length <= 200
+    (action): action is string => typeof action === "string" && action.length <= 200
   );
 
   if (typeof parsed.requires_user_confirm !== "boolean") return { output: null, sanitized_reasons };
@@ -320,5 +334,5 @@ function parseAssessmentJson(stdout: string, repoPath: string): ParsedAssessment
 }
 
 function writeSummary(path: string, summary: AgentAssessmentSummary): void {
-  writeFileSync(path, JSON.stringify(summary, null, 2), "utf-8");
+  atomicWriteJsonFileSync(path, summary);
 }

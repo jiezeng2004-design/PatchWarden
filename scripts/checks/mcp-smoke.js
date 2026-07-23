@@ -54,6 +54,8 @@ try {
   }), "utf-8");
   writeFileSync(join(workspaceRoot, "hello.txt"), "hello from mcp smoke\n", "utf-8");
   writeFileSync(join(workspaceRoot, ".env"), "SECRET=blocked\n", "utf-8");
+  writeFileSync(join(workspaceRoot, "npm.cmd"), "@echo repo npm hijack executed\r\n@exit /b 99\r\n", "utf-8");
+  writeFileSync(join(workspaceRoot, "git.cmd"), "@echo repo git hijack executed\r\n@exit /b 98\r\n", "utf-8");
   writeFileSync(
     join(workspaceRoot, "package.json"),
     JSON.stringify({
@@ -320,7 +322,11 @@ try {
   );
   ok("sensitive file and path escape checks reject access");
 
-  const runner = spawnSync("node", ["dist/runner/cli.js", task.task_id], {
+  // The runner executes with the temporary workspace as cwd; use an absolute
+  // package path so the smoke test does not depend on that workspace having a
+  // copied `dist/` tree.
+  const runnerPath = resolve(root, "dist", "runner", "cli.js");
+  const runner = spawnSync("node", [runnerPath, task.task_id], {
     cwd: root,
     env: { ...process.env, PATCHWARDEN_CONFIG: configPath },
     encoding: "utf-8",
@@ -437,7 +443,9 @@ try {
   writeFileSync(join(directRepo, "package.json"), JSON.stringify({
     name: "direct-fixture",
     private: true,
-    scripts: { test: 'node -e "console.log(\'ok\')"' },
+    // Exercise the npm-script execution path without relying on a temporary
+    // script file or platform-specific quoting.
+    scripts: { test: "node --version" },
   }, null, 2), "utf-8");
 
   writeFileSync(
@@ -517,7 +525,23 @@ try {
     })).content?.[0]?.text || "{}"
   );
   if (bundleResult.status !== "passed" || bundleResult.command_count !== 1 || bundleResult.passed_commands !== 1) {
-    throw new Error(`run_direct_verification_bundle failed: ${JSON.stringify(bundleResult)}`);
+    // This repository and command are generated entirely by this smoke test,
+    // so a bounded log excerpt is safe and makes platform-only CI failures
+    // actionable without weakening the production tool's safe summary.
+    const sessionDir = join(workspaceRoot, ".patchwarden", "direct-sessions", sessionResult.session_id);
+    const verificationPath = join(sessionDir, "verification.json");
+    const logPath = join(sessionDir, "verification.log");
+    const verification = existsSync(verificationPath)
+      ? readFileSync(verificationPath, "utf-8").slice(-2000)
+      : "missing verification.json";
+    const fixtureLog = existsSync(logPath)
+      ? readFileSync(logPath, "utf-8").slice(-2000)
+      : "missing verification.log";
+    throw new Error(
+      `run_direct_verification_bundle failed: ${JSON.stringify(bundleResult)}; ` +
+      `synthetic_fixture_verification=${JSON.stringify(verification)}; ` +
+      `synthetic_fixture_log=${JSON.stringify(fixtureLog)}`
+    );
   }
   const bundleText = JSON.stringify(bundleResult).toLowerCase();
   if (bundleText.includes("stdout_tail") || bundleText.includes("stderr_tail") || bundleText.includes("verification.log")) {

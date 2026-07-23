@@ -1,11 +1,13 @@
 import { readFileSync, existsSync } from "node:fs";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
+import { validateWorkspaceRoot } from "./security/workspaceRootGuard.js";
 
 // ── Type definitions ──────────────────────────────────────────────
 
 export interface AgentConfig {
   command: string;
   args: string[];
+  envAllowlist?: string[];
   adapter?: string;
   model?: string;
 }
@@ -55,16 +57,7 @@ const DEFAULT_CONFIG: PatchWardenConfig = {
   tasksDir: ".patchwarden/tasks",
   assessmentsDir: ".patchwarden/assessments",
   assessmentTtlSeconds: 3600,
-  agents: {
-    codex: {
-      command: "codex",
-      args: ["exec", "--cd", "{repo}", "{prompt}"],
-    },
-    opencode: {
-      command: "opencode",
-      args: ["run", "{prompt}"],
-    },
-  },
+  agents: {},
   allowedTestCommands: [
     "npm test",
     "npm run test",
@@ -183,6 +176,11 @@ function normalizeConfig(config: PatchWardenConfig): PatchWardenConfig {
   if (!config.workspaceRoot || typeof config.workspaceRoot !== "string") {
     throw new Error("workspaceRoot must be a non-empty string");
   }
+  const workspaceValidation = validateWorkspaceRoot(config.workspaceRoot);
+  if (!workspaceValidation.ok) {
+    throw new Error(`Invalid workspaceRoot: ${workspaceValidation.reason} (${workspaceValidation.path})`);
+  }
+  config.workspaceRoot = workspaceValidation.path;
   if (!config.plansDir || typeof config.plansDir !== "string") {
     throw new Error("plansDir must be a non-empty string");
   }
@@ -197,6 +195,20 @@ function normalizeConfig(config: PatchWardenConfig): PatchWardenConfig {
   }
   if (!config.agents || typeof config.agents !== "object") {
     throw new Error("agents must be an object");
+  }
+  const agents: Record<string, AgentConfig> = {};
+  for (const [agentName, agent] of Object.entries(config.agents)) {
+    if (!agent || typeof agent !== "object" || typeof agent.command !== "string" || !Array.isArray(agent.args)) {
+      throw new Error(`agents["${agentName}"] must define command and args`);
+    }
+    const envAllowlist = agent.envAllowlist ?? [];
+    if (!Array.isArray(envAllowlist) || envAllowlist.some((name) => typeof name !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))) {
+      throw new Error(`agents["${agentName}"].envAllowlist must contain only environment variable names`);
+    }
+    const blockedNames = new Set(["CONTROL_PLANE_API_KEY", "PATCHWARDEN_OWNER_TOKEN", config.http?.ownerTokenEnv?.toUpperCase()]);
+    const blocked = envAllowlist.find((name) => blockedNames.has(name.toUpperCase()));
+    if (blocked) throw new Error(`agents["${agentName}"].envAllowlist cannot include reserved variable "${blocked}"`);
+    agents[agentName] = { ...agent, args: [...agent.args], envAllowlist: [...new Set(envAllowlist)] };
   }
   if (!Array.isArray(config.allowedTestCommands)) {
     throw new Error("allowedTestCommands must be an array");
@@ -271,8 +283,14 @@ function normalizeConfig(config: PatchWardenConfig): PatchWardenConfig {
     if (config.http.host !== undefined && typeof config.http.host !== "string") {
       throw new Error("http.host must be a string");
     }
-    if (config.http.ownerTokenEnv !== undefined && typeof config.http.ownerTokenEnv !== "string") {
-      throw new Error("http.ownerTokenEnv must be a string");
+    if (
+      config.http.ownerTokenEnv !== undefined
+      && (
+        typeof config.http.ownerTokenEnv !== "string"
+        || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(config.http.ownerTokenEnv)
+      )
+    ) {
+      throw new Error("http.ownerTokenEnv must be a valid environment variable name");
     }
   }
   if (config.enableRunTaskTool !== undefined && typeof config.enableRunTaskTool !== "boolean") {
@@ -369,6 +387,7 @@ function normalizeConfig(config: PatchWardenConfig): PatchWardenConfig {
 
   return {
     ...config,
+    agents,
     workspaceRoot: resolve(config.workspaceRoot),
     allowedTestCommands: [...new Set(config.allowedTestCommands.map((command) => command.trim()))],
     repoAllowedTestCommands,

@@ -1,7 +1,8 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { basename, win32 } from "node:path";
 import { PatchWardenConfig } from "../config.js";
 import { guardAgentCommand, sanitizePromptArg, type AllowedCommand } from "../security/commandGuard.js";
+import { resolveTrustedExecutable, sanitizeTrustedPath } from "./processSecurity.js";
 
 export interface AgentInvocation {
   command: string;
@@ -10,7 +11,23 @@ export interface AgentInvocation {
   commandLabel: string;
   promptMode: "inline" | "file";
   promptFilePath?: string;
+  environmentVariableNames: string[];
+  blockedEnvironmentVariableNames: string[];
 }
+
+export interface ResolvedAgentLaunch {
+  command: string;
+  argsPrefix: string[];
+}
+
+const KNOWN_AGENT_NPM_PACKAGES: Readonly<Record<string, string>> = Object.freeze({
+  codex: "@openai/codex",
+  claude: "@anthropic-ai/claude-code",
+  gemini: "@google/gemini-cli",
+  copilot: "@github/copilot",
+  qwen: "@qwen-code/qwen-code",
+  opencode: "opencode-ai",
+});
 
 /**
  * Resolve the Windows npm shim used by OpenCode to its native executable.
@@ -23,22 +40,81 @@ export function resolveAgentExecutable(
   platform = process.platform,
   pathValue = process.env.PATH || "",
   fileExists: (path: string) => boolean = existsSync,
+  cwd = process.cwd(),
 ): string {
-  if (platform !== "win32" || agentName !== "opencode") return command;
+  return resolveAgentLaunch(agentName, command, platform, pathValue, fileExists, cwd).command;
+}
+
+/** Resolve a configured Agent to a native executable or verified npm CLI. */
+export function resolveAgentLaunch(
+  agentName: string,
+  command: string,
+  platform = process.platform,
+  pathValue = process.env.PATH || "",
+  fileExists: (path: string) => boolean = existsSync,
+  cwd = process.cwd(),
+  adapterName = agentName,
+  readText: (path: string) => string = (path) => readFileSync(path, "utf-8"),
+): ResolvedAgentLaunch {
+  if (platform !== "win32") return { command, argsPrefix: [] };
 
   const commandName = win32.basename(command).toLowerCase();
-  if (!new Set(["opencode", "opencode.cmd", "opencode.ps1", "opencode.bat"]).has(commandName)) {
-    return command;
+  if (adapterName === "opencode" && new Set(["opencode", "opencode.cmd", "opencode.ps1", "opencode.bat"]).has(commandName)) {
+    const roots = win32.isAbsolute(command)
+      ? [win32.dirname(command)]
+      : sanitizeTrustedPath(pathValue, cwd, "win32").split(win32.delimiter).filter(Boolean);
+    for (const root of roots) {
+      const nativeExecutable = win32.join(root, "node_modules", "opencode-ai", "bin", "opencode.exe");
+      if (fileExists(nativeExecutable)) return { command: nativeExecutable, argsPrefix: [] };
+    }
+  }
+  const resolved = resolveTrustedExecutable(command, cwd, {
+    platform,
+    pathValue,
+    fileExists,
+  });
+  if (!/\.(?:cmd|bat|ps1)$/i.test(resolved)) return { command: resolved, argsPrefix: [] };
+
+  const packageName = KNOWN_AGENT_NPM_PACKAGES[adapterName] || KNOWN_AGENT_NPM_PACKAGES[agentName];
+  if (!packageName) {
+    throw new Error(`Windows shell shim is not allowed for Agent "${agentName}": ${resolved}`);
+  }
+  const packageRoot = win32.resolve(win32.dirname(resolved), "node_modules", ...packageName.split("/"));
+  const manifestPath = win32.join(packageRoot, "package.json");
+  if (!fileExists(manifestPath)) {
+    throw new Error(`Verified npm package manifest not found for Agent "${agentName}": ${manifestPath}`);
   }
 
-  const roots = win32.isAbsolute(command)
-    ? [win32.dirname(command)]
-    : pathValue.split(win32.delimiter).filter(Boolean);
-  for (const root of roots) {
-    const nativeExecutable = win32.join(root, "node_modules", "opencode-ai", "bin", "opencode.exe");
-    if (fileExists(nativeExecutable)) return nativeExecutable;
+  let manifest: { name?: unknown; bin?: unknown };
+  try {
+    manifest = JSON.parse(readText(manifestPath)) as { name?: unknown; bin?: unknown };
+  } catch {
+    throw new Error(`Invalid npm package manifest for Agent "${agentName}": ${manifestPath}`);
   }
-  return command;
+  if (manifest.name !== packageName) {
+    throw new Error(`Unexpected npm package identity for Agent "${agentName}"`);
+  }
+  const shimName = win32.basename(resolved).replace(/\.(?:cmd|bat|ps1)$/i, "");
+  const binPath = resolvePackageBin(manifest.bin, [agentName, adapterName, shimName]);
+  if (!binPath) throw new Error(`npm package does not declare a CLI for Agent "${agentName}"`);
+  const cliPath = win32.resolve(packageRoot, binPath);
+  const relativeCli = win32.relative(packageRoot, cliPath);
+  if (!relativeCli || relativeCli === ".." || relativeCli.startsWith(`..${win32.sep}`) || win32.isAbsolute(relativeCli) || !fileExists(cliPath)) {
+    throw new Error(`npm CLI entry escapes or is missing for Agent "${agentName}"`);
+  }
+  const node = resolveTrustedExecutable("node", cwd, { platform, pathValue, fileExists });
+  return { command: node, argsPrefix: [cliPath] };
+}
+
+function resolvePackageBin(bin: unknown, names: readonly string[]): string | null {
+  if (typeof bin === "string") return bin;
+  if (!bin || typeof bin !== "object" || Array.isArray(bin)) return null;
+  const entries = bin as Record<string, unknown>;
+  for (const name of names) {
+    if (typeof entries[name] === "string") return entries[name] as string;
+  }
+  const values = Object.values(entries).filter((value): value is string => typeof value === "string");
+  return values.length === 1 ? values[0] : null;
 }
 
 /**
@@ -54,7 +130,20 @@ export function buildAgentInvocation(
   promptFilePath?: string
 ): AgentInvocation {
   const agentCmd = guardAgentCommand(agentName, config);
-  const executable = resolveAgentExecutable(agentName, agentCmd.command);
+  const launch = resolveAgentLaunch(
+    agentName,
+    agentCmd.command,
+    process.platform,
+    process.env.PATH || "",
+    existsSync,
+    repoPath,
+    config.agents[agentName]?.adapter || agentName,
+  );
+  const environmentVariableNames = [...(config.agents[agentName]?.envAllowlist ?? [])];
+  const blockedEnvironmentVariableNames = [
+    "CONTROL_PLANE_API_KEY",
+    config.http?.ownerTokenEnv || "PATCHWARDEN_OWNER_TOKEN",
+  ];
   const sanitizedPrompt = sanitizePromptArg(prompt);
 
   const hasPromptFilePlaceholder = agentCmd.args.includes("{prompt_file}");
@@ -68,11 +157,13 @@ export function buildAgentInvocation(
   });
 
   return {
-    command: executable,
-    args: resolvedArgs,
+    command: launch.command,
+    args: [...launch.argsPrefix, ...resolvedArgs],
     cwd: repoPath,
-    commandLabel: `${basename(executable)} (configured agent command)`,
+    commandLabel: `${basename(launch.command)} (configured agent command)`,
     promptMode,
+    environmentVariableNames,
+    blockedEnvironmentVariableNames,
     ...(promptMode === "file" && promptFilePath ? { promptFilePath } : {}),
   };
 }

@@ -53,7 +53,8 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .check-status { padding: 3px 7px; color: var(--pw-state-warning); background: var(--pw-state-warning-bg); border-radius: 4px; font-size: 11px; }
 .readiness-item[data-state="ready"] .check-status { color: var(--pw-state-success); background: var(--pw-state-success-bg); }
 .check-status.manual { color: var(--pw-text-secondary); background: var(--pw-bg-hover); }
-.primary-command { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 0 13px; color: var(--pw-text-inverse); background: var(--pw-accent); border: 1px solid var(--pw-accent); border-radius: 6px; text-decoration: none; font: 600 12px var(--pw-font-sans); cursor: pointer; white-space: nowrap; }
+.primary-command { display: none; align-items: center; justify-content: center; min-height: 36px; padding: 0 13px; color: var(--pw-text-inverse); background: var(--pw-accent); border: 1px solid var(--pw-accent); border-radius: 6px; text-decoration: none; font: 600 12px var(--pw-font-sans); cursor: pointer; white-space: nowrap; }
+.readiness-item[data-primary-action="true"] .primary-command { display: inline-flex; }
 .primary-command:disabled { cursor: wait; opacity: .62; }
 .guide-band { max-width: 980px; margin-top: 16px; padding: 18px 0; }
 .guide-band h2 { margin: 0 0 10px; font-size: 13px; }

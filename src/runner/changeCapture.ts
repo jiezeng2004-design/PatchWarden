@@ -6,15 +6,19 @@ import {
   readFileSync,
   readdirSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
 import { join, relative, resolve, isAbsolute } from "node:path";
 import { execFile } from "node:child_process";
+import { redactSensitiveContent } from "../security/contentRedaction.js";
 import { isSensitivePath } from "../security/sensitiveGuard.js";
+import { nullDevice } from "../utils/platform.js";
+import { buildGitEnvironment, resolveTrustedExecutable } from "./processSecurity.js";
+import { atomicWriteJsonFileSync } from "../utils/atomicFile.js";
 
 const MAX_HASH_BYTES = 5 * 1024 * 1024;
 const MAX_SNAPSHOT_FILES = 5000;
 const MAX_DIFF_BYTES = 20 * 1024 * 1024;
+const DIFF_TRUNCATION_MARKER = "\n[PATCHWARDEN DIFF TRUNCATED]\n";
 const SKIP_DIRECTORIES = new Set([".git", ".patchwarden", "node_modules"]);
 
 export interface FileFingerprint {
@@ -75,6 +79,8 @@ export interface ChangeArtifacts {
   diff: string;
   diff_available: boolean;
   diff_truncated: boolean;
+  diff_redacted?: boolean;
+  diff_redaction_categories?: string[];
   diff_size_bytes: number;
   additions: number;
   deletions: number;
@@ -91,25 +97,26 @@ export interface ChangeArtifacts {
   artifact_hygiene: ArtifactHygiene;
 }
 
-export async function captureRepoSnapshot(repoPath: string): Promise<RepoSnapshot> {
+export async function captureRepoSnapshot(repoPath: string, signal?: AbortSignal): Promise<RepoSnapshot> {
+  throwIfAborted(signal);
   const warnings: string[] = [];
-  const isGitResult = await runGit(repoPath, ["rev-parse", "--is-inside-work-tree"]);
+  const isGitResult = await runGit(repoPath, ["rev-parse", "--is-inside-work-tree"], signal);
   const isGit = isGitResult.stdout.trim() === "true";
   let head: string | null = null;
   let status = "";
   let paths: string[] = [];
-  const trackedPaths = new Set<string>();
-  const ignoredPaths = new Set<string>();
+  const trackedPaths = new Map<string, Set<string>>();
+  const ignoredPaths = new Map<string, Set<string>>();
 
   const dirtyPaths = new Set<string>();
   if (isGit) {
     // The following five git calls are independent of each other and can run in parallel.
     const [headResult, statusResult, trackedResult, ignoredResult, listedResult] = await Promise.all([
-      runGit(repoPath, ["rev-parse", "HEAD"]),
-      runGit(repoPath, ["status", "--porcelain=v1", "-uall"]),
-      runGit(repoPath, ["ls-files", "-z"]),
-      runGit(repoPath, ["ls-files", "-o", "-i", "--exclude-standard", "-z"]),
-      runGit(repoPath, ["ls-files", "-co", "--exclude-standard", "-z"]),
+      runGit(repoPath, ["rev-parse", "HEAD"], signal),
+      runGit(repoPath, ["status", "--porcelain=v1", "-uall"], signal),
+      runGit(repoPath, ["ls-files", "-z"], signal),
+      runGit(repoPath, ["ls-files", "-o", "-i", "--exclude-standard", "-z"], signal),
+      runGit(repoPath, ["ls-files", "-co", "--exclude-standard", "-z"], signal),
     ]);
 
     if (headResult.status === 0) head = headResult.stdout.trim() || null;
@@ -136,25 +143,25 @@ export async function captureRepoSnapshot(repoPath: string): Promise<RepoSnapsho
       }
     }
     if (trackedResult.status === 0) {
-      for (const path of trackedResult.stdout.split("\0").filter(Boolean)) trackedPaths.add(normalizePath(path));
+      for (const path of trackedResult.stdout.split("\0").filter(Boolean)) addSnapshotPath(trackedPaths, path);
     }
     if (ignoredResult.status === 0) {
-      for (const path of ignoredResult.stdout.split("\0").filter(Boolean)) ignoredPaths.add(normalizePath(path));
+      for (const path of ignoredResult.stdout.split("\0").filter(Boolean)) addSnapshotPath(ignoredPaths, path);
     } else {
       warnings.push("git ignored-file discovery failed; ignored classification may be incomplete");
     }
     if (listedResult.status === 0) {
       paths = [...new Set([
         ...listedResult.stdout.split("\0").filter(Boolean),
-        ...walkWorkspace(repoPath),
+        ...walkWorkspace(repoPath, signal),
       ])];
     } else {
       warnings.push("git ls-files failed; using bounded filesystem scan");
-      paths = walkWorkspace(repoPath);
+      paths = walkWorkspace(repoPath, signal);
     }
   } else {
     warnings.push("repository is not a Git worktree; diff will contain file-change evidence only");
-    paths = walkWorkspace(repoPath);
+    paths = walkWorkspace(repoPath, signal);
   }
 
   if (paths.length > MAX_SNAPSHOT_FILES) {
@@ -164,6 +171,7 @@ export async function captureRepoSnapshot(repoPath: string): Promise<RepoSnapsho
 
   const files: Record<string, FileFingerprint> = {};
   for (const inputPath of paths.sort()) {
+    throwIfAborted(signal);
     const normalized = normalizePath(inputPath);
     if (!normalized || normalized.startsWith(".patchwarden/") || isSensitivePath(normalized)) continue;
     const absolutePath = resolve(repoPath, inputPath);
@@ -176,8 +184,8 @@ export async function captureRepoSnapshot(repoPath: string): Promise<RepoSnapsho
       files[normalized] = {
         size: stat.size,
         sha256,
-        tracked: trackedPaths.has(normalized),
-        ignored: !trackedPaths.has(normalized) && ignoredPaths.has(normalized),
+        tracked: hasSnapshotPath(trackedPaths, normalized),
+        ignored: !hasSnapshotPath(trackedPaths, normalized) && hasSnapshotPath(ignoredPaths, normalized),
       };
     } catch {
       warnings.push(`could not fingerprint: ${normalized}`);
@@ -197,37 +205,20 @@ export async function captureRepoSnapshot(repoPath: string): Promise<RepoSnapsho
 }
 
 export function writeSnapshot(taskDir: string, filename: string, snapshot: RepoSnapshot): void {
-  writeFileSync(join(taskDir, filename), JSON.stringify(snapshot, null, 2), "utf-8");
+  atomicWriteJsonFileSync(join(taskDir, filename), snapshot);
 }
 
 export async function buildChangeArtifacts(
   repoPath: string,
   before: RepoSnapshot,
-  after: RepoSnapshot
+  after: RepoSnapshot,
+  signal?: AbortSignal,
 ): Promise<ChangeArtifacts> {
+  throwIfAborted(signal);
   const changedFiles = compareSnapshots(before, after);
   const artifactHygiene = classifyArtifactHygiene(changedFiles);
   const sections: string[] = [];
   const scopedPaths = [...new Set(changedFiles.flatMap((file) => file.old_path ? [file.old_path, file.path] : [file.path]))];
-
-  if (before.is_git && after.is_git && scopedPaths.length > 0) {
-    if (before.head && after.head && before.head !== after.head) {
-      const committed = await runGit(repoPath, ["diff", "--no-color", "--binary", before.head, after.head, "--", ...scopedPaths]);
-      if (committed.stdout.trim()) sections.push("# Changes committed during task\n", committed.stdout.trimEnd());
-    }
-
-    const base = after.head || "HEAD";
-    const working = await runGit(repoPath, ["diff", "--no-color", "--binary", base, "--", ...scopedPaths]);
-    if (working.stdout.trim()) sections.push("# Staged and unstaged changes\n", working.stdout.trimEnd());
-
-    for (const file of changedFiles.filter((item) => item.change === "added").slice(0, 100)) {
-      const tracked = await runGit(repoPath, ["ls-files", "--error-unmatch", "--", file.path]);
-      if (tracked.status === 0) continue;
-      const untracked = await runGit(repoPath, ["diff", "--no-index", "--no-color", "--binary", "--", "/dev/null", file.path]);
-      if (untracked.stdout.trim()) sections.push("# Untracked file\n", untracked.stdout.trimEnd());
-    }
-  }
-
   const evidence = [
     "# PatchWarden change evidence",
     `# changed_files: ${changedFiles.length}`,
@@ -235,17 +226,75 @@ export async function buildChangeArtifacts(
     `# workspace_dirty_after: ${after.workspace_dirty}`,
     ...changedFiles.map((file) => `# ${file.change}: ${file.path}`),
   ].join("\n");
-  const body = sections.join("\n\n");
-  const fullDiff = `${evidence}\n\n${body || (changedFiles.length ? "(textual patch unavailable; see changed-files.json for hash evidence)" : "(no task file changes detected)")}\n`;
+  let retainedSectionBytes = 0;
+  let diffTruncated = Buffer.byteLength(evidence, "utf-8") > MAX_DIFF_BYTES;
+  const sectionBudget = Math.max(
+    0,
+    MAX_DIFF_BYTES
+      - Math.min(Buffer.byteLength(evidence, "utf-8"), MAX_DIFF_BYTES)
+      - Buffer.byteLength(DIFF_TRUNCATION_MARKER, "utf-8")
+      - 2,
+  );
+  const appendSection = (label: string, content: string, commandTruncated = false): void => {
+    if (!content.trim()) {
+      if (commandTruncated) diffTruncated = true;
+      return;
+    }
+    const block = `${sections.length > 0 ? "\n\n" : ""}${label}\n\n${content.trimEnd()}`;
+    const remaining = Math.max(0, sectionBudget - retainedSectionBytes);
+    const bounded = utf8Prefix(block, remaining);
+    if (bounded) {
+      sections.push(bounded);
+      retainedSectionBytes += Buffer.byteLength(bounded, "utf-8");
+    }
+    if (commandTruncated || Buffer.byteLength(bounded, "utf-8") < Buffer.byteLength(block, "utf-8")) {
+      diffTruncated = true;
+    }
+  };
+
+  if (before.is_git && after.is_git && scopedPaths.length > 0) {
+    if (before.head && after.head && before.head !== after.head) {
+      const committed = await runGit(repoPath, ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--binary", before.head, after.head, "--", ...scopedPaths], signal);
+      appendSection("# Changes committed during task", committed.stdout, committed.truncated);
+    }
+
+    if (retainedSectionBytes < sectionBudget) {
+      const base = after.head || "HEAD";
+      const working = await runGit(repoPath, ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--binary", base, "--", ...scopedPaths], signal);
+      appendSection("# Staged and unstaged changes", working.stdout, working.truncated);
+    } else {
+      diffTruncated = true;
+    }
+
+    for (const file of changedFiles.filter((item) => item.change === "added").slice(0, 100)) {
+      throwIfAborted(signal);
+      if (retainedSectionBytes >= sectionBudget) {
+        diffTruncated = true;
+        break;
+      }
+      const tracked = await runGit(repoPath, ["ls-files", "--error-unmatch", "--", file.path], signal);
+      if (tracked.status === 0) continue;
+      const untracked = await runGit(repoPath, ["diff", "--no-ext-diff", "--no-textconv", "--no-index", "--no-color", "--binary", "--", nullDevice, file.path], signal);
+      appendSection("# Untracked file", untracked.stdout, untracked.truncated);
+    }
+  }
+
+  const body = sections.join("");
+  const rawDiff = `${evidence}\n\n${body || (changedFiles.length ? "(textual patch unavailable; see changed-files.json for hash evidence)" : "(no task file changes detected)")}\n`;
+  const sanitized = sanitizeDiffEvidence(rawDiff, MAX_DIFF_BYTES);
+  const fullDiff = sanitized.content;
+  diffTruncated ||= sanitized.truncated;
   const additions = fullDiff.split(/\r?\n/).filter((line) => line.startsWith("+") && !line.startsWith("+++")).length;
   const deletions = fullDiff.split(/\r?\n/).filter((line) => line.startsWith("-") && !line.startsWith("---")).length;
-  const fileStats = await buildFileStats(repoPath, before, after, changedFiles);
+  const fileStats = await buildFileStats(repoPath, before, after, changedFiles, signal);
 
   return {
     changed_files: changedFiles,
     diff: fullDiff,
     diff_available: changedFiles.length > 0,
-    diff_truncated: false,
+    diff_truncated: diffTruncated,
+    diff_redacted: sanitized.redacted,
+    diff_redaction_categories: sanitized.redaction_categories,
     diff_size_bytes: Buffer.byteLength(fullDiff, "utf-8"),
     additions,
     deletions,
@@ -262,13 +311,47 @@ export async function buildChangeArtifacts(
   };
 }
 
+export function sanitizeDiffEvidence(
+  input: string,
+  maxBytes = MAX_DIFF_BYTES,
+): {
+  content: string;
+  truncated: boolean;
+  redacted: boolean;
+  redaction_categories: string[];
+} {
+  if (!Number.isInteger(maxBytes) || maxBytes <= 0) {
+    throw new Error("maxBytes must be a positive integer");
+  }
+  const redaction = redactSensitiveContent(input);
+  const encodedBytes = Buffer.byteLength(redaction.content, "utf-8");
+  if (encodedBytes <= maxBytes) {
+    return {
+      content: redaction.content,
+      truncated: false,
+      redacted: redaction.redacted,
+      redaction_categories: redaction.redaction_categories,
+    };
+  }
+  const marker = utf8Prefix(DIFF_TRUNCATION_MARKER, maxBytes);
+  const markerBytes = Buffer.byteLength(marker, "utf-8");
+  return {
+    content: utf8Prefix(redaction.content, Math.max(0, maxBytes - markerBytes)) + marker,
+    truncated: true,
+    redacted: redaction.redacted,
+    redaction_categories: redaction.redaction_categories,
+  };
+}
+
 async function buildFileStats(
   repoPath: string,
   before: RepoSnapshot,
   after: RepoSnapshot,
-  changedFiles: ChangedFile[]
+  changedFiles: ChangedFile[],
+  signal?: AbortSignal,
 ): Promise<ChangeArtifacts["file_stats"]> {
   const results = await Promise.all(changedFiles.map(async (file) => {
+    throwIfAborted(signal);
     let additions = 0;
     let deletions = 0;
     const paths = file.old_path ? [file.old_path, file.path] : [file.path];
@@ -280,7 +363,7 @@ async function buildFileStats(
       }
       ranges.push([after.head || "HEAD"]);
       const rangeResults = await Promise.all(
-        ranges.map((range) => runGit(repoPath, ["diff", "--numstat", ...range, "--", ...paths]))
+        ranges.map((range) => runGit(repoPath, ["diff", "--no-ext-diff", "--no-textconv", "--numstat", ...range, "--", ...paths], signal))
       );
       for (const result of rangeResults) {
         for (const line of result.stdout.split(/\r?\n/).filter(Boolean)) {
@@ -308,17 +391,31 @@ function countLines(content: string): number {
   return content.split(/\r?\n/).length - (content.endsWith("\n") ? 1 : 0);
 }
 
-export function compareSnapshots(before: RepoSnapshot, after: RepoSnapshot): ChangedFile[] {
-  const paths = [...new Set([...Object.keys(before.files), ...Object.keys(after.files)])].sort();
+export function compareSnapshots(
+  before: RepoSnapshot,
+  after: RepoSnapshot,
+  platform: NodeJS.Platform = process.platform,
+): ChangedFile[] {
   const changed: ChangedFile[] = [];
-  for (const path of paths) {
-    const left = before.files[path];
-    const right = after.files[path];
+  for (const { path, leftPath, rightPath, left, right } of pairSnapshotFiles(before.files, after.files, platform)) {
     if (!left && right) {
       changed.push(classifyChangedFile(path, "added", null, right));
     } else if (left && !right) {
       changed.push(classifyChangedFile(path, "deleted", left, null));
-    } else if (left.sha256 !== right.sha256) {
+    } else if (left && right && left.sha256 === right.sha256 && leftPath !== rightPath) {
+      // Windows lookup is case-insensitive, but a case-only Git rename is still
+      // auditable work and must not disappear from the evidence set.
+      changed.push({
+        path: rightPath!,
+        old_path: leftPath!,
+        change: "renamed",
+        before_sha256: left.sha256,
+        after_sha256: right.sha256,
+        tracked: left.tracked || right.tracked,
+        ignored: right.ignored,
+        kind: classifyPathKind(rightPath!),
+      });
+    } else if (left && right && left.sha256 !== right.sha256) {
       changed.push(classifyChangedFile(path, "modified", left, right));
     }
   }
@@ -386,10 +483,12 @@ export interface ExternalDirtyFile {
 export function extractExternalDirtyFiles(
   workspaceSnapshot: RepoSnapshot,
   repoPath: string,
-  workspaceRoot: string
+  workspaceRoot: string,
+  platform: NodeJS.Platform = process.platform,
 ): ExternalDirtyFile[] {
   const dirtyFiles: ExternalDirtyFile[] = [];
-  const dirtyPathSet = new Set(workspaceSnapshot.dirty_paths);
+  const dirtyPathSet = new Map<string, Set<string>>();
+  for (const path of workspaceSnapshot.dirty_paths) addSnapshotPath(dirtyPathSet, path, platform);
   for (const [path, fingerprint] of Object.entries(workspaceSnapshot.files)) {
     const absolutePath = resolve(workspaceRoot, path);
     const rel = relative(repoPath, absolutePath);
@@ -399,7 +498,7 @@ export function extractExternalDirtyFiles(
       // 1. Git reports it as dirty (modified/added/deleted/untracked) via dirty_paths, OR
       // 2. It's not tracked by git (untracked file), OR
       // 3. It's explicitly ignored
-      const isDirty = dirtyPathSet.has(path);
+      const isDirty = hasSnapshotPath(dirtyPathSet, path, platform);
       const isUntracked = !fingerprint.tracked;
       const isIgnored = fingerprint.ignored;
       if (isDirty || isUntracked || isIgnored) {
@@ -422,11 +521,19 @@ export function extractExternalDirtyFiles(
  */
 export function findNewExternalDirtyFiles(
   baseline: ExternalDirtyFile[],
-  current: ExternalDirtyFile[]
+  current: ExternalDirtyFile[],
+  platform: NodeJS.Platform = process.platform,
 ): ExternalDirtyFile[] {
-  const baselineMap = new Map(baseline.map((f) => [f.path, f]));
+  const baselineMap = new Map<string, ExternalDirtyFile[]>();
+  for (const file of baseline) {
+    const key = comparableSnapshotPath(file.path, platform);
+    baselineMap.set(key, [...(baselineMap.get(key) ?? []), file]);
+  }
   return current.filter((f) => {
-    const baselineFile = baselineMap.get(f.path);
+    const candidates = baselineMap.get(comparableSnapshotPath(f.path, platform)) ?? [];
+    const baselineFile = candidates.length <= 1
+      ? candidates[0]
+      : candidates.find((candidate) => normalizePath(candidate.path) === normalizePath(f.path));
     if (!baselineFile) return true; // New path — definitely new
     // Same path but content changed during task execution
     if (baselineFile.before_sha256 !== f.before_sha256) return true;
@@ -623,9 +730,98 @@ function normalizePath(value: string): string {
   return value.replace(/\\/g, "/");
 }
 
-function walkWorkspace(root: string): string[] {
+function comparableSnapshotPath(value: string, platform: NodeJS.Platform = process.platform): string {
+  const normalized = normalizePath(value);
+  return platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function addSnapshotPath(
+  index: Map<string, Set<string>>,
+  value: string,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  const normalized = normalizePath(value);
+  const key = comparableSnapshotPath(normalized, platform);
+  const exactPaths = index.get(key) ?? new Set<string>();
+  exactPaths.add(normalized);
+  index.set(key, exactPaths);
+}
+
+function hasSnapshotPath(
+  index: Map<string, Set<string>>,
+  value: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  const normalized = normalizePath(value);
+  const exactPaths = index.get(comparableSnapshotPath(normalized, platform));
+  if (!exactPaths) return false;
+  return platform !== "win32" || exactPaths.size <= 1 || exactPaths.has(normalized);
+}
+
+interface SnapshotFileEntry {
+  path: string;
+  fingerprint: FileFingerprint;
+}
+
+function pairSnapshotFiles(
+  before: Record<string, FileFingerprint>,
+  after: Record<string, FileFingerprint>,
+  platform: NodeJS.Platform,
+): Array<{ path: string; leftPath?: string; rightPath?: string; left?: FileFingerprint; right?: FileFingerprint }> {
+  const beforeGroups = groupSnapshotFiles(before, platform);
+  const afterGroups = groupSnapshotFiles(after, platform);
+  const pairs: Array<{ path: string; leftPath?: string; rightPath?: string; left?: FileFingerprint; right?: FileFingerprint }> = [];
+  const comparablePaths = [...new Set([...beforeGroups.keys(), ...afterGroups.keys()])].sort();
+
+  for (const comparablePath of comparablePaths) {
+    const beforeEntries = beforeGroups.get(comparablePath) ?? [];
+    const afterEntries = afterGroups.get(comparablePath) ?? [];
+    if (platform !== "win32" || (beforeEntries.length <= 1 && afterEntries.length <= 1)) {
+      pairs.push({
+        path: afterEntries[0]?.path ?? beforeEntries[0].path,
+        leftPath: beforeEntries[0]?.path,
+        rightPath: afterEntries[0]?.path,
+        left: beforeEntries[0]?.fingerprint,
+        right: afterEntries[0]?.fingerprint,
+      });
+      continue;
+    }
+
+    // NTFS can opt individual directories into case-sensitive mode. If either
+    // snapshot contains a case collision, preserve every exact path instead of
+    // silently dropping one entry from the evidence.
+    const beforeExact = new Map(beforeEntries.map((entry) => [normalizePath(entry.path), entry]));
+    const afterExact = new Map(afterEntries.map((entry) => [normalizePath(entry.path), entry]));
+    const exactPaths = [...new Set([...beforeExact.keys(), ...afterExact.keys()])].sort();
+    for (const exactPath of exactPaths) {
+      pairs.push({
+        path: afterExact.get(exactPath)?.path ?? beforeExact.get(exactPath)!.path,
+        leftPath: beforeExact.get(exactPath)?.path,
+        rightPath: afterExact.get(exactPath)?.path,
+        left: beforeExact.get(exactPath)?.fingerprint,
+        right: afterExact.get(exactPath)?.fingerprint,
+      });
+    }
+  }
+  return pairs;
+}
+
+function groupSnapshotFiles(
+  files: Record<string, FileFingerprint>,
+  platform: NodeJS.Platform,
+): Map<string, SnapshotFileEntry[]> {
+  const grouped = new Map<string, SnapshotFileEntry[]>();
+  for (const [path, fingerprint] of Object.entries(files)) {
+    const key = comparableSnapshotPath(path, platform);
+    grouped.set(key, [...(grouped.get(key) ?? []), { path, fingerprint }]);
+  }
+  return grouped;
+}
+
+function walkWorkspace(root: string, signal?: AbortSignal): string[] {
   const result: string[] = [];
   const visit = (directory: string) => {
+    throwIfAborted(signal);
     if (result.length >= MAX_SNAPSHOT_FILES) return;
     let entries;
     try {
@@ -634,6 +830,7 @@ function walkWorkspace(root: string): string[] {
       return;
     }
     for (const entry of entries) {
+      throwIfAborted(signal);
       if (result.length >= MAX_SNAPSHOT_FILES) break;
       if (entry.isDirectory() && SKIP_DIRECTORIES.has(entry.name)) continue;
       const absolute = join(directory, entry.name);
@@ -645,14 +842,29 @@ function walkWorkspace(root: string): string[] {
   return result;
 }
 
-function runGit(repoPath: string, args: string[]): Promise<{ status: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    execFile("git", args, {
+function runGit(repoPath: string, args: string[], signal?: AbortSignal): Promise<{
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  truncated: boolean;
+}> {
+  throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    const env = buildGitEnvironment(repoPath);
+    const git = resolveTrustedExecutable("git", repoPath, { pathValue: env.PATH });
+    execFile(git, args, {
       cwd: repoPath,
       encoding: "utf-8",
       timeout: 30_000,
       maxBuffer: MAX_DIFF_BYTES,
+      windowsHide: true,
+      env,
+      signal,
     }, (err, stdout, stderr) => {
+      if (signal?.aborted) {
+        reject(abortReason(signal));
+        return;
+      }
       let status: number | null;
       if (err) {
         // err.code is the exit code (number) when the process exited with a non-zero status;
@@ -661,9 +873,31 @@ function runGit(repoPath: string, args: string[]): Promise<{ status: number | nu
       } else {
         status = 0;
       }
-      resolve({ status, stdout: stdout || "", stderr: stderr || "" });
+      const truncated = Boolean(
+        err
+        && typeof err.code === "string"
+        && err.code.includes("MAXBUFFER"),
+      );
+      resolve({ status, stdout: stdout || "", stderr: stderr || "", truncated });
     });
   });
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw abortReason(signal);
+}
+
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new Error("Operation aborted");
+}
+
+function utf8Prefix(value: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  const encoded = Buffer.from(value, "utf-8");
+  if (encoded.length <= maxBytes) return value;
+  let prefix = encoded.subarray(0, maxBytes).toString("utf-8").replace(/\uFFFD$/u, "");
+  while (Buffer.byteLength(prefix, "utf-8") > maxBytes) prefix = prefix.slice(0, -1);
+  return prefix;
 }
 
 function hashFileAsync(filePath: string): Promise<string> {

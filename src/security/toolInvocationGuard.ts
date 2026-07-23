@@ -17,8 +17,8 @@
 
 import { PatchWardenError } from "../errors.js";
 import { guardSensitivePath } from "./sensitiveGuard.js";
-import { TOOL_RISK_RANK, type PatchWardenToolMeta } from "../tools/toolRegistry.js";
-import type { ToolProfile } from "../tools/toolCatalog.js";
+import { TOOL_RISK_RANK, type PatchWardenToolMeta } from "../tools/catalog/toolRegistry.js";
+import type { ToolProfile } from "../tools/catalog/toolCatalog.js";
 import type { DiscoveryTokenRecord } from "./discoveryTokenStore.js";
 
 // ── 类型定义 ──────────────────────────────────────────────────────

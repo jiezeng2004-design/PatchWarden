@@ -8,12 +8,19 @@
  * launching, so the non-interactive web UI never deadlocks on a missing
  * dependency. All endpoints are POST routes gated by the control token.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { delimiter, extname, join } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 import { type ServerResponse } from "node:http";
+import {
+  buildChildEnvironment,
+  redactProcessOutput,
+  resolveTrustedExecutable,
+  sanitizeTrustedPath,
+} from "../../runner/processSecurity.js";
 import { recordEvent } from "../runtime.js";
+import { launchFileManager } from "../fileManager.js";
 import {
   config,
   CORE_BASE_URL,
@@ -33,14 +40,32 @@ interface ManageResult {
   stderr: string;
 }
 
+const MAX_MANAGE_OUTPUT_CHARS = 128 * 1024;
+const MANAGE_ALLOWED_ENVIRONMENT = [
+  "PATCHWARDEN_CONFIG",
+  "PATCHWARDEN_TUNNEL_ID",
+  "PATCHWARDEN_CREDENTIAL_PATH",
+  "PATCHWARDEN_TUNNEL_CLIENT_EXE",
+  "TUNNEL_CLIENT_EXE",
+  "OPENCODE_BIN_DIR",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NO_PROXY",
+] as const;
+
 function runManageAction(action: string, mode: string): Promise<ManageResult> {
   return new Promise((resolveP, rejectP) => {
     let child;
+    let exactValues: string[] = [];
     try {
+      const env = buildManageEnvironment();
+      exactValues = manageSensitiveValues(env);
+      const command = resolveTrustedExecutable("powershell.exe", projectRoot, { pathValue: env.PATH });
       child = spawn(
-        "powershell.exe",
+        command,
         ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", manageScriptPath, action, mode, "-Background"],
-        { cwd: projectRoot, windowsHide: true, env: buildManageEnvironment() }
+        { cwd: projectRoot, windowsHide: true, env }
       );
     } catch (err) {
       rejectP(err);
@@ -56,10 +81,10 @@ function runManageAction(action: string, mode: string): Promise<ManageResult> {
       rejectP(new Error(`manage-patchwarden.ps1 timed out after 60s (action=${action}, mode=${mode})`));
     }, 60_000);
     child.stdout.on("data", (d: Buffer) => {
-      stdout += d.toString("utf-8");
+      stdout = appendBoundedManageOutput(stdout, d.toString("utf-8"));
     });
     child.stderr.on("data", (d: Buffer) => {
-      stderr += d.toString("utf-8");
+      stderr = appendBoundedManageOutput(stderr, d.toString("utf-8"));
     });
     child.on("error", (err) => {
       if (settled) return;
@@ -71,7 +96,11 @@ function runManageAction(action: string, mode: string): Promise<ManageResult> {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolveP({ exitCode: code ?? -1, stdout, stderr });
+      resolveP({
+        exitCode: code ?? -1,
+        stdout: redactProcessOutput(stdout, exactValues),
+        stderr: redactProcessOutput(stderr, exactValues),
+      });
     });
   });
 }
@@ -100,7 +129,7 @@ function launcherPathForMode(mode: ControlMode): string {
 }
 
 function findExecutableOnPath(fileName: string): string | null {
-  const pathValue = process.env.PATH || "";
+  const pathValue = sanitizeTrustedPath(process.env.PATH || "", projectRoot);
   const extensions =
     process.platform === "win32"
       ? (process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM").split(";").filter(Boolean)
@@ -108,11 +137,11 @@ function findExecutableOnPath(fileName: string): string | null {
   for (const entry of pathValue.split(delimiter)) {
     if (!entry) continue;
     const direct = join(entry, fileName);
-    if (existsSync(direct)) return direct;
+    if (isRegularFile(direct)) return direct;
     if (process.platform === "win32" && !extname(fileName)) {
       for (const ext of extensions) {
         const candidate = join(entry, fileName + ext.toLowerCase());
-        if (existsSync(candidate)) return candidate;
+        if (isRegularFile(candidate)) return candidate;
       }
     }
   }
@@ -122,9 +151,9 @@ function findExecutableOnPath(fileName: string): string | null {
 function findTunnelClientExecutable(): string | null {
   if (process.env.PATCHWARDEN_CONTROL_FORCE_MISSING_TUNNEL_CLIENT === "1") return null;
   const configured = config.tunnelClientPath;
-  if (configured && existsSync(configured)) return configured;
+  if (configured && isRegularFile(configured)) return configured;
   const explicit = process.env.PATCHWARDEN_TUNNEL_CLIENT_EXE || process.env.TUNNEL_CLIENT_EXE;
-  if (explicit && existsSync(explicit)) return explicit;
+  if (explicit && isRegularFile(explicit)) return explicit;
   const fromPath = findExecutableOnPath("tunnel-client.exe") ?? findExecutableOnPath("tunnel-client");
   if (fromPath) return fromPath;
 
@@ -134,13 +163,24 @@ function findTunnelClientExecutable(): string | null {
     join(homedir(), "tunnel-client", "tunnel-client.exe"),
   ].filter((v): v is string => typeof v === "string" && v.length > 0);
   for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
+    if (isRegularFile(candidate)) return candidate;
   }
   return null;
 }
 
-function buildManageEnvironment(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, PATCHWARDEN_CONFIG: process.env.PATCHWARDEN_CONFIG };
+export function buildManageEnvironment(): NodeJS.ProcessEnv {
+  const agentEnvironmentNames = [...new Set(Object.values(config.agents)
+    .flatMap((agent) => agent.envAllowlist ?? []))];
+  const env = buildChildEnvironment({
+    cwd: projectRoot,
+    allowedNames: [...MANAGE_ALLOWED_ENVIRONMENT, ...agentEnvironmentNames],
+    blockedNames: [config.http?.ownerTokenEnv || "PATCHWARDEN_OWNER_TOKEN"],
+  });
+  const lifecycleNames = new Set(MANAGE_ALLOWED_ENVIRONMENT.map((name) => name.toUpperCase()));
+  const providerOnlyNames = agentEnvironmentNames.filter(
+    (name) => !lifecycleNames.has(name.toUpperCase()),
+  );
+  env.PATCHWARDEN_AGENT_ENV_ALLOWLIST = providerOnlyNames.join(";");
   const tunnelClient = findTunnelClientExecutable();
   if (tunnelClient) {
     env.PATCHWARDEN_TUNNEL_CLIENT_EXE = tunnelClient;
@@ -423,23 +463,43 @@ export async function handleManageAction(res: ServerResponse, action: string, mo
 export function handleOpenLogsFolder(res: ServerResponse): void {
   try {
     const target = getRuntimeRoot(false);
-    let cmd: string;
-    if (process.platform === "win32") {
-      cmd = "explorer.exe";
-    } else if (process.platform === "darwin") {
-      cmd = "open";
-    } else {
-      cmd = "xdg-open";
-    }
-    try {
-      const child = spawn(cmd, [target], { detached: true, stdio: "ignore" });
-      child.on("error", () => { /* ignore spawn errors */ });
-      child.unref();
-    } catch {
-      /* ignore */
-    }
+    launchFileManager(target, projectRoot);
     sendJson(res, 200, { ok: true, path: target });
   } catch (err) {
     sendJson(res, 500, { error: errorMessage(err) });
+  }
+}
+
+function appendBoundedManageOutput(current: string, next: string): string {
+  if (current.length >= MAX_MANAGE_OUTPUT_CHARS) return current;
+  return current + next.slice(0, MAX_MANAGE_OUTPUT_CHARS - current.length);
+}
+
+function manageSensitiveValues(env: NodeJS.ProcessEnv): string[] {
+  const agentEnvironmentValues = Object.values(config.agents)
+    .flatMap((agent) => agent.envAllowlist ?? [])
+    .map((name) => findEnvironmentValue(env, name));
+  const values = [
+    env.HTTP_PROXY,
+    env.HTTPS_PROXY,
+    env.ALL_PROXY,
+    env.PATCHWARDEN_TUNNEL_PROXY_URL,
+    env.PATCHWARDEN_DIRECT_PROXY_URL,
+    ...agentEnvironmentValues,
+  ].filter((value): value is string => typeof value === "string" && Buffer.byteLength(value, "utf-8") >= 8);
+  return [...new Set(values)].sort((left, right) => right.length - left.length);
+}
+
+function findEnvironmentValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  if (process.platform !== "win32") return env[name];
+  const match = Object.keys(env).find((key) => key.toUpperCase() === name.toUpperCase());
+  return match ? env[match] : undefined;
+}
+
+function isRegularFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
   }
 }

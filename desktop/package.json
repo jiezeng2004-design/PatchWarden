@@ -1,11 +1,11 @@
 {
   "name": "patchwarden-desktop",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "Windows desktop shell for the PatchWarden local Control Center.",
   "author": "PatchWarden contributors",
   "private": true,
   "type": "module",
-  "main": "src/main.mjs",
+  "main": "dist/main.js",
   "dependencies": {
     "jsonc-parser": "3.3.1",
     "smol-toml": "1.6.1",
@@ -15,15 +15,22 @@
     "stage": "node scripts/stage.mjs",
     "predev": "npm run stage",
     "dev": "electron .",
-    "test": "node scripts/test.mjs",
-    "prebuild:dir": "npm run stage",
+    "build:ts": "node scripts/build.mjs",
+    "test": "npm run build:ts && node scripts/test.mjs",
+    "smoke:unpacked": "node scripts/smoke-unpacked.mjs",
+    "prebuild:dir": "npm run stage && npm run build:ts",
     "build:dir": "electron-builder --win dir --x64",
-    "prebuild": "npm run stage",
+    "prebuild": "npm run stage && npm run build:ts",
     "build": "electron-builder --win nsis zip --x64 && node scripts/checksum.mjs"
   },
   "devDependencies": {
+    "@types/node": "^24.0.0",
     "electron": "43.1.1",
-    "electron-builder": "26.15.3"
+    "electron-builder": "26.15.3",
+    "typescript": "^6.0.3"
+  },
+  "overrides": {
+    "fast-uri": "4.1.1"
   },
   "build": {
     "appId": "io.github.jiezeng2004design.patchwarden",
@@ -33,19 +40,42 @@
       "output": "../release/desktop"
     },
     "files": [
-      "src/**",
+      "dist/**",
+      "src/preload.cjs",
       "onboarding/**",
       "assets/**",
       "package.json"
     ],
     "extraResources": [
-      { "from": ".stage/core", "to": "core" },
-      { "from": ".stage/core/node_modules", "to": "core/node_modules", "filter": ["**/*"] },
-      { "from": ".stage/icon.ico", "to": "icon.ico" },
-      { "from": ".stage/icon.png", "to": "icon.png" }
+      {
+        "from": ".stage/core",
+        "to": "core"
+      },
+      {
+        "from": ".stage/core/node_modules",
+        "to": "core/node_modules",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": ".stage/icon.ico",
+        "to": "icon.ico"
+      },
+      {
+        "from": ".stage/icon.png",
+        "to": "icon.png"
+      }
     ],
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": ".stage/icon.ico",
       "artifactName": "PatchWarden-Setup-${version}-x64.${ext}"
     },

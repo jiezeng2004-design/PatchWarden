@@ -5,39 +5,44 @@
  * rewritten. Extracted from the original handleToolCallInternal switch.
  */
 
-import { savePlan } from "../savePlan.js";
-import { getPlan } from "../getPlan.js";
-import { createTask } from "../createTask.js";
-import { getTaskStatus } from "../getTaskStatus.js";
-import { getResult, getResultJson, getDiff, getTestLog, getTaskLogTail } from "../taskOutputs.js";
-import { listWorkspace } from "../listWorkspace.js";
-import { readWorkspaceFile } from "../readWorkspaceFile.js";
-import { listTasks } from "../listTasks.js";
-import { cancelTask } from "../cancelTask.js";
-import { killTask } from "../killTask.js";
-import { retryTask } from "../retryTask.js";
-import { getTaskStdoutTail } from "../getTaskStdoutTail.js";
-import { getTaskProgress } from "../getTaskProgress.js";
-import { listAgents } from "../listAgents.js";
-import { healthCheck } from "../healthCheck.js";
-import { getTaskSummary } from "../getTaskSummary.js";
-import { waitForTask } from "../waitForTask.js";
-import { runTaskLoop } from "../runTaskLoop.js";
-import { getTaskLineage } from "../taskLineage.js";
-import { exportTaskEvidencePack } from "../evidencePack.js";
-import { recommendAgentForTask } from "../recommendAgentForTask.js";
-import { auditTask } from "../auditTask.js";
-import { safeStatus } from "../safeStatus.js";
-import { safeAudit, safeDiffSummary, safeResult, safeTestSummary } from "../safeViews.js";
-import { diagnoseTask } from "../diagnoseTask.js";
-import { reconcileTasks } from "../reconcileTasks.js";
-import { checkReleaseGate } from "../checkReleaseGate.js";
-import { getProjectPolicyTool } from "../releaseMode.js";
+import { savePlan } from "../goals/savePlan.js";
+import { getPlan } from "../goals/getPlan.js";
+import { createTask } from "../tasks/createTask.js";
+import { getTaskStatus } from "../tasks/getTaskStatus.js";
+import { getResult, getResultJson, getDiff, getTestLog, getTaskLogTail } from "../tasks/taskOutputs.js";
+import { listWorkspace } from "../workspace/listWorkspace.js";
+import { readWorkspaceFile } from "../workspace/readWorkspaceFile.js";
+import { listTasks } from "../tasks/listTasks.js";
+import { cancelTask } from "../tasks/cancelTask.js";
+import { killTask } from "../tasks/killTask.js";
+import { retryTask } from "../tasks/retryTask.js";
+import { getTaskStdoutTail } from "../tasks/getTaskStdoutTail.js";
+import { getTaskProgress } from "../tasks/getTaskProgress.js";
+import { listAgents } from "../workspace/listAgents.js";
+import { healthCheck } from "../diagnostics/healthCheck.js";
+import { getTaskSummary } from "../tasks/getTaskSummary.js";
+import { waitForTask } from "../tasks/waitForTask.js";
+import { runTaskLoop } from "../tasks/runTaskLoop.js";
+import { getTaskLineage } from "../tasks/taskLineage.js";
+import { exportTaskEvidencePack } from "../tasks/evidencePack.js";
+import { recommendAgentForTask } from "../workspace/recommendAgentForTask.js";
+import { auditTask } from "../diagnostics/auditTask.js";
+import { safeStatus } from "../diagnostics/safeStatus.js";
+import { safeAudit, safeDiffSummary, safeResult, safeTestSummary } from "../diagnostics/safeViews.js";
+import { diagnoseTask } from "../tasks/diagnoseTask.js";
+import { reconcileTasks } from "../tasks/reconcileTasks.js";
+import { checkReleaseGate } from "../release/checkReleaseGate.js";
+import { getProjectPolicyTool } from "../release/releaseMode.js";
 import { runTask } from "../../runner/runTask.js";
 import { getConfig } from "../../config.js";
 import { getToolCatalogSnapshot } from "../registry.js";
 import type { ToolHandlerMap } from "./types.js";
 import { toResult } from "./types.js";
+import {
+  parseOptionalTaskTemplate,
+  parseReleaseStage,
+  parseTaskLogFile,
+} from "./validation.js";
 
 // ── Local helpers (moved verbatim from registry.ts) ───────────────
 
@@ -82,7 +87,7 @@ export const coreHandlers: ToolHandlerMap = {
         plan_id: args?.plan_id ? String(args.plan_id) : undefined,
         inline_plan: args?.inline_plan ? String(args.inline_plan) : undefined,
         plan_title: args?.plan_title ? String(args.plan_title) : undefined,
-        template: args?.template ? (String(args.template) as any) : undefined,
+        template: parseOptionalTaskTemplate(args?.template),
         goal: args?.goal ? String(args.goal) : undefined,
         source_task_id: args?.source_task_id ? String(args.source_task_id) : undefined,
         agent: String(args?.agent ?? ""),
@@ -259,7 +264,7 @@ export const coreHandlers: ToolHandlerMap = {
     return toResult(
       getTaskLogTail(
         String(args?.task_id ?? ""),
-        (args?.file as "stdout" | "stderr" | "test" | "verify") || "stdout",
+        parseTaskLogFile(args?.file),
         {
           lines: args?.lines ? Number(args.lines) : undefined,
           redact: args?.redact !== undefined ? Boolean(args.redact) : undefined,
@@ -349,7 +354,7 @@ export const coreHandlers: ToolHandlerMap = {
     return toResult(
       await checkReleaseGate({
         repo_path: String(args?.repo_path ?? ""),
-        target_stage: String(args?.target_stage ?? "local_ready") as any,
+        target_stage: parseReleaseStage(args?.target_stage),
         package_name: args?.package_name ? String(args.package_name) : undefined,
         version: args?.version ? String(args.version) : undefined,
         github_repo: args?.github_repo ? String(args.github_repo) : undefined,

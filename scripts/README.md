@@ -4,10 +4,10 @@ This directory keeps implementation scripts out of the root folder. Normal
 desktop use should start from the root entrypoints:
 
 ```powershell
-.\PatchWarden-Desktop.cmd
-.\PatchWarden-Control.cmd
-.\PatchWarden-Control-Tray.cmd --foreground
-.\Stop-PatchWarden.cmd
+.\scripts\launchers\PatchWarden-Desktop.cmd
+.\scripts\launchers\PatchWarden-Control.cmd
+.\scripts\launchers\PatchWarden-Control-Tray.cmd --foreground
+.\scripts\launchers\Stop-PatchWarden.cmd
 .\PatchWarden.cmd status all
 ```
 
@@ -39,11 +39,15 @@ surface. See `docs/desktop-app.md`.
 - `checks/mcp-manifest-check.js`: validates MCP manifest expectations.
 - `brand-check.js`: checks public brand strings.
 - `checks/package-manifest-check.js`: verifies package contents.
+- `checks/build-output-check.js`: verifies clean-output confinement and exact recursive unit-test compilation.
+- `release/desktop-preflight.js`: builds an isolated Windows directory package and writes a bounded preflight receipt.
 
 ## Release Helpers
 
-- `release/pack-clean.js`: rebuilds `release/`, `patchwarden-release.tar.gz`, and the
-  versioned `PatchWarden-v*.zip` artifact.
+- `release/pack-clean.js`: rebuilds the isolated `release/package/` staging
+  directory, `patchwarden-release.tar.gz`, and the versioned
+  `PatchWarden-v*.zip` artifact. Desktop and preflight siblings under
+  `release/` are preserved.
 
 ## Compatibility Launchers
 
