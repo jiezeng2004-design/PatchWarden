@@ -423,6 +423,10 @@ function mutateDirectSessionRecord(
       return { next, result: next };
     },
     {
+      // Session-record appends are short serialized writes. Give Windows
+      // antivirus-delayed lock detachment enough time to finish instead of
+      // dropping concurrent operation or verification evidence.
+      waitMs: 10_000,
       busyError: () => new PatchWardenError(
         "direct_session_busy",
         `Direct session "${sessionId}" is currently being updated.`,

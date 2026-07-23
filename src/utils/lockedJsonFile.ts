@@ -16,7 +16,7 @@ export interface LockedJsonOptions {
 
 const waitArray = new Int32Array(new SharedArrayBuffer(4));
 const lockReleaseRetryCodes = new Set(["EACCES", "EBUSY", "ENOTEMPTY", "EPERM"]);
-const lockReleaseRetryMs = 1_000;
+const lockReleaseRetryMs = 5_000;
 const lockReleaseRetryDelayMs = 10;
 const deadOwnerGraceMs = 250;
 const lockOwnerFile = "owner.json";
@@ -146,7 +146,7 @@ function tryCreateLock(lockPath: string, owner: string): boolean {
 }
 
 function releaseLock(lockPath: string, owner: string): void {
-  const deadline = Date.now() + lockReleaseRetryMs;
+  const detachDeadline = Date.now() + lockReleaseRetryMs;
   const releasePath = `${lockPath}.release-${owner}`;
 
   // Rename the owned lock directory out of the active lock path before
@@ -157,7 +157,7 @@ function releaseLock(lockPath: string, owner: string): void {
     if (currentOwner !== owner) {
       if (!existsSync(lockPath)) return;
       if (currentOwner !== undefined) return;
-      if (Date.now() >= deadline) {
+      if (Date.now() >= detachDeadline) {
         throw new Error(`Unable to verify lock ownership before release: ${lockPath}`);
       }
       Atomics.wait(waitArray, 0, 0, lockReleaseRetryDelayMs);
@@ -169,11 +169,15 @@ function releaseLock(lockPath: string, owner: string): void {
     } catch (error) {
       const code = errorCode(error);
       if (code === "ENOENT") return;
-      if (!code || !lockReleaseRetryCodes.has(code) || Date.now() >= deadline) throw error;
+      if (!code || !lockReleaseRetryCodes.has(code) || Date.now() >= detachDeadline) throw error;
       Atomics.wait(waitArray, 0, 0, lockReleaseRetryDelayMs);
     }
   }
 
+  // Cleanup is no longer ownership-sensitive after the atomic detach, so give
+  // it an independent retry budget instead of consuming whatever remained
+  // from a slow antivirus-delayed rename.
+  const cleanupDeadline = Date.now() + lockReleaseRetryMs;
   while (true) {
     try {
       rmSync(releasePath, { recursive: true, force: false });
@@ -181,7 +185,7 @@ function releaseLock(lockPath: string, owner: string): void {
     } catch (error) {
       const code = errorCode(error);
       if (code === "ENOENT") return;
-      if (!code || !lockReleaseRetryCodes.has(code) || Date.now() >= deadline) throw error;
+      if (!code || !lockReleaseRetryCodes.has(code) || Date.now() >= cleanupDeadline) throw error;
       Atomics.wait(waitArray, 0, 0, lockReleaseRetryDelayMs);
     }
   }

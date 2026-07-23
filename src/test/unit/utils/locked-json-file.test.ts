@@ -50,6 +50,31 @@ describe("locked JSON file", () => {
     assert.deepEqual(readdirSync(root).filter((name) => name.includes(".release-")), []);
   });
 
+  it("retries a transient Windows lock-directory rename error", () => {
+    const originalRenameSync = fs.renameSync;
+    let renameAttempts = 0;
+    fs.renameSync = (oldPath, newPath) => {
+      if (String(oldPath) === `${jsonFile}.lock` && renameAttempts++ === 0) {
+        const error = new Error("synthetic transient lock rename failure") as NodeJS.ErrnoException;
+        error.code = "EPERM";
+        throw error;
+      }
+      originalRenameSync(oldPath, newPath);
+    };
+    syncBuiltinESMExports();
+
+    try {
+      withFileLockSync(jsonFile, () => undefined);
+    } finally {
+      fs.renameSync = originalRenameSync;
+      syncBuiltinESMExports();
+    }
+
+    assert.equal(renameAttempts, 2);
+    assert.equal(existsSync(`${jsonFile}.lock`), false);
+    assert.deepEqual(readdirSync(root).filter((name) => name.includes(".release-")), []);
+  });
+
   it("uses an atomic lock directory and recovers crash and legacy lock formats", () => {
     withFileLockSync(jsonFile, () => {
       assert.equal(statSync(`${jsonFile}.lock`).isDirectory(), true);
