@@ -114,6 +114,23 @@ export function buildChildEnvironment(options: ChildEnvironmentOptions): NodeJS.
     if (entry && entry[1] !== undefined) environment[entry[0]] = entry[1];
   }
 
+  if (platform === "win32") {
+    // The MCP SDK's safe default environment includes SystemRoot and PATH but
+    // intentionally omits ComSpec and PATHEXT. npm 10 can start in that
+    // environment, but its lifecycle shell then exits before running even a
+    // simple Node command. Reconstruct only the standard Windows process
+    // plumbing from the already inherited OS root; never copy extra ambient
+    // variables or task-controlled values.
+    const systemRoot = findEnvironmentEntry(environment, "SystemRoot", platform)?.[1]
+      ?? findEnvironmentEntry(environment, "WINDIR", platform)?.[1];
+    if (!findEnvironmentEntry(environment, "ComSpec", platform) && systemRoot && win32.isAbsolute(systemRoot)) {
+      environment.ComSpec = win32.join(systemRoot, "System32", "cmd.exe");
+    }
+    if (!findEnvironmentEntry(environment, "PATHEXT", platform)) {
+      environment.PATHEXT = ".COM;.EXE;.BAT;.CMD";
+    }
+  }
+
   const pathEntry = findEnvironmentEntry(environment, "PATH", platform);
   if (pathEntry) {
     environment[pathEntry[0]] = sanitizeTrustedPath(pathEntry[1] || "", options.cwd, platform);
