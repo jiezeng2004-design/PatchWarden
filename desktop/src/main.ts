@@ -494,6 +494,11 @@ async function writeSmokeEvidence(): Promise<void> {
         return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
       });
       const maxRight = visible.reduce((value, node) => Math.max(value, node.getBoundingClientRect().right), 0);
+      const focusable = visible.filter((node) => node.matches('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+      const focusOrder = focusable.map((node) => {
+        node.focus();
+        return { tag: node.tagName.toLowerCase(), id: node.id || null, focused: document.activeElement === node };
+      });
       return {
         title: document.title,
         readyState: document.readyState,
@@ -503,6 +508,9 @@ async function writeSmokeEvidence(): Promise<void> {
         scrollWidth: root.scrollWidth,
         bodyScrollWidth: body ? body.scrollWidth : 0,
         maxVisibleRight: Math.ceil(maxRight),
+        interactiveCount: focusOrder.length,
+        focusOrder,
+        focusOrderOk: focusOrder.length > 0 && focusOrder.every((item) => item.focused),
       };
     })()`);
     let screenshot = captureScreenshots ? join(screenshotDir, `${width}x${height}.png`) : null;
@@ -518,7 +526,7 @@ async function writeSmokeEvidence(): Promise<void> {
     viewportResults.push({ requested: { width, height }, bounds: mainWindow.getBounds(), metrics, screenshot, screenshotError });
   }
   const report = {
-    ok: viewportResults.every(({ metrics }) => metrics.scrollWidth <= metrics.clientWidth && metrics.maxVisibleRight <= metrics.clientWidth),
+    ok: viewportResults.every(({ metrics }) => metrics.scrollWidth <= metrics.clientWidth && metrics.maxVisibleRight <= metrics.clientWidth && metrics.focusOrderOk),
     version: readCoreVersion(),
     packaged: app.isPackaged,
     singleInstanceLock: gotLock,

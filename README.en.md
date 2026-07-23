@@ -8,9 +8,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Current source version: **v1.6.0**. See the
-[CHANGELOG](CHANGELOG.md), [migration guide](docs/migration-from-safe-bifrost.md), and
-[release checklist](docs/release-checklist.md). Verify GitHub Release / npm publication separately before release.
+**Let an MCP client such as ChatGPT or Codex plan and review the work while a local coding agent executes inside explicit safety boundaries and leaves auditable evidence.**
 
 PatchWarden is a local-first MCP safety and verification layer for AI coding
 agents, with workspace confinement, command allowlists, scope-violation
@@ -21,7 +19,21 @@ PatchWarden stores that plan as a workspace-scoped task, lets a preconfigured
 local agent execute it, and returns results, diffs, artifact manifests, and
 independent verification evidence.
 
-![PatchWarden ChatGPT connector demo](docs/assets/patchwarden-chatgpt-demo.svg)
+[Download Windows installer v1.6.0](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.0/PatchWarden-Setup-1.6.0-x64.exe)
+· [Portable ZIP](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.0/PatchWarden-Portable-1.6.0-x64.zip)
+· [Checksums](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.0/PatchWarden-Desktop-SHA256SUMS.txt)
+· [Three-minute quick start](#three-minute-quick-start)
+· [Discussions](https://github.com/jiezeng2004-design/PatchWarden/discussions)
+
+![Real PatchWarden Desktop first-run screen](docs/assets/patchwarden-desktop-onboarding.png)
+
+<sub>Real PatchWarden Desktop first-run UI from a privacy-safe smoke run; no real workspace, account, or credential data is shown.</sub>
+
+Current source version: **v1.6.1**; current Windows Release: **v1.6.0**; npm
+`latest`: **v1.5.1**. Use the installer above for the first Windows experience;
+pin an actually published version for npm/CLI use. See the
+[CHANGELOG](CHANGELOG.md), [migration guide](docs/migration-from-safe-bifrost.md), and
+[release checklist](docs/release-checklist.md).
 
 > [!IMPORTANT]
 > PatchWarden is not a general-purpose remote shell. MCP clients cannot run
@@ -36,7 +48,7 @@ independent verification evidence.
 - [Evidence example](#evidence-example)
 - [Runtime architecture](#runtime-architecture)
 - [Requirements](#requirements)
-- [Five-minute quick start](#five-minute-quick-start)
+- [Three-minute quick start](#three-minute-quick-start)
 - [Complete configuration guide](#complete-configuration-guide)
 - [Connect OpenCode](#connect-opencode)
 - [Connect Codex](#connect-codex)
@@ -219,9 +231,37 @@ If `where.exe codex` only returns the Codex Desktop executable under
 WindowsApps, it may not be a callable Codex CLI. Install or point to the real
 CLI, or configure OpenCode as the execution agent.
 
-## Five-minute quick start
+## Three-minute quick start
 
-### Option A: run from source (recommended)
+If Node.js 18+ and at least one local coding agent are already installed, this
+Windows path is designed to reach its first read-only health check in about
+three minutes. A ChatGPT Tunnel is not required for this first run.
+
+### Option A: Windows installer (recommended for a first run)
+
+1. Download the [Windows installer v1.6.0](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.0/PatchWarden-Setup-1.6.0-x64.exe)
+   and its [SHA256 checksum file](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.0/PatchWarden-Desktop-SHA256SUMS.txt).
+2. Verify the installer in PowerShell:
+
+```powershell
+Get-FileHash .\PatchWarden-Setup-1.6.0-x64.exe -Algorithm SHA256
+```
+
+The current published value is `77d655545925ae283a0caed0fff12554debac15b54c5decf1ae8f3867703058e`;
+always prefer the checksum file from the same Release. The installer is not
+code-signed yet, so Windows SmartScreen may show an unknown-publisher warning.
+
+3. Install and open PatchWarden Desktop, then choose a dedicated workspace that
+   contains only your projects.
+4. Select **Local MCP** on the first screen, review the detected agent, and let
+   the read-only health check finish.
+
+Success means the onboarding flow reaches the read-only console, shows the
+selected workspace, and completes the agent/runtime checks. Share a successful
+install or a blocked step in [Discussions](https://github.com/jiezeng2004-design/PatchWarden/discussions),
+including your OS, Node.js version, agent, and the step where you stopped.
+
+### Option B: run from source (developer workflow)
 
 Source mode is the easiest way to use the Watcher, Windows launchers, and
 diagnostic scripts together.
@@ -258,7 +298,7 @@ npm.cmd run watch
 Keep this window open, then configure OpenCode, Codex, or ChatGPT as described
 below.
 
-### Option B: use the npm package
+### Option C: use the npm package
 
 The npm package is convenient for launching a pinned MCP server. Task
 execution still requires a separate Watcher.

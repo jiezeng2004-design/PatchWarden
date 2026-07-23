@@ -93,6 +93,7 @@ try {
     { width: 1024, height: 700 },
     { width: 960, height: 640 },
   ]);
+  assert.equal(desktopReport.viewports.every((item) => item.metrics.focusOrderOk && item.metrics.interactiveCount > 0), true, "every viewport must expose a valid keyboard focus order");
 
   const screenshots = [];
   for (const viewport of desktopReport.viewports) {
