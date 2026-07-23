@@ -440,13 +440,12 @@ try {
   const directRepo = join(workspaceRoot, "direct-fixture");
   mkdirSync(join(directRepo, "src"), { recursive: true });
   writeFileSync(join(directRepo, "src", "index.ts"), "export const x = 1;\n", "utf-8");
-  // Keep the npm smoke command free of nested shell quoting so the fixture is
-  // identical under POSIX shells and Windows cmd.exe.
-  writeFileSync(join(directRepo, "smoke.js"), "console.log('ok');\n", "utf-8");
   writeFileSync(join(directRepo, "package.json"), JSON.stringify({
     name: "direct-fixture",
     private: true,
-    scripts: { test: "node smoke.js" },
+    // Exercise the npm-script execution path without relying on a temporary
+    // script file or platform-specific quoting.
+    scripts: { test: "node --version" },
   }, null, 2), "utf-8");
 
   writeFileSync(
