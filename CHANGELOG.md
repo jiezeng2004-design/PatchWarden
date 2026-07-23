@@ -10,6 +10,8 @@
   resolution, minimal child environments, and process-output redaction.
 - Added bounded evidence reads/writes and unique atomic replacement for task,
   Goal, watcher, worktree, and Desktop configuration artifacts.
+- Pinned patched transitive Hono and URI parser releases so clean root and
+  Desktop installs pass the npm vulnerability audit.
 
 ### Reliability and maintainability
 

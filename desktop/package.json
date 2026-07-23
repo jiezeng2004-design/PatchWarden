@@ -29,6 +29,9 @@
     "electron-builder": "26.15.3",
     "typescript": "^6.0.3"
   },
+  "overrides": {
+    "fast-uri": "4.1.1"
+  },
   "build": {
     "appId": "io.github.jiezeng2004design.patchwarden",
     "productName": "PatchWarden",

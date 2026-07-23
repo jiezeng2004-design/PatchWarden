@@ -77,6 +77,11 @@
     "@types/node": "^26.1.0",
     "typescript": "^6.0.3"
   },
+  "overrides": {
+    "@hono/node-server": "2.0.11",
+    "hono": "4.12.31",
+    "fast-uri": "4.1.1"
+  },
   "engines": {
     "node": ">=18.0.0"
   },
