@@ -22,13 +22,14 @@ describe("locked JSON file", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("retries a transient Windows access error while releasing its lock", () => {
+  it("atomically detaches and retries a transient Windows directory removal error", () => {
     const originalRmSync = fs.rmSync;
     let releaseAttempts = 0;
     fs.rmSync = (path, options) => {
-      if (String(path) === `${jsonFile}.lock` && releaseAttempts++ === 0) {
+      if (String(path).startsWith(`${jsonFile}.lock.release-`) && releaseAttempts++ === 0) {
+        assert.equal(existsSync(`${jsonFile}.lock`), false);
         const error = new Error("synthetic transient lock release failure") as NodeJS.ErrnoException;
-        error.code = "EPERM";
+        error.code = "ENOTEMPTY";
         throw error;
       }
       originalRmSync(path, options);
@@ -46,6 +47,7 @@ describe("locked JSON file", () => {
 
     assert.equal(releaseAttempts, 2);
     assert.equal(existsSync(`${jsonFile}.lock`), false);
+    assert.deepEqual(readdirSync(root).filter((name) => name.includes(".release-")), []);
   });
 
   it("uses an atomic lock directory and recovers crash and legacy lock formats", () => {

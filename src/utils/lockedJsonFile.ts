@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteJsonFileSync } from "./atomicFile.js";
 
@@ -15,7 +15,7 @@ export interface LockedJsonOptions {
 }
 
 const waitArray = new Int32Array(new SharedArrayBuffer(4));
-const lockReleaseRetryCodes = new Set(["EACCES", "EBUSY", "EPERM"]);
+const lockReleaseRetryCodes = new Set(["EACCES", "EBUSY", "ENOTEMPTY", "EPERM"]);
 const lockReleaseRetryMs = 1_000;
 const lockReleaseRetryDelayMs = 10;
 const deadOwnerGraceMs = 250;
@@ -147,28 +147,41 @@ function tryCreateLock(lockPath: string, owner: string): boolean {
 
 function releaseLock(lockPath: string, owner: string): void {
   const deadline = Date.now() + lockReleaseRetryMs;
-  let removalStarted = false;
+  const releasePath = `${lockPath}.release-${owner}`;
+
+  // Rename the owned lock directory out of the active lock path before
+  // recursive cleanup. A new contender can then create lockPath immediately,
+  // while Windows rimraf retries cannot delete that replacement lock.
   while (true) {
-    if (!removalStarted) {
-      const currentOwner = readLock(lockPath)?.owner;
-      if (currentOwner !== owner) {
-        if (!existsSync(lockPath)) return;
-        if (currentOwner !== undefined) return;
-        if (Date.now() >= deadline) {
-          throw new Error(`Unable to verify lock ownership before release: ${lockPath}`);
-        }
-        Atomics.wait(waitArray, 0, 0, lockReleaseRetryDelayMs);
-        continue;
+    const currentOwner = readLock(lockPath)?.owner;
+    if (currentOwner !== owner) {
+      if (!existsSync(lockPath)) return;
+      if (currentOwner !== undefined) return;
+      if (Date.now() >= deadline) {
+        throw new Error(`Unable to verify lock ownership before release: ${lockPath}`);
       }
+      Atomics.wait(waitArray, 0, 0, lockReleaseRetryDelayMs);
+      continue;
     }
     try {
-      rmSync(lockPath, { recursive: true, force: false });
+      renameSync(lockPath, releasePath);
+      break;
+    } catch (error) {
+      const code = errorCode(error);
+      if (code === "ENOENT") return;
+      if (!code || !lockReleaseRetryCodes.has(code) || Date.now() >= deadline) throw error;
+      Atomics.wait(waitArray, 0, 0, lockReleaseRetryDelayMs);
+    }
+  }
+
+  while (true) {
+    try {
+      rmSync(releasePath, { recursive: true, force: false });
       return;
     } catch (error) {
       const code = errorCode(error);
       if (code === "ENOENT") return;
       if (!code || !lockReleaseRetryCodes.has(code) || Date.now() >= deadline) throw error;
-      removalStarted = true;
       Atomics.wait(waitArray, 0, 0, lockReleaseRetryDelayMs);
     }
   }
