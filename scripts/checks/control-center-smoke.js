@@ -286,7 +286,7 @@ async function testStaticFiles() {
     if (gettingStarted.status !== 200 || (gettingStarted.body.match(/class="readiness-item"/g) || []).length !== 4 || !gettingStarted.body.includes("home.manual")) {
       checks.push("desktop getting-started page is missing its four readiness checks or manual ChatGPT state");
     }
-    if (gettingStartedJs.status !== 200 || !gettingStartedJs.body.includes("getTunnelSetupStatus") || !gettingStartedJs.body.includes("health_check")) {
+    if (gettingStartedJs.status !== 200 || !gettingStartedJs.body.includes('fetchJson("/api/status")') || !gettingStartedJs.body.includes("health_check")) {
       checks.push("getting-started controller is missing bounded Tunnel status or health_check guidance");
     }
     if (settings.status !== 200 || !settings.body.includes("/settings.js")) {
@@ -474,6 +474,8 @@ async function testTasksJson() {
     if (!Array.isArray(json.tasks)) problems.push("'tasks' is not an array");
     if (typeof json.total !== "number") problems.push("'total' is not a number");
     if (typeof json.returned !== "number") problems.push("'returned' is not a number");
+    if (!(json.nextCursor === null || typeof json.nextCursor === "string")) problems.push("'nextCursor' is neither null nor string");
+    if (!isObject(json.filters) || !isObject(json.filters.applied) || !isObject(json.filters.options)) problems.push("'filters' contract is missing");
 
     const traversal = await httpGet(`${BASE_URL}/api/tasks/..%2Foutside`);
     if (traversal.status !== 400) {
@@ -955,6 +957,9 @@ async function testDirectSessionsEmptyList() {
     const problems = [];
     if (!Array.isArray(json.sessions)) problems.push("'sessions' is not an array");
     if (typeof json.total !== "number") problems.push("'total' is not a number");
+    if (!(json.nextCursor === null || typeof json.nextCursor === "string")) problems.push("'nextCursor' is neither null nor string");
+    if (!isObject(json.filters) || !isObject(json.filters.options)) problems.push("'filters' contract is missing");
+    if (typeof json.direct_profile_enabled !== "boolean") problems.push("'direct_profile_enabled' is not a boolean");
     if (json.reason !== null && typeof json.reason !== "string") problems.push("'reason' is neither null nor string");
     if (Array.isArray(json.sessions) && json.sessions.length !== json.total) {
       problems.push(`sessions.length (${json.sessions.length}) != total (${json.total})`);
@@ -992,6 +997,8 @@ async function testLogsTailParam() {
     if (typeof json.stderr !== "string") problems.push("'stderr' is not a string");
     if (json.tail !== 300) problems.push(`'tail' is ${json.tail} (expected 300)`);
     if (json.category !== "core") problems.push(`'category' is ${json.category} (expected "core")`);
+    if (json.historical_snapshot !== true) problems.push("'historical_snapshot' is not true");
+    if (json.redacted !== true) problems.push("'redacted' is not true");
     if (problems.length === 0) {
       record(name, true);
     } else {

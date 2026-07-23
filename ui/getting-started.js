@@ -19,6 +19,21 @@
     root.querySelector("[data-message]").textContent = tr(message);
     var detail = root.querySelector("[data-reason]"); if (detail) detail.textContent = reasonText(reason, fallback);
   }
+  function renderLiveCheck(name, check) {
+    if (!check) return;
+    var root = item(name); if (!root) return;
+    var state = check.state === "ready" ? "ready" : check.state === "optional" ? "manual" : "action";
+    root.dataset.state = state;
+    root.querySelector("[data-status]").textContent = tr(state === "ready" ? "home.ready" : state === "manual" ? "home.manual" : "home.needsAction");
+    root.querySelector("[data-message]").textContent = check.detail || "";
+    var detail = root.querySelector("[data-reason]"); if (detail) detail.textContent = "";
+  }
+  function setPrimaryAction(name) {
+    ["workspace", "core", "tunnel", "chatgpt"].forEach(function (key) {
+      var root = item(key);
+      if (root) root.dataset.primaryAction = key === name ? "true" : "false";
+    });
+  }
   function syncCoreButton() {
     var button = document.getElementById("startCore");
     button.disabled = coreStarting || lastCoreReady;
@@ -32,22 +47,21 @@
   async function refresh() {
     statusData = await fetchJson("/api/status");
     var agents = Array.isArray(statusData.agents) ? statusData.agents : [];
-    render("workspace", statusData.workspace_root && agents.some(function (a) { return a.available; }) ? "ready" : "action", statusData.workspace_root ? "home.workspaceReady" : "home.workspaceMissing");
-    if (api) {
-      var desktopState = await api.getState();
-      if (desktopState.preferences.connectionMode === "local") {
-        render("tunnel", "ready", "home.localRoute");
-      } else {
-        tunnelData = await api.getTunnelSetupStatus("core");
-        render("tunnel", tunnelData.program_present && tunnelData.profile_present && tunnelData.credential_configured ? "ready" : "action", tunnelData.program_present && tunnelData.profile_present && tunnelData.credential_configured ? "home.tunnelReady" : "home.tunnelMissing");
-      }
-    } else render("tunnel", "manual", "home.tunnelMissing");
-    var coreReady = Boolean(statusData.core && statusData.core.available && statusData.tunnel && statusData.tunnel.core && statusData.tunnel.core.ready && statusData.watcher && statusData.watcher.status === "healthy");
+    var workspaceReady = !!statusData.workspace_root && agents.some(function (agent) { return agent && agent.available; });
+    var coreAvailable = !!(statusData.core && statusData.core.available);
+    var watcherReady = !!(statusData.watcher && statusData.watcher.status === "healthy");
+    var coreReady = coreAvailable && watcherReady;
+    var coreTunnel = statusData.tunnel && statusData.tunnel.core ? statusData.tunnel.core : {};
+    var tunnelReady = coreTunnel.ready === true;
+
+    render("workspace", workspaceReady ? "ready" : "action", workspaceReady ? "home.workspaceReady" : "home.workspaceMissing", workspaceReady ? null : "workspace_agent_missing");
+    render("core", coreReady ? "ready" : "action", coreReady ? "home.coreReady" : "home.coreMissing", coreReady ? null : (statusData.watcher && statusData.watcher.reason) || (statusData.core && statusData.core.reason) || "watcher_unhealthy");
+    render("tunnel", tunnelReady ? "ready" : "action", tunnelReady ? "home.tunnelReady" : "home.tunnelMissing", tunnelReady ? null : coreTunnel.reason_code || "tunnel_not_ready");
+    render("chatgpt", "manual", "home.chatgptManual", null);
+
     lastCoreReady = coreReady;
-    var reason = !statusData.core?.available ? "tunnel_not_ready" : statusData.watcher?.status !== "healthy" ? "watcher_unhealthy" : null;
-    render("core", coreReady ? "ready" : "action", coreReady ? "home.coreReady" : "home.coreMissing", reason);
     syncCoreButton();
-    render("chatgpt", "manual", "home.chatgptManual");
+    setPrimaryAction(!workspaceReady ? "workspace" : !coreReady ? "core" : !tunnelReady ? "tunnel" : "chatgpt");
   }
   async function startCore() {
     coreStarting = true;

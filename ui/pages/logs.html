@@ -95,7 +95,8 @@ html.dark {
 }
     </style>
     <script src="/vendor/tailwindcss-browser.js"></script>
-    <script src="/vendor/lucide.js"></script>
+  <script src="/vendor/lucide.js"></script>
+  <script src="/log-parser.js"></script>
     <style>
       .no-scrollbar::-webkit-scrollbar { display: none; }
       .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
@@ -221,6 +222,11 @@ html.dark {
           <option value="300">tail 300</option>
           <option value="1000">tail 1000</option>
         </select>
+        <button id="clearView" class="px-2.5 py-1 rounded-md text-xs font-medium" type="button" title="仅清空当前显示，不删除日志文件" style="background-color: var(--pw-bg-surface); color: var(--pw-text-secondary); border: 1px solid var(--pw-border-subtle); font-family: var(--pw-font-sans);">清空视图</button>
+        <select id="levelFilter" aria-label="日志级别" class="px-2 py-1 rounded-md text-xs font-medium" style="background-color: var(--pw-bg-surface); color: var(--pw-text-secondary); border: 1px solid var(--pw-border-subtle);">
+          <option value="">全部级别</option><option value="error">Error</option><option value="warn">Warning</option><option value="info">Info</option>
+        </select>
+        <input id="logSearch" type="search" aria-label="搜索日志" placeholder="搜索日志" class="px-2 py-1 rounded-md text-xs outline-none" style="width: 140px; background-color: var(--pw-bg-surface); color: var(--pw-text-primary); border: 1px solid var(--pw-border-subtle);">
         <!-- Auto-refresh toggle -->
         <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none" style="color: var(--pw-text-secondary); font-family: var(--pw-font-sans);">
           <input id="autoRefresh" type="checkbox" style="accent-color: var(--pw-accent);" />
@@ -270,20 +276,20 @@ html.dark {
             <span id="stdoutMeta" class="text-xs whitespace-nowrap" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-mono);">—</span>
           </div>
           <div id="stdoutEmpty" class="px-4 py-8 text-center text-sm" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="暂无 stdout 日志" data-en="No stdout log">暂无 stdout 日志</div>
-          <pre id="stdoutContent" class="hidden px-4 py-3 text-xs leading-relaxed overflow-x-auto whitespace-pre-wrap break-all" style="background-color: #0d1117; color: var(--pw-text-secondary); font-family: var(--pw-font-mono); max-height: 480px; overflow-y: auto;"></pre>
+          <div id="stdoutContent" class="hidden log-list"></div>
         </section>
 
         <!-- stderr -->
         <section class="rounded-lg overflow-hidden" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
           <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--pw-border);">
             <div class="flex items-center gap-2">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--pw-state-error)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--pw-text-secondary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
               <h2 class="text-sm font-semibold" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">stderr</h2>
             </div>
             <span id="stderrMeta" class="text-xs whitespace-nowrap" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-mono);">—</span>
           </div>
           <div id="stderrEmpty" class="px-4 py-8 text-center text-sm" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="暂无 stderr 日志" data-en="No stderr log">暂无 stderr 日志</div>
-          <pre id="stderrContent" class="hidden px-4 py-3 text-xs leading-relaxed overflow-x-auto whitespace-pre-wrap break-all" style="background-color: #0d1117; color: var(--pw-state-error); font-family: var(--pw-font-mono); max-height: 480px; overflow-y: auto;"></pre>
+          <div id="stderrContent" class="hidden log-list"></div>
         </section>
 
       </div>
@@ -319,6 +325,19 @@ html.dark {
       background-color: var(--pw-accent-muted);
       color: var(--pw-accent);
     }
+    .log-list { max-height: 480px; overflow-y: auto; background: #0d1117; }
+    .log-row { border-bottom: 1px solid var(--pw-border-subtle); color: var(--pw-text-secondary); font-family: var(--pw-font-mono); }
+    .log-row:last-child { border-bottom: 0; }
+    .log-row > summary { display: grid; grid-template-columns: minmax(132px,auto) 64px minmax(90px,140px) minmax(180px,1fr) auto; gap: 10px; align-items: center; padding: 9px 12px; cursor: pointer; list-style: none; }
+    .log-row > summary::-webkit-details-marker { display: none; }
+    .log-time,.log-component,.log-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .log-level { font-weight: 700; text-transform: uppercase; }
+    .log-row[data-level="error"] .log-level { color: var(--pw-state-error); }
+    .log-row[data-level="warn"] .log-level { color: var(--pw-state-warning); }
+    .log-row[data-level="info"] .log-level { color: var(--pw-state-info); }
+    .log-detail { margin: 0; padding: 10px 12px; color: var(--pw-text-tertiary); background: var(--pw-code-bg); white-space: pre-wrap; word-break: break-all; }
+    .copy-log-line { padding: 3px 7px; border: 1px solid var(--pw-border-subtle); border-radius: 4px; color: var(--pw-text-secondary); background: var(--pw-bg-hover); font: 11px var(--pw-font-sans); }
+    @media (max-width: 900px) { .log-row > summary { grid-template-columns: 92px 52px minmax(0,1fr) auto; }.log-component { display:none; } }
   </style>
 
   <script>lucide.createIcons();</script>
@@ -391,37 +410,57 @@ html.dark {
       }
     }
 
+    var lastLogData = null;
+    var visibleLogLines = {};
+    function parseLogEntries(value, stream) {
+      var query = $('logSearch') ? $('logSearch').value.trim().toLowerCase() : '';
+      var level = $('levelFilter') ? $('levelFilter').value : '';
+      return String(value || '').split(/\r?\n/).filter(Boolean).map(function (line) {
+        var parsed = window.PatchWardenLogParser.parseLine(line, stream);
+        if (level && parsed.level !== level) return null;
+        var searchable = [parsed.time, parsed.level, parsed.component, parsed.summary, line].join(' ').toLowerCase();
+        if (query && searchable.indexOf(query) < 0) return null;
+        return parsed;
+      }).filter(Boolean);
+    }
+
+    function renderLogRows(container, emptyState, value, stream) {
+      var entries = parseLogEntries(value, stream);
+      if (!entries.length) { hide(container); show(emptyState); return 0; }
+      container.innerHTML = entries.map(function (entry, index) {
+        var copyId = stream + '-' + index;
+        visibleLogLines[copyId] = entry.raw;
+        return '<details class="log-row" data-level="' + escapeHtml(entry.level || 'unknown') + '">'
+          + '<summary><span class="log-time" title="' + escapeHtml(entry.time || '无时间字段') + '">' + escapeHtml(entry.time || '—') + '</span>'
+          + '<span class="log-level">' + escapeHtml(entry.level || 'raw') + '</span>'
+          + '<span class="log-component" title="' + escapeHtml(entry.component) + '">' + escapeHtml(entry.component) + '</span>'
+          + '<span class="log-summary" title="' + escapeHtml(entry.summary) + '">' + escapeHtml(entry.summary) + '</span>'
+          + '<button type="button" class="copy-log-line" data-copy-id="' + copyId + '" title="复制脱敏日志行" aria-label="复制脱敏日志行" data-zh="复制" data-en="Copy">复制</button></summary>'
+          + '<pre class="log-detail">' + escapeHtml(entry.detail) + '</pre></details>';
+      }).join('');
+      show(container); hide(emptyState);
+      return entries.length;
+    }
+
     function renderLogs(data) {
+      lastLogData = data || {};
       var stdout = (data && data.stdout) || '';
       var stderr = (data && data.stderr) || '';
+      visibleLogLines = {};
       var reason = (data && data.reason) || null;
       var tail = (data && data.tail) || currentTail;
 
       // stdout
       var stdoutEl = $('stdoutContent');
       var stdoutEmpty = $('stdoutEmpty');
-      if (stdout) {
-        text(stdoutEl, stdout);
-        show(stdoutEl);
-        hide(stdoutEmpty);
-      } else {
-        hide(stdoutEl);
-        show(stdoutEmpty);
-      }
-      text($('stdoutMeta'), 'tail=' + tail + (reason ? ' · ' + reason : ''));
+      var stdoutCount = renderLogRows(stdoutEl, stdoutEmpty, stdout, 'stdout');
+      text($('stdoutMeta'), (data && data.historical_snapshot ? '历史日志 · ' : '') + stdoutCount + ' 行 · tail=' + tail + (reason ? ' · ' + reason : ''));
 
       // stderr
       var stderrEl = $('stderrContent');
       var stderrEmpty = $('stderrEmpty');
-      if (stderr) {
-        text(stderrEl, stderr);
-        show(stderrEl);
-        hide(stderrEmpty);
-      } else {
-        hide(stderrEl);
-        show(stderrEmpty);
-      }
-      text($('stderrMeta'), 'tail=' + tail + (reason ? ' · ' + reason : ''));
+      var stderrCount = renderLogRows(stderrEl, stderrEmpty, stderr, 'stderr');
+      text($('stderrMeta'), (data && data.historical_snapshot ? '历史日志 · ' : '') + stderrCount + ' 行 · tail=' + tail + (reason ? ' · ' + reason : ''));
     }
 
     function loadLogs() {
@@ -451,6 +490,15 @@ html.dark {
         .finally(function () {
           setRefreshing(false);
         });
+    }
+
+    function clearLogView() {
+      clearError();
+      text($('stdoutMeta'), '已清空当前视图');
+      text($('stderrMeta'), '日志文件未删除');
+      $('stdoutContent').innerHTML = ''; $('stderrContent').innerHTML = '';
+      show($('stdoutEmpty')); show($('stderrEmpty'));
+      hide($('stdoutContent')); hide($('stderrContent'));
     }
 
     // ---------- Auto-refresh ----------
@@ -502,6 +550,29 @@ html.dark {
 
     var refreshBtn = $('refreshBtn');
     if (refreshBtn) refreshBtn.addEventListener('click', loadLogs);
+    var clearView = $('clearView');
+    if (clearView) clearView.addEventListener('click', clearLogView);
+    var levelFilter = $('levelFilter');
+    if (levelFilter) levelFilter.addEventListener('change', function () { if (lastLogData) renderLogs(lastLogData); });
+    var logSearch = $('logSearch');
+    if (logSearch) logSearch.addEventListener('input', function () { if (lastLogData) renderLogs(lastLogData); });
+    ['stdoutContent', 'stderrContent'].forEach(function (id) {
+      var container = $(id);
+      if (!container) return;
+      container.addEventListener('click', function (event) {
+        var button = event.target.closest && event.target.closest('.copy-log-line');
+        if (!button) return;
+        event.preventDefault();
+        event.stopPropagation();
+        var line = visibleLogLines[button.getAttribute('data-copy-id')] || '';
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(line).then(function () {
+            button.textContent = '已复制';
+            setTimeout(function () { button.textContent = '复制'; }, 1200);
+          });
+        }
+      });
+    });
 
     // ---------- Initial load ----------
     setCategory(DEFAULT_CATEGORY);
