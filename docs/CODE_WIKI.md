@@ -1555,7 +1555,7 @@ npm.cmd run desktop:package   # 打包：先 stage 主仓 dist/，再 electron-b
 | 主包 `@types/node` | `^26.1.0` | `^18.19.0`（与 Node.js 18 最低运行时对齐） |
 | `chatgpt_direct` 工具数 | 15 | 14 |
 
-> 注：根目录 `README.md` 仍写"v1.6.0"，需在下一次 README 维护时同步到 v1.6.1。
+> 根目录中英文 README 的下载链接、安装器哈希和公开版本事实已同步到 v1.6.1。
 
 #### ✅ 11.7.2 v1.5.1/v1.6.0/v1.6.1 新功能导览 — 已修复
 
