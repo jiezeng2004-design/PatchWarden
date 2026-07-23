@@ -526,7 +526,23 @@ try {
     })).content?.[0]?.text || "{}"
   );
   if (bundleResult.status !== "passed" || bundleResult.command_count !== 1 || bundleResult.passed_commands !== 1) {
-    throw new Error(`run_direct_verification_bundle failed: ${JSON.stringify(bundleResult)}`);
+    // This repository and command are generated entirely by this smoke test,
+    // so a bounded log excerpt is safe and makes platform-only CI failures
+    // actionable without weakening the production tool's safe summary.
+    const sessionDir = join(workspaceRoot, ".patchwarden", "direct-sessions", sessionResult.session_id);
+    const verificationPath = join(sessionDir, "verification.json");
+    const logPath = join(sessionDir, "verification.log");
+    const verification = existsSync(verificationPath)
+      ? readFileSync(verificationPath, "utf-8").slice(-2000)
+      : "missing verification.json";
+    const fixtureLog = existsSync(logPath)
+      ? readFileSync(logPath, "utf-8").slice(-2000)
+      : "missing verification.log";
+    throw new Error(
+      `run_direct_verification_bundle failed: ${JSON.stringify(bundleResult)}; ` +
+      `synthetic_fixture_verification=${JSON.stringify(verification)}; ` +
+      `synthetic_fixture_log=${JSON.stringify(fixtureLog)}`
+    );
   }
   const bundleText = JSON.stringify(bundleResult).toLowerCase();
   if (bundleText.includes("stdout_tail") || bundleText.includes("stderr_tail") || bundleText.includes("verification.log")) {
