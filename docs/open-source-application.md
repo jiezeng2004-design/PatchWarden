@@ -56,24 +56,24 @@ evidence packs.
 
 ## Current Public Evidence
 
-Remote snapshot checked on 2026-07-19:
+Remote snapshot checked on 2026-07-23:
 
 - GitHub repository: `jiezeng2004-design/PatchWarden`
 - Stars: 2
 - Forks: 0
-- Open issues: 9
-- Open pull requests: 4
-- GitHub latest release: `v1.6.0`, published on 2026-07-16
-- npm latest dist-tag: `patchwarden@1.5.1`
+- Open issues: 5
+- Open pull requests: 1
+- GitHub latest release: `v1.6.1`, published on 2026-07-23
+- npm latest dist-tag: `patchwarden@1.6.1`
 
 Local workspace facts, kept separate from the public snapshot:
 
 - Local source version in `package.json`: `1.6.1`
-- Local working branch: `codex/windows-desktop-tunnel-fixes`
+- Verified release commit: `2ab2b7405d89b12c4ef10febf56404de59c04053`
 
-Local source is `v1.6.1`; the 2026-07-19 remote snapshot still records GitHub
-Release `v1.6.0` and npm `latest` `1.5.1`. Treat the publication surfaces as out
-of sync; local builds do not establish that either remote surface was updated.
+The local source, GitHub Release, and npm `latest` are synchronized at `v1.6.1`.
+The GitHub Release contains reviewed Core and Windows Desktop assets plus
+SHA-256 manifests.
 
 ## Existing Project Evidence
 
@@ -117,9 +117,8 @@ Known gaps before submission:
 - collect 3 to 5 real user reports through GitHub issues or discussions
 - record a live screencast if stronger evidence is needed; a privacy-safe
   scripted GIF now exists for the public maintainer workflow
-- resolve the release lag through the reviewed workflow; local source is
-  `1.6.1`, while the last verified GitHub Release is `1.6.0` and npm `latest`
-  / `dist-tags.latest` are `1.5.1`
+- keep future source, GitHub Release, and npm publication facts synchronized
+  through the reviewed release workflow
 - add small contributor-friendly roadmap issues such as macOS docs, Codex CLI
   examples, and a minimal demo repository
 

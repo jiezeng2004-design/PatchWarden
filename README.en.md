@@ -19,9 +19,9 @@ PatchWarden stores that plan as a workspace-scoped task, lets a preconfigured
 local agent execute it, and returns results, diffs, artifact manifests, and
 independent verification evidence.
 
-[Download Windows installer v1.6.0](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.0/PatchWarden-Setup-1.6.0-x64.exe)
-· [Portable ZIP](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.0/PatchWarden-Portable-1.6.0-x64.zip)
-· [Checksums](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.0/PatchWarden-Desktop-SHA256SUMS.txt)
+[Download Windows installer v1.6.1](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.1/PatchWarden-Setup-1.6.1-x64.exe)
+· [Portable ZIP](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.1/PatchWarden-Portable-1.6.1-x64.zip)
+· [Checksums](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.1/PatchWarden-Desktop-SHA256SUMS.txt)
 · [Three-minute quick start](#three-minute-quick-start)
 · [Discussions](https://github.com/jiezeng2004-design/PatchWarden/discussions)
 
@@ -29,8 +29,8 @@ independent verification evidence.
 
 <sub>Real PatchWarden Desktop first-run UI from a privacy-safe smoke run; no real workspace, account, or credential data is shown.</sub>
 
-Current source version: **v1.6.1**; current Windows Release: **v1.6.0**; npm
-`latest`: **v1.5.1**. Use the installer above for the first Windows experience;
+Current source version, Windows Release, and npm `latest`: **v1.6.1**. Use the
+installer above for the first Windows experience;
 pin an actually published version for npm/CLI use. See the
 [CHANGELOG](CHANGELOG.md), [migration guide](docs/migration-from-safe-bifrost.md), and
 [release checklist](docs/release-checklist.md).
@@ -239,15 +239,15 @@ three minutes. A ChatGPT Tunnel is not required for this first run.
 
 ### Option A: Windows installer (recommended for a first run)
 
-1. Download the [Windows installer v1.6.0](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.0/PatchWarden-Setup-1.6.0-x64.exe)
-   and its [SHA256 checksum file](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.0/PatchWarden-Desktop-SHA256SUMS.txt).
+1. Download the [Windows installer v1.6.1](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.1/PatchWarden-Setup-1.6.1-x64.exe)
+   and its [SHA256 checksum file](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.1/PatchWarden-Desktop-SHA256SUMS.txt).
 2. Verify the installer in PowerShell:
 
 ```powershell
-Get-FileHash .\PatchWarden-Setup-1.6.0-x64.exe -Algorithm SHA256
+Get-FileHash .\PatchWarden-Setup-1.6.1-x64.exe -Algorithm SHA256
 ```
 
-The current published value is `77d655545925ae283a0caed0fff12554debac15b54c5decf1ae8f3867703058e`;
+The current published value is `aef23bd687a7ef1728901f59078c11cf3046a7ca2af87a0492516f475c55e677`;
 always prefer the checksum file from the same Release. The installer is not
 code-signed yet, so Windows SmartScreen may show an unknown-publisher warning.
 
