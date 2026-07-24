@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { resolve } from "node:path";
+import { resolve, win32 } from "node:path";
 import type { PatchWardenConfig } from "../config.js";
 import { getRepoAllowedTestCommands, getRepoDirectAllowedCommands } from "../config.js";
 import { stableJsonStringify } from "../utils/stableJson.js";
@@ -68,7 +68,11 @@ export interface AssessmentSecuritySnapshotComparison {
 }
 
 function canonicalPath(value: string): string {
-  const normalized = resolve(String(value)).replace(/\\/g, "/").replace(/\/+$/, "");
+  const rawValue = String(value);
+  if (/^[a-z]:[\\/]/i.test(rawValue)) {
+    return win32.normalize(rawValue).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  }
+  const normalized = resolve(rawValue).replace(/\\/g, "/").replace(/\/+$/, "");
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
