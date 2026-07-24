@@ -803,12 +803,12 @@ try {
     const task = await createTask({ plan_id: plan.plan_id, agent: "slow", repo_path: "repo", timeout_seconds: 1 });
     const started = Date.now();
     const result = await runTask(task.task_id);
-    if (result.status !== "failed" || !result.error?.includes("timed out")) {
+    if (result.status !== "timeout" || !result.error?.includes("timed out")) {
       throw new Error(`Expected timeout failure, got ${JSON.stringify(result)}`);
     }
     if (Date.now() - started > 10000) throw new Error("Timeout took too long to stop the process");
     const status = getTaskStatus(task.task_id);
-    if (status.phase !== "failed" || !status.last_heartbeat_at) {
+    if (status.phase !== "timeout" || status.termination_reason !== "timeout" || !status.last_heartbeat_at) {
       throw new Error(`Missing timeout phase/heartbeat: ${JSON.stringify(status)}`);
     }
     if (!existsSync(join(task.path, "progress.md"))) throw new Error("progress.md missing");

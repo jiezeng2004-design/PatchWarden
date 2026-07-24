@@ -38,6 +38,8 @@ import { mutateTaskStatus } from "./taskStatusStore.js";
 import { logger } from "../logging.js";
 import { redactSensitiveContent } from "../security/contentRedaction.js";
 import { atomicWriteFileSync } from "../utils/atomicFile.js";
+import { reconcileTasks } from "../tools/tasks/reconcileTasks.js";
+import { recordAssessmentValidationFailure } from "../assessments/assessmentDiagnostics.js";
 //  Note: `runTask` is imported lazily inside `tick()` via `await import("./runTask.js")`.
 //  This keeps `import { acquireWatcherLock }` side-effect-free for unit tests and
 //  avoids eagerly pulling in the full tools/dispatch graph at module load.
@@ -221,6 +223,8 @@ async function tick() {
       return;
     }
 
+    reconcileInterruptedTasks();
+
     const entries = readdirSync(tasksDir, { withFileTypes: true });
     const taskDirs = entries.filter((e) => e.isDirectory());
 
@@ -280,7 +284,11 @@ async function tick() {
           const preExecSnapshot = await captureRepoSnapshot(resolvedRepoPath);
           const validation = validateAssessmentFreshness(statusData.assessment_id, preExecSnapshot);
           if (!validation.valid) {
-            throw new Error(`assessment validation failed: ${validation.failure_reason}`);
+            recordAssessmentValidationFailure(validation);
+            const changedFields = validation.config_change_categories?.length
+              ? `; changed_fields=${validation.config_change_categories.join(",")}`
+              : "";
+            throw new Error(`assessment validation failed: ${validation.failure_reason}${changedFields}`);
           }
         }
       } catch (err) {
@@ -334,6 +342,23 @@ async function tick() {
         error: heartbeatError instanceof Error ? heartbeatError.message : String(heartbeatError),
       });
     }
+  }
+}
+
+function reconcileInterruptedTasks(): void {
+  const result = reconcileTasks({
+    mode: "safe_fix",
+    max_age_minutes: Math.max(config.watcherStaleSeconds / 60, 1 / 60),
+    include_done_candidates: true,
+  }, config);
+  if (result.reconciled > 0) {
+    logger.warn("[watcher] Reconciled tasks left by a previous runner", {
+      reconciled: result.reconciled,
+      task_ids: result.reports
+        .filter((report) => report.action_taken !== "left_unchanged")
+        .map((report) => report.task_id)
+        .slice(0, 20),
+    });
   }
 }
 

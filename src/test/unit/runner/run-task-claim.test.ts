@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { reloadConfig } from "../../../config.js";
 import { runTask } from "../../../runner/runTask.js";
@@ -18,6 +19,7 @@ describe("runTask claim", () => {
   let root: string;
   let repo: string;
   let marker: string;
+  let configPath: string;
   let previousConfig: string | undefined;
 
   beforeEach(() => {
@@ -28,7 +30,18 @@ describe("runTask claim", () => {
     writeFileSync(join(repo, "main.txt"), "before\n", "utf-8");
 
     const script = `require("node:fs").appendFileSync(${JSON.stringify(marker)}, "run\\n"); setTimeout(() => process.exit(0), 200);`;
-    const configPath = join(root, "patchwarden.config.json");
+    configPath = join(root, "patchwarden.config.json");
+    writeAgentConfig(script);
+    const planDir = join(root, ".patchwarden", "plans", "plan-claim");
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(join(planDir, "plan.md"), "Run the fixture once.\n", "utf-8");
+
+    previousConfig = process.env.PATCHWARDEN_CONFIG;
+    process.env.PATCHWARDEN_CONFIG = configPath;
+    reloadConfig(configPath);
+  });
+
+  function writeAgentConfig(script: string): void {
     writeFileSync(configPath, JSON.stringify({
       workspaceRoot: root,
       plansDir: ".patchwarden/plans",
@@ -40,14 +53,7 @@ describe("runTask claim", () => {
       defaultTaskTimeoutSeconds: 10,
       maxTaskTimeoutSeconds: 30,
     }), "utf-8");
-    const planDir = join(root, ".patchwarden", "plans", "plan-claim");
-    mkdirSync(planDir, { recursive: true });
-    writeFileSync(join(planDir, "plan.md"), "Run the fixture once.\n", "utf-8");
-
-    previousConfig = process.env.PATCHWARDEN_CONFIG;
-    process.env.PATCHWARDEN_CONFIG = configPath;
-    reloadConfig(configPath);
-  });
+  }
 
   afterEach(() => {
     if (previousConfig === undefined) delete process.env.PATCHWARDEN_CONFIG;
@@ -56,7 +62,7 @@ describe("runTask claim", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  function writePendingTask(taskId: string): string {
+  function writePendingTask(taskId: string, timeoutSeconds = 10): string {
     const taskDir = join(root, ".patchwarden", "tasks", taskId);
     mkdirSync(taskDir, { recursive: true });
     const now = new Date().toISOString();
@@ -69,7 +75,7 @@ describe("runTask claim", () => {
       workspace_root: root,
       status: "pending",
       phase: "queued",
-      timeout_seconds: 10,
+      timeout_seconds: timeoutSeconds,
       test_command: "",
       verify_commands: [],
       change_policy: "repo_scoped_changes",
@@ -106,5 +112,44 @@ describe("runTask claim", () => {
     assert.match(result.error || "", /only pending tasks/);
     assert.equal(existsSync(marker), false);
     assert.equal(existsSync(join(taskDir, "result.json")), false);
+  });
+
+  it("converges a running agent to the timeout terminal state", { timeout: 20_000 }, async () => {
+    const hangScript = `require("node:fs").appendFileSync(${JSON.stringify(marker)}, "run\\n"); setInterval(() => {}, 1000);`;
+    writeAgentConfig(hangScript);
+    reloadConfig(configPath);
+    const taskDir = writePendingTask("task-agent-timeout", 1);
+
+    const startedAt = Date.now();
+    const result = await runTask("task-agent-timeout");
+
+    assert.equal(result.status, "timeout");
+    assert.ok(Date.now() - startedAt < 18_000, "timeout cleanup must remain bounded");
+    const status = JSON.parse(readFileSync(join(taskDir, "status.json"), "utf-8"));
+    assert.equal(status.status, "timeout");
+    assert.equal(status.phase, "timeout");
+    assert.equal(existsSync(join(taskDir, "result.json")), true);
+    assert.equal(existsSync(join(taskDir, "verify.json")), true);
+    assert.equal(existsSync(join(taskDir, "test.log")), true);
+  });
+
+  it("converges a running cancellation within the grace period", { timeout: 20_000 }, async () => {
+    const hangScript = `require("node:fs").appendFileSync(${JSON.stringify(marker)}, "run\\n"); setInterval(() => {}, 1000);`;
+    writeAgentConfig(hangScript);
+    reloadConfig(configPath);
+    const taskDir = writePendingTask("task-agent-cancel", 20);
+    const running = runTask("task-agent-cancel");
+    const deadline = Date.now() + 5_000;
+    while (!existsSync(marker) && Date.now() < deadline) await sleep(25);
+    assert.equal(existsSync(marker), true, "agent did not start before cancellation");
+
+    const requested = cancelTask("task-agent-cancel");
+    assert.equal(requested.cancel_requested, true);
+    const result = await running;
+
+    assert.equal(result.status, "canceled");
+    const status = JSON.parse(readFileSync(join(taskDir, "status.json"), "utf-8"));
+    assert.equal(status.status, "canceled");
+    assert.equal(status.phase, "canceled");
   });
 });

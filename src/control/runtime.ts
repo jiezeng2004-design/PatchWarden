@@ -19,6 +19,7 @@ import { isValidDirectSessionId as isValidStoredDirectSessionId } from "../direc
 import { atomicWriteFileSync, atomicWriteJsonFileSync } from "../utils/atomicFile.js";
 import { withFileLockSync } from "../utils/lockedJsonFile.js";
 import { logger } from "../logging.js";
+import { TERMINAL_TASK_STATUSES as SHARED_TERMINAL_TASK_STATUSES } from "../tools/tasks/taskStates.js";
 import {
   config,
   controlCenterEventsPath,
@@ -204,16 +205,7 @@ export interface StaleClassification {
   stale_reasons: string[];
 }
 
-export const TERMINAL_TASK_STATUSES = new Set([
-  "done",
-  "done_by_agent",
-  "failed",
-  "failed_verification",
-  "failed_scope_violation",
-  "failed_policy_violation",
-  "canceled",
-  "timeout",
-]);
+export const TERMINAL_TASK_STATUSES = SHARED_TERMINAL_TASK_STATUSES;
 
 /**
  * Classify a task as stale based on Phase 2 rules:

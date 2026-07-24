@@ -11,8 +11,11 @@ import { getTasksDir, getConfig, type PatchWardenConfig } from "../../config.js"
 import { diagnoseTask, type DiagnosisType, type DiagnosisConfidence, type SafeAction } from "./diagnoseTask.js";
 import { syncSubgoalOnTaskDone, readTaskGoalMeta } from "../../goal/subgoalSync.js";
 import { mutateTaskStatus } from "../../runner/taskStatusStore.js";
-import { atomicWriteFileSync } from "../../utils/atomicFile.js";
+import { writeTaskRuntime } from "../../runner/taskRuntime.js";
+import type { TaskPhase } from "./createTask.js";
+import { atomicWriteFileSync, atomicWriteJsonFileSync } from "../../utils/atomicFile.js";
 import { appendBoundedTextFileSync } from "../../utils/boundedFile.js";
+import { isActiveTaskStatus } from "./taskStates.js";
 
 // ── v0.7.0: reconcile_tasks types ──────────────────────────────────
 
@@ -22,6 +25,7 @@ export interface ReconcileTasksInput {
   max_age_minutes?: number;
   mode?: ReconcileMode;
   include_done_candidates?: boolean;
+  task_ids?: string[];
 }
 
 export interface ReconcileTaskReport {
@@ -33,7 +37,7 @@ export interface ReconcileTaskReport {
   reasons: string[];
   safe_actions: SafeAction[];
   age_seconds: number | null;
-  action_taken: "left_unchanged" | "marked_failed_stale" | "marked_orphaned" | "marked_done_by_agent";
+  action_taken: "left_unchanged" | "marked_failed_stale" | "marked_orphaned" | "marked_done_by_agent" | "marked_canceled" | "marked_timed_out";
   previous_status: string | null;
   new_status: string | null;
   applied_at: string | null;
@@ -75,6 +79,9 @@ export function reconcileTasks(
       ? Math.min(input.max_age_minutes, 24 * 60)
       : DEFAULT_MAX_AGE_MINUTES;
   const includeDoneCandidates = input.include_done_candidates !== false; // default true
+  const requestedTaskIds = input.task_ids?.length
+    ? new Set(input.task_ids.filter((taskId) => /^task[-_][a-zA-Z0-9_-]+$/.test(taskId)))
+    : null;
   const maxAgeSeconds = maxAgeMinutes * 60;
 
   const tasksDir = getTasksDir(config);
@@ -118,8 +125,9 @@ export function reconcileTasks(
   const taskDirs = entries.filter((e) => e.isDirectory());
 
   for (const entry of taskDirs) {
-    scanned += 1;
     const taskId = entry.name;
+    if (requestedTaskIds && !requestedTaskIds.has(taskId)) continue;
+    scanned += 1;
     const taskDir = resolve(tasksDir, taskId);
     const statusFile = join(taskDir, "status.json");
     if (!existsSync(statusFile)) continue;
@@ -133,18 +141,17 @@ export function reconcileTasks(
 
     const statusStr = typeof statusData.status === "string" ? statusData.status : "unknown";
 
-    // Filter: only running / collecting_artifacts / (optionally) done_by_agent candidates
+    // Scan every persisted non-terminal lifecycle spelling, including legacy
+    // phase-as-status records left by older Watchers.
     const isCandidate =
-      statusStr === "running" ||
-      statusStr === "collecting_artifacts" ||
+      isActiveTaskStatus(statusStr) ||
       (includeDoneCandidates && statusStr === "done_by_agent");
     if (!isCandidate) continue;
 
-    // Filter by age — use the oldest reliable timestamp on the task
+    // Use the oldest reliable timestamp for ordinary stale detection. Explicit
+    // cancel, persisted deadline, and Watcher-instance mismatch bypass this
+    // age gate so a restart cannot extend the task's total budget.
     const ageSeconds = taskAgeSeconds(taskDir, statusData, nowMs);
-    if (ageSeconds !== null && ageSeconds < maxAgeSeconds) continue;
-
-    candidates += 1;
 
     // Diagnose the task
     let diagnosis;
@@ -153,6 +160,14 @@ export function reconcileTasks(
     } catch {
       continue; // diagnosis failed — skip
     }
+    const cancellationRequested = statusData.cancel_requested === true || statusStr === "cancel_requested";
+    const deadlineExceeded = taskDeadlineExceeded(statusData, nowMs);
+    const urgentRecovery = cancellationRequested
+      || deadlineExceeded
+      || diagnosis.diagnosis === "orphaned_running";
+    if (ageSeconds !== null && ageSeconds < maxAgeSeconds && !urgentRecovery) continue;
+
+    candidates += 1;
 
     const report: ReconcileTaskReport = {
       task_id: taskId,
@@ -188,7 +203,9 @@ export function reconcileTasks(
     //
     // Anything else is left_unchanged and recorded for audit.
 
-    if (mode === "safe_fix" && diagnosis.confidence === "high") {
+    const deterministicRecovery = !diagnosis.evidence.watcher_owns_task
+      && (cancellationRequested || deadlineExceeded);
+    if (mode === "safe_fix" && (diagnosis.confidence === "high" || deterministicRecovery)) {
       if (diagnosis.evidence.watcher_owns_task) {
         // Hard rule: do not touch tasks the live watcher still owns.
         skippedActiveWatcher += 1;
@@ -284,7 +301,14 @@ function applySafeFix(
   let newStatus: string | null = null;
   let actionTaken: ReconcileTaskReport["action_taken"] = "left_unchanged";
 
-  switch (diagnosis) {
+  const cancellationRequested = currentStatus.cancel_requested === true || previousStatus === "cancel_requested";
+  if (!evidence.watcher_owns_task && cancellationRequested) {
+    newStatus = "canceled";
+    actionTaken = "marked_canceled";
+  } else if (!evidence.watcher_owns_task && taskDeadlineExceeded(currentStatus)) {
+    newStatus = "timeout";
+    actionTaken = "marked_timed_out";
+  } else switch (diagnosis) {
     case "stale_running":
       newStatus = "failed_stale";
       actionTaken = "marked_failed_stale";
@@ -350,7 +374,31 @@ function applySafeFix(
             current_watcher_instance_id: evidence.current_watcher_instance_id,
           },
         },
+        process_cleanup_required: !evidence.watcher_owns_task,
+        process_cleanup_reason: !evidence.watcher_owns_task
+          ? "The previous runner is no longer owned by this Watcher; child-process termination could not be confirmed and no untrusted PID was killed."
+          : null,
       };
+
+      if (newStatus === "canceled") {
+        next.canceled_at = appliedAt;
+        next.cancel_reason = "Cancellation converged after the original task runner stopped responding.";
+        next.termination_reason = "canceled";
+        next.error_code = "runner_lost_during_cancel";
+      } else if (actionTaken === "marked_timed_out") {
+        next.error = `Task exceeded its configured timeout of ${Number(current.timeout_seconds)} seconds after the original runner stopped responding.`;
+        next.termination_reason = "timeout";
+        next.error_code = "task_timeout";
+      } else if (diagnosis === "artifact_collection_stuck") {
+        next.error = "Artifact collection was interrupted and could not be safely resumed after the original runner stopped responding.";
+        next.error_code = "artifact_collection_interrupted";
+      } else if (diagnosis === "orphaned_running") {
+        next.error = "The original task runner was lost and its child process ownership could not be re-established.";
+        next.error_code = "agent_lost";
+      } else if (diagnosis === "stale_running") {
+        next.error = "The task runner heartbeat expired and no current Runner ownership could be proven.";
+        next.error_code = "agent_lost";
+      }
 
       if (newStatus === "done_by_agent") {
         next.acceptance_status = "pending";
@@ -359,7 +407,7 @@ function applySafeFix(
 
       // The backup is created while the same lock protects the exact record
       // being replaced, so it cannot capture an unrelated newer state.
-      atomicWriteFileSync(backupFile, readFileSync(statusFile, "utf-8"));
+      if (!existsSync(backupFile)) atomicWriteFileSync(backupFile, readFileSync(statusFile, "utf-8"));
       return {
         next,
         result: { applied: true as const },
@@ -386,6 +434,22 @@ function applySafeFix(
     };
   }
 
+  if (newStatus !== "done_by_agent") {
+    writeRecoveryArtifacts(taskDir, taskId, currentStatus, newStatus, actionTaken, appliedAt);
+  }
+
+  // Keep the persisted runtime view terminal as well. get_task_status merges
+  // runtime.json over status.json, so leaving an old executing phase here
+  // would make a successfully reconciled task appear active again.
+  writeTaskRuntime(taskDir, {
+    phase: newStatus as TaskPhase,
+    current_command: null,
+    last_heartbeat_at: appliedAt,
+    child_pid: undefined,
+    child_started_at: undefined,
+    child_owned_by_runner_instance_id: undefined,
+  });
+
   // v0.8.0: 当状态变为 done_by_agent 时，同步关联 subgoal 状态（running → done_by_agent）
   if (newStatus === "done_by_agent") {
     const goalMeta = readTaskGoalMeta(taskDir);
@@ -402,6 +466,91 @@ function applySafeFix(
     applied_at: appliedAt,
     skip_reason: null,
   };
+}
+
+function writeRecoveryArtifacts(
+  taskDir: string,
+  taskId: string,
+  status: Record<string, unknown>,
+  newStatus: string,
+  actionTaken: ReconcileTaskReport["action_taken"],
+  recoveredAt: string,
+): void {
+  const timeoutSeconds = Number(status.timeout_seconds);
+  const summary = actionTaken === "marked_timed_out"
+    ? `Task exceeded its configured timeout of ${timeoutSeconds} seconds after the original runner stopped responding.`
+    : actionTaken === "marked_canceled"
+      ? "Cancellation converged after the original task runner stopped responding."
+      : `Task was reconciled to ${newStatus} after the original runner stopped responding.`;
+  const errorCode = actionTaken === "marked_timed_out"
+    ? "task_timeout"
+    : actionTaken === "marked_canceled"
+      ? "runner_lost_during_cancel"
+      : newStatus === "orphaned"
+        ? "agent_lost"
+        : newStatus === "failed_stale" && String(status.phase || status.status) === "collecting_artifacts"
+          ? "artifact_collection_interrupted"
+          : "agent_lost";
+  const requestedCommands = Array.isArray(status.verify_commands)
+    ? status.verify_commands.map(String)
+    : [];
+  const artifacts = {
+    "verify.json": {
+      status: "failed",
+      requested_commands: requestedCommands,
+      commands: [],
+      failure_reason: "runner_recovery",
+      error_code: errorCode,
+    },
+    "result.json": {
+      task_id: taskId,
+      status: newStatus,
+      agent: status.agent || "",
+      repo_path: status.repo_path || "",
+      resolved_repo_path: status.resolved_repo_path || "",
+      summary,
+      artifact_status: "partial",
+      changed_files: [],
+      diff_available: false,
+      verify_status: "failed",
+      failure_reason: "runner_recovery",
+      error_code: errorCode,
+      termination_reason: actionTaken === "marked_timed_out"
+        ? "timeout"
+        : actionTaken === "marked_canceled"
+          ? "canceled"
+          : "runner_stale",
+      recovered_at: recoveredAt,
+      warnings: ["The original runner stopped before complete change and verification evidence could be collected."],
+    },
+  };
+  for (const [name, value] of Object.entries(artifacts)) {
+    const path = join(taskDir, name);
+    if (!existsSync(path)) atomicWriteJsonFileSync(path, value);
+  }
+  const textArtifacts: Record<string, string> = {
+    "result.md": `# PatchWarden Task Result\n\n## Status\n${newStatus}\n\n## Summary\n${summary}\n\n## Artifact Status\npartial\n`,
+    "test.log": `(not run)\nExit code: not run\n${summary}\n`,
+    "git.diff": `(unavailable: ${summary})\n`,
+    "diff.patch": `(unavailable: ${summary})\n`,
+  };
+  for (const [name, content] of Object.entries(textArtifacts)) {
+    const path = join(taskDir, name);
+    if (!existsSync(path)) atomicWriteFileSync(path, content);
+  }
+}
+
+function taskDeadlineExceeded(status: Record<string, unknown>, nowMs = Date.now()): boolean {
+  const timeoutSeconds = Number(status.timeout_seconds);
+  const startedAt = typeof status.started_at === "string"
+    ? Date.parse(status.started_at)
+    : typeof status.created_at === "string"
+      ? Date.parse(status.created_at)
+      : NaN;
+  return Number.isFinite(startedAt)
+    && Number.isFinite(timeoutSeconds)
+    && timeoutSeconds > 0
+    && nowMs >= startedAt + timeoutSeconds * 1000;
 }
 
 // ── reconcile.log writer ───────────────────────────────────────────

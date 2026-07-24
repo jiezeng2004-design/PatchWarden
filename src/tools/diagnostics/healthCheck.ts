@@ -9,6 +9,7 @@ import type { ToolCatalogSnapshot } from "../catalog/toolCatalog.js";
 import { CHATGPT_CORE_TOOL_NAMES, CHATGPT_DIRECT_TOOL_NAMES, CHATGPT_SEARCH_TOOL_NAMES, resolveToolProfile } from "../catalog/toolCatalog.js";
 import { readWatcherStatus } from "../../watcherStatus.js";
 import { listTasks } from "../tasks/listTasks.js";
+import { readLastAssessmentValidationFailure } from "../../assessments/assessmentDiagnostics.js";
 
 const SERVER_STARTED_AT = Date.now();
 
@@ -140,7 +141,7 @@ export function healthCheck(catalog?: ToolCatalogSnapshot, input: HealthCheckInp
 function buildSelfDiagnostic(config: ReturnType<typeof getConfig>) {
   const recent = listTasks({ limit: 20 });
   const failures = recent.tasks
-    .filter((task) => task.status.startsWith("failed") || task.status === "canceled")
+    .filter((task) => task.status.startsWith("failed") || task.status === "canceled" || task.status === "timeout")
     .slice(0, 10)
     .map((task) => ({
       task_id: task.task_id,
@@ -156,6 +157,7 @@ function buildSelfDiagnostic(config: ReturnType<typeof getConfig>) {
     configured_agents: Object.keys(config.agents),
     recent_tasks_returned: recent.tasks.length,
     recent_failures: failures,
+    last_assessment_validation_failure: readLastAssessmentValidationFailure(),
   };
   const safe = redactSensitiveValue(diagnostic);
   return {

@@ -8,16 +8,7 @@ import {
   readTextFilePrefixSync,
   readTextFileTailLinesSync,
 } from "../../utils/boundedFile.js";
-
-const TERMINAL_STATUSES = new Set([
-  "done",
-  "done_by_agent",
-  "failed",
-  "failed_verification",
-  "failed_scope_violation",
-  "failed_policy_violation",
-  "canceled",
-]);
+import { isTerminalTaskStatus } from "./taskStates.js";
 
 export interface TaskSummaryOutput {
   task_id: string;
@@ -143,7 +134,7 @@ export function getTaskSummary(taskId: string, options: GetTaskSummaryOptions = 
   const verifyRead = tryReadJson(join(taskDir, "verify.json"));
   const result = resultRead.data;
   const verify = verifyRead.data;
-  const terminal = TERMINAL_STATUSES.has(String(status.status));
+  const terminal = isTerminalTaskStatus(String(status.status));
   // Phase 4: Use new_out_of_scope_changes (task-caused) for acceptance status.
   // Pre-existing external dirty files that didn't change should NOT fail acceptance.
   const outOfScope = asArray(

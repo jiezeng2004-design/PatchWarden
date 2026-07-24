@@ -515,7 +515,7 @@ export function auditTask(taskId: string): AuditTaskOutput {
     };
     // ── 1. Task status ──
     const taskStatus = statusData.status || "unknown";
-    const failedStatuses = new Set(["failed", "failed_verification", "failed_scope_violation", "failed_policy_violation", "canceled"]);
+    const failedStatuses = new Set(["failed", "failed_verification", "failed_scope_violation", "failed_policy_violation", "canceled", "timeout"]);
     const doneStatuses = new Set(["done", "done_by_agent"]);
     checks.push({
         name: "task_status",

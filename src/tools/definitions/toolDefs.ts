@@ -416,7 +416,7 @@ export function getToolDefs(): ToolDef[] {
         properties: {
           status: {
             type: "string",
-            description: "Filter by status: pending, running, done, failed, failed_verification, failed_scope_violation, failed_policy_violation, canceled",
+            description: "Filter by status: pending, running, done, failed, failed_verification, failed_scope_violation, failed_policy_violation, timeout, canceled",
           },
           limit: {
             type: "number",

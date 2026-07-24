@@ -8,6 +8,8 @@ export interface TaskRuntimeData {
   last_heartbeat_at: string;
   current_command: string | null;
   runner_pid?: number;
+  runner_instance_id?: string;
+  child_owned_by_runner_instance_id?: string;
   child_pid?: number;
   /**
    * v0.7.0: ISO timestamp when the child process was spawned.

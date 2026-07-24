@@ -12,10 +12,22 @@ import { redactSensitiveContent } from "../security/contentRedaction.js";
 import { atomicWriteJsonFileSync } from "../utils/atomicFile.js";
 import { withFileLockSync } from "../utils/lockedJsonFile.js";
 import { TOOL_SCHEMA_EPOCH } from "../version.js";
-import { getLastToolCatalogSnapshot } from "../tools/catalog/toolCatalog.js";
+import {
+  buildToolCatalogSnapshot,
+  resolveToolProfile,
+} from "../tools/catalog/toolCatalog.js";
+import { getToolDefs } from "../tools/definitions/toolDefs.js";
 import { captureRepoSnapshot, type RepoSnapshot } from "../runner/changeCapture.js";
 import type { RiskAssessmentResult } from "../security/riskEngine.js";
 import type { TaskTemplateName, ChangePolicy } from "../tools/taskTemplates.js";
+import { getProjectPolicySummary, type ProjectPolicy } from "../policy/projectPolicy.js";
+import {
+  ASSESSMENT_SECURITY_SNAPSHOT_VERSION,
+  buildAssessmentSecuritySnapshot,
+  getAssessmentSecuritySnapshotComponentHashes,
+  hashAssessmentSecuritySnapshot,
+  type SecuritySnapshotCategory,
+} from "./securitySnapshot.js";
 
 const SENSITIVE_PATH_RULES_SIGNATURE = "v1";
 const ARTIFACT_RULES_SIGNATURE = "v1";
@@ -65,6 +77,11 @@ export interface AssessmentRecord {
   plan_id: string | null;
   policy_hash: string;
   tool_manifest_sha256: string;
+  execution_config_hash?: string;
+  execution_config_component_hashes?: Partial<Record<ExecutionConfigChangeCategory, string>>;
+  assessment_security_snapshot_version?: string;
+  assessment_security_snapshot_sha256?: string;
+  assessment_security_snapshot_component_hashes?: Partial<Record<ExecutionConfigChangeCategory, string>>;
   workspace_fingerprint: string;
   workspace_snapshot_summary: {
     head: string | null;
@@ -87,6 +104,7 @@ export interface AssessmentRecord {
   confirmed: boolean;
   confirmed_at: string | null;
   confirm_code: string | null;
+  used_at?: string | null;
   agent_assessment_summary?: AgentAssessmentSummary | null;
 }
 
@@ -117,7 +135,12 @@ export interface AssessmentValidationResult {
   valid: boolean;
   failure_reason: string | null;
   assessment: AssessmentRecord | null;
+  expected_hash?: string;
+  actual_hash?: string;
+  config_change_categories?: ExecutionConfigChangeCategory[];
 }
+
+export type ExecutionConfigChangeCategory = SecuritySnapshotCategory | "allowed_test_commands" | "execution_config";
 
 export interface AssessmentConfirmationResult {
   assessment_id: string;
@@ -161,7 +184,7 @@ export function createAssessment(input: AssessmentCreateInput): AssessmentRecord
     ? createHash("sha256").update(input.plan_content).digest("hex")
     : null;
 
-  const toolManifest = getLastToolCatalogSnapshot()?.tool_manifest_sha256 || computeFallbackManifestHash(config);
+  const toolManifest = getCurrentToolManifest(config);
 
   const workspaceFingerprint = computeWorkspaceFingerprint(input.snapshot);
   const snapshotTruncated = input.snapshot.warnings.some((w) => w.includes("snapshot limited"));
@@ -175,6 +198,15 @@ export function createAssessment(input: AssessmentCreateInput): AssessmentRecord
     sensitive_path_rules: SENSITIVE_PATH_RULES_SIGNATURE,
     artifact_rules: ARTIFACT_RULES_SIGNATURE,
     schema_epoch: TOOL_SCHEMA_EPOCH,
+  });
+  const executionConfig = computeExecutionConfigFingerprint(config, {
+    agent: input.agent,
+    tool_manifest_sha256: toolManifest,
+    tool_profile: resolveToolProfile(config.toolProfile),
+    repo_path: input.resolved_repo_path,
+    change_policy: input.change_policy || "repo_scoped_changes",
+    template: input.template || null,
+    verify_commands: input.verify_commands || [],
   });
 
   const now = new Date();
@@ -192,6 +224,11 @@ export function createAssessment(input: AssessmentCreateInput): AssessmentRecord
     plan_id: input.plan_id,
     policy_hash: policyHash,
     tool_manifest_sha256: toolManifest,
+    execution_config_hash: executionConfig.hash,
+    execution_config_component_hashes: executionConfig.components,
+    assessment_security_snapshot_version: ASSESSMENT_SECURITY_SNAPSHOT_VERSION,
+    assessment_security_snapshot_sha256: executionConfig.hash,
+    assessment_security_snapshot_component_hashes: executionConfig.components,
     workspace_fingerprint: workspaceFingerprint,
     workspace_snapshot_summary: {
       head: input.snapshot.head,
@@ -214,6 +251,7 @@ export function createAssessment(input: AssessmentCreateInput): AssessmentRecord
     confirmed: false,
     confirmed_at: null,
     confirm_code: null,
+    used_at: null,
     agent_assessment_summary: input.agent_assessment_summary || null,
   };
 
@@ -223,6 +261,13 @@ export function createAssessment(input: AssessmentCreateInput): AssessmentRecord
 }
 
 export function readAssessment(assessmentId: string): AssessmentRecord {
+  if (!/^assessment_\d{8}_\d{6}_[0-9a-f]{32}$/.test(assessmentId)) {
+    throw new PatchWardenError(
+      "assessment_id_invalid",
+      "A full assessment_id with 32 hexadecimal random characters is required.",
+      "Copy the complete assessment_id from the assess_only response; assessment_short_id is display-only.",
+    );
+  }
   const config = getConfig();
   const assessmentsDir = getAssessmentsDir(config);
   const dir = resolve(assessmentsDir, assessmentId);
@@ -237,7 +282,43 @@ export function readAssessment(assessmentId: string): AssessmentRecord {
       { assessment_id: assessmentId }
     );
   }
-  return JSON.parse(readFileSync(file, "utf-8")) as AssessmentRecord;
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf-8")) as AssessmentRecord;
+    if (!parsed || typeof parsed !== "object" || parsed.assessment_id !== assessmentId) {
+      throw new Error("record identity mismatch");
+    }
+    return parsed;
+  } catch (error) {
+    throw new PatchWardenError(
+      "assessment_corrupted",
+      `Assessment "${assessmentId}" cannot be read as a valid record.`,
+      "Run create_task with execution_mode=assess_only again.",
+      true,
+      { assessment_id: assessmentId, failure_category: "invalid_assessment_record" },
+    );
+  }
+}
+
+/** Atomically consume an Assessment before creating its one allowed task. */
+export function markAssessmentUsed(assessmentId: string): AssessmentRecord {
+  const config = getConfig();
+  const assessmentFile = resolve(getAssessmentsDir(config), assessmentId, "assessment.json");
+  guardPath(assessmentFile, config.workspaceRoot, config.assessmentsDir);
+  return withFileLockSync(assessmentFile, () => {
+    const assessment = readAssessment(assessmentId);
+    if (assessment.used_at) {
+      throw new PatchWardenError(
+        "assessment_used",
+        `Assessment "${assessmentId}" has already been used.`,
+        "Run create_task with execution_mode=assess_only again to obtain a new assessment_id.",
+        true,
+        { assessment_id: assessmentId, used_at: assessment.used_at },
+      );
+    }
+    const consumed: AssessmentRecord = { ...assessment, used_at: new Date().toISOString() };
+    atomicWriteJsonFileSync(assessmentFile, consumed);
+    return consumed;
+  });
 }
 
 export function validateAssessmentFreshness(
@@ -245,6 +326,9 @@ export function validateAssessmentFreshness(
   currentSnapshot: RepoSnapshot,
   options: AssessmentValidationOptions = {}
 ): AssessmentValidationResult {
+  if (!/^assessment_\d{8}_\d{6}_[0-9a-f]{32}$/.test(assessmentId)) {
+    return { valid: false, failure_reason: "assessment_id_invalid", assessment: null };
+  }
   let assessment: AssessmentRecord;
   try {
     assessment = readAssessment(assessmentId);
@@ -275,11 +359,21 @@ export function validateAssessmentFreshness(
     }
   }
 
+  const config = getConfig();
+  const currentManifest = getCurrentToolManifest(config);
   if (!options.skip_tool_manifest) {
-    const currentManifest = getLastToolCatalogSnapshot()?.tool_manifest_sha256 ||
-      computeFallbackManifestHash(getConfig());
-    if (currentManifest !== assessment.tool_manifest_sha256) {
-      return { valid: false, failure_reason: "assessment_stale_config", assessment };
+    // Legacy records need the standalone manifest check. Versioned security
+    // snapshots compare the manifest together with the source config, so the
+    // diagnostic can report both "tool_manifest" and e.g. "allowed_commands".
+    if (currentManifest !== assessment.tool_manifest_sha256 && !assessment.assessment_security_snapshot_sha256) {
+      return {
+        valid: false,
+        failure_reason: "assessment_stale_config",
+        assessment,
+        expected_hash: assessment.tool_manifest_sha256,
+        actual_hash: currentManifest,
+        config_change_categories: ["tool_manifest"],
+      };
     }
   }
 
@@ -288,7 +382,46 @@ export function validateAssessmentFreshness(
     return { valid: false, failure_reason: "assessment_workspace_changed", assessment };
   }
 
-  const config = getConfig();
+  if (assessment.execution_config_hash) {
+    const currentExecutionConfig = computeExecutionConfigFingerprint(config, {
+      agent: assessment.agent,
+      tool_manifest_sha256: currentManifest,
+      tool_profile: resolveToolProfile(config.toolProfile),
+      repo_path: assessment.resolved_repo_path,
+      change_policy: assessment.change_policy || "repo_scoped_changes",
+      template: assessment.template || null,
+      verify_commands: assessment.verify_commands || [],
+    });
+    if (
+      assessment.assessment_security_snapshot_version
+      && assessment.assessment_security_snapshot_version !== ASSESSMENT_SECURITY_SNAPSHOT_VERSION
+    ) {
+      return {
+        valid: false,
+        failure_reason: "assessment_snapshot_version_incompatible",
+        assessment,
+        expected_hash: assessment.execution_config_hash,
+        actual_hash: currentExecutionConfig.hash,
+        config_change_categories: ["schema_epoch"],
+      };
+    }
+    if (currentExecutionConfig.hash !== assessment.execution_config_hash) {
+      const previousComponents = assessment.execution_config_component_hashes;
+      const changedCategories = previousComponents
+        ? (Object.keys(currentExecutionConfig.components) as ExecutionConfigChangeCategory[])
+          .filter((category) => previousComponents[category] !== currentExecutionConfig.components[category])
+        : ["execution_config" as const];
+      return {
+        valid: false,
+        failure_reason: "assessment_stale_config",
+        assessment,
+        expected_hash: assessment.execution_config_hash,
+        actual_hash: currentExecutionConfig.hash,
+        config_change_categories: changedCategories.length > 0 ? changedCategories : ["execution_config"],
+      };
+    }
+  }
+
   const currentPolicyHash = computePolicyHash({
     change_policy: assessment.change_policy || "repo_scoped_changes",
     template: assessment.template || null,
@@ -425,10 +558,64 @@ function getRepoAllowedCommands(config: PatchWardenConfig, repoPath: string): st
   return getRepoAllowedTestCommands(config, repoPath);
 }
 
-function computeFallbackManifestHash(config: PatchWardenConfig): string {
-  return createHash("sha256")
-    .update(`${TOOL_SCHEMA_EPOCH}:${config.toolProfile || "full"}`)
-    .digest("hex");
+function getCurrentToolManifest(config: PatchWardenConfig): string {
+  // The catalog cache is process-local. Rebuild the canonical catalog here so
+  // MCP and the independent Watcher derive the same manifest across processes.
+  const profile = resolveToolProfile(config.toolProfile);
+  return buildToolCatalogSnapshot(getToolDefs(), profile).tool_manifest_sha256;
+}
+
+interface ExecutionConfigHashInput {
+  agent: string;
+  tool_manifest_sha256: string;
+  tool_profile: string;
+  repo_path: string;
+  change_policy?: string | null;
+  template?: string | null;
+  verify_commands?: string[];
+}
+
+export function computeExecutionConfigHash(
+  config: PatchWardenConfig,
+  input: ExecutionConfigHashInput,
+): string {
+  return computeExecutionConfigFingerprint(config, input).hash;
+}
+
+function computeExecutionConfigFingerprint(
+  config: PatchWardenConfig,
+  input: ExecutionConfigHashInput,
+): { hash: string; components: Partial<Record<ExecutionConfigChangeCategory, string>> } {
+  let projectPolicy: ProjectPolicy | null = null;
+  let projectPolicyValid: boolean | null = null;
+  let projectPolicyIssues: Array<{ code: string; severity: string; field: string }> = [];
+  try {
+    const summary = getProjectPolicySummary(input.repo_path);
+    projectPolicy = summary.effective_policy;
+    projectPolicyValid = summary.valid;
+    projectPolicyIssues = summary.issues.map(({ code, severity, field }) => ({ code, severity, field }));
+  } catch {
+    // A workspace-root change can make the old repository inaccessible. The
+    // workspace_root component still fails closed without exposing the path.
+  }
+  const snapshot = buildAssessmentSecuritySnapshot({
+    config,
+    schemaEpoch: TOOL_SCHEMA_EPOCH,
+    toolProfile: input.tool_profile,
+    toolManifestSha256: input.tool_manifest_sha256,
+    agent: input.agent,
+    repoPath: input.repo_path,
+    changePolicy: input.change_policy,
+    template: input.template,
+    verifyCommands: input.verify_commands,
+    projectPolicy,
+    projectPolicyValid,
+    projectPolicyIssues,
+  });
+  return {
+    hash: hashAssessmentSecuritySnapshot(snapshot),
+    components: getAssessmentSecuritySnapshotComponentHashes(snapshot),
+  };
 }
 
 function extractReason(error: unknown): string {

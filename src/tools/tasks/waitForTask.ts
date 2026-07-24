@@ -1,16 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { getTaskStatus } from "./getTaskStatus.js";
 import { getTaskSummary, type TaskSummaryResult } from "./getTaskSummary.js";
-
-const TERMINAL_STATUSES = new Set([
-  "done",
-  "done_by_agent",
-  "failed",
-  "failed_verification",
-  "failed_scope_violation",
-  "failed_policy_violation",
-  "canceled",
-]);
+import { isTerminalTaskStatus } from "./taskStates.js";
 
 export interface WaitForTaskProgressSummary {
   phase: string;
@@ -45,12 +36,12 @@ export async function waitForTask(taskId: string, waitSeconds = 25): Promise<Wai
   const deadline = started + waitSeconds * 1000;
   let status = getTaskStatus(taskId);
 
-  while (!TERMINAL_STATUSES.has(status.status) && Date.now() < deadline) {
+  while (!isTerminalTaskStatus(status.status) && Date.now() < deadline) {
     await sleep(Math.min(500, Math.max(1, deadline - Date.now())));
     status = getTaskStatus(taskId);
   }
 
-  const terminal = TERMINAL_STATUSES.has(status.status);
+  const terminal = isTerminalTaskStatus(status.status);
   const executionBlocked = !terminal && status.execution_blocked;
   const elapsed = Math.round((Date.now() - started) / 1000);
 

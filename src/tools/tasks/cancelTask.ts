@@ -5,6 +5,7 @@ import { guardReadPath } from "../../security/pathGuard.js";
 import { writeTaskProgress } from "../../runner/taskProgress.js";
 import { mutateTaskStatus } from "../../runner/taskStatusStore.js";
 import type { TaskStatus } from "./createTask.js";
+import { isTerminalTaskStatus } from "./taskStates.js";
 
 export interface TaskTerminationResponse {
   task_id: string;
@@ -38,7 +39,7 @@ export function requestTaskTermination(taskId: string, force: boolean) {
   const now = new Date().toISOString();
   const outcome = mutateTaskStatus<TaskTerminationOutcome>(statusFile, (current) => {
     const currentStatus = current.status as TaskStatus;
-    if (["done", "done_by_agent", "failed", "failed_verification", "failed_scope_violation", "failed_policy_violation", "canceled"].includes(currentStatus)) {
+    if (isTerminalTaskStatus(currentStatus)) {
       return { result: {
         response: {
           task_id: taskId,

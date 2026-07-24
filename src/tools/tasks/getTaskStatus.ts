@@ -12,6 +12,7 @@ import {
   type PendingReason,
   type WatcherStatusSnapshot,
 } from "../../watcherStatus.js";
+import { isTerminalTaskStatus } from "./taskStates.js";
 
 export interface GetTaskStatusOutput {
   task_id: string;
@@ -69,7 +70,11 @@ export function getTaskStatus(taskId: string): GetTaskStatusOutput {
   const raw = readFileSync(statusFile, "utf-8");
   const status = JSON.parse(raw) as GetTaskStatusOutput;
   const runtime = readTaskRuntime(taskDir);
-  const phase = runtime.phase || status.phase || "queued";
+  // A terminal status is authoritative. A stale runtime phase from a crashed
+  // Runner must never make a reconciled task look active again.
+  const phase = isTerminalTaskStatus(String(status.status))
+    ? status.phase || "queued"
+    : runtime.phase || status.phase || "queued";
   const watcher = readWatcherStatus(config);
   const pendingReason = derivePendingReason({ status: status.status, phase }, watcher);
   return {

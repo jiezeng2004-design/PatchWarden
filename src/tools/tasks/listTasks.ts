@@ -11,6 +11,7 @@ import {
   type WatcherState,
   type WatcherStatusSnapshot,
 } from "../../watcherStatus.js";
+import { isActiveTaskStatus } from "./taskStates.js";
 
 export interface TaskEntry {
   task_id: string;
@@ -97,7 +98,7 @@ export function listTasks(input?: ListTasksInput): ListTasksOutput {
           : null;
         if (taskAcceptance !== filterAcceptance) continue;
       }
-      if (input?.active_only && !["pending", "running", "collecting_artifacts"].includes(String(data.status))) continue;
+      if (input?.active_only && !isActiveTaskStatus(String(data.status))) continue;
       const normalizedRepo = String(data.repo_path || ".").replace(/\\/g, "/");
       const normalizedResolvedRepo = String(data.resolved_repo_path || "").replace(/\\/g, "/");
       if (filterRepo && normalizedRepo !== filterRepo && normalizedResolvedRepo !== filterRepo) continue;

@@ -149,6 +149,36 @@ describe("waitForTask", () => {
     assert.equal(result.next_tool_call.name, "audit_task");
   });
 
+  it("returns immediately for the timeout terminal state", async () => {
+    writeTaskStatus("task-timeout-001", baseStatus("task-timeout-001", {
+      status: "timeout",
+      phase: "timeout",
+      termination_reason: "timeout",
+    }));
+
+    const result = await waitForTask("task-timeout-001", 5);
+
+    assert.equal(result.terminal, true);
+    assert.equal(result.status, "timeout");
+    assert.equal(result.timed_out, false);
+    assert.equal(result.continuation_required, false);
+  });
+
+  it("treats reconciled stale and orphaned tasks as terminal", async () => {
+    for (const status of ["failed_stale", "orphaned"] as const) {
+      const taskId = `task-${status}-001`;
+      writeTaskStatus(taskId, baseStatus(taskId, {
+        status,
+        phase: status,
+        error: `reconciled ${status}`,
+      }));
+      const result = await waitForTask(taskId, 5);
+      assert.equal(result.terminal, true);
+      assert.equal(result.status, status);
+      assert.equal(result.continuation_required, false);
+    }
+  });
+
   // ── task not found ──
   it("throws when task does not exist", async () => {
     await assert.rejects(

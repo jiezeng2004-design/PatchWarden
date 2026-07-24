@@ -9,6 +9,7 @@ import { runDirectVerificationBundle } from "../direct/runDirectVerificationBund
 import { waitForTask } from "./waitForTask.js";
 import { safeAudit, safeAuditDirectSession, safeFinalizeDirectSession, safeResult, safeTestSummary } from "../diagnostics/safeViews.js";
 import type { TaskTemplateName } from "../taskTemplates.js";
+import { isTerminalTaskStatus } from "./taskStates.js";
 import {
   createLineageId,
   writeTaskLineage,
@@ -85,16 +86,6 @@ const DEFAULT_DEPS: RunTaskLoopDeps = {
   now: () => new Date(),
   sleep,
 };
-
-const TERMINAL_STATUSES = new Set([
-  "done",
-  "done_by_agent",
-  "failed",
-  "failed_verification",
-  "failed_scope_violation",
-  "failed_policy_violation",
-  "canceled",
-]);
 
 export async function runTaskLoop(input: RunTaskLoopInput): Promise<RunTaskLoopOutput> {
   return runTaskLoopWithDeps(input, DEFAULT_DEPS);
@@ -273,7 +264,7 @@ async function waitUntilTerminal(
   const deadline = Date.now() + timeoutSeconds * 1000;
   while (Date.now() < deadline) {
     const waited = await deps.waitForTask(taskId, 30);
-    if (waited.terminal || TERMINAL_STATUSES.has(String(waited.status))) {
+    if (waited.terminal || isTerminalTaskStatus(String(waited.status))) {
       return { next_action: waited.next_action || "safe_audit" };
     }
     if (waited.next_tool_call?.name === "health_check" || waited.continuation_required === false) {
@@ -340,7 +331,7 @@ function isSuccessfulRound(round: TaskLineageRound): boolean {
 }
 
 function isHardStop(round: TaskLineageRound, resultValue: unknown, auditValue: unknown, stopOnHighRisk: boolean): boolean {
-  if (["failed_scope_violation", "failed_policy_violation", "canceled"].includes(round.status)) return true;
+  if (["failed_scope_violation", "failed_policy_violation", "canceled", "timeout"].includes(round.status)) return true;
   if (!stopOnHighRisk) return false;
   const checkNames = [...round.fail_checks, ...round.warn_checks].join(" ").toLowerCase();
   const result = asRecord(resultValue);
@@ -352,6 +343,7 @@ function isHardStop(round: TaskLineageRound, resultValue: unknown, auditValue: u
 function hardStopReason(round: TaskLineageRound, resultValue: unknown): TaskLoopStopReason {
   const result = asRecord(resultValue);
   if (round.status === "failed_scope_violation" || round.status === "failed_policy_violation") return "policy_blocked";
+  if (round.status === "timeout") return "agent_timeout";
   if (String(result.failure_reason || "").toLowerCase().includes("timeout")) return "agent_timeout";
   return "high_risk_blocked";
 }

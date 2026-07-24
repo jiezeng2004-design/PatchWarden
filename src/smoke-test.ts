@@ -1338,7 +1338,7 @@ await test("K8. assessment not found rejected", async () => {
       agent: "codex",
       repo_path: ".",
       execution_mode: "execute",
-      assessment_id: "assessment_20260101_" + "0".repeat(32),
+      assessment_id: "assessment_20260101_000000_" + "0".repeat(32),
     });
     throw new Error("Should have rejected unknown assessment");
   } catch (e: any) {
@@ -1569,7 +1569,7 @@ await test("K16. assessment_short_id cannot execute", async () => {
     });
     throw new Error("Should have rejected short ID");
   } catch (e: any) {
-    if (!e.message?.includes("not found")) throw new Error(`Expected not found for short ID, got: ${e.message}`);
+    if (e.reason !== "assessment_id_invalid") throw new Error(`Expected assessment_id_invalid for short ID, got: ${e.reason || e.message}`);
   }
 });
 
