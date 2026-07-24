@@ -27,6 +27,11 @@ import {
   type ChangeArtifacts,
 } from "../runner/changeCapture.js";
 
+// Session history writes are metadata-only and may queue behind concurrent
+// Direct workers. Keep the wait bounded, while workspace mutation locks remain
+// fail-fast so an active patch is never hidden by retrying.
+const DIRECT_SESSION_RECORD_LOCK_WAIT_MS = 10_000;
+
 // ── Types ──────────────────────────────────────────────────────────
 
 export interface DirectSessionOperation {
@@ -423,10 +428,7 @@ function mutateDirectSessionRecord(
       return { next, result: next };
     },
     {
-      // Session-record appends are short serialized writes. Give Windows
-      // antivirus-delayed lock detachment enough time to finish instead of
-      // dropping concurrent operation or verification evidence.
-      waitMs: 10_000,
+      waitMs: DIRECT_SESSION_RECORD_LOCK_WAIT_MS,
       busyError: () => new PatchWardenError(
         "direct_session_busy",
         `Direct session "${sessionId}" is currently being updated.`,

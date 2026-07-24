@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { reloadConfig } from "../../../config.js";
-import { runTask } from "../../../runner/runTask.js";
+import { classifyAgentFailure, runTask } from "../../../runner/runTask.js";
 import { cancelTask } from "../../../tools/tasks/cancelTask.js";
 
 describe("runTask claim", () => {
@@ -151,5 +151,11 @@ describe("runTask claim", () => {
     const status = JSON.parse(readFileSync(join(taskDir, "status.json"), "utf-8"));
     assert.equal(status.status, "canceled");
     assert.equal(status.phase, "canceled");
+  });
+
+  it("classifies provider readiness failures without exposing provider details", () => {
+    assert.equal(classifyAgentFailure("Error: Insufficient balance. Manage billing."), "provider_insufficient_balance");
+    assert.equal(classifyAgentFailure("Authentication failed: invalid API key"), "provider_authentication_failed");
+    assert.equal(classifyAgentFailure("ordinary non-zero exit"), null);
   });
 });

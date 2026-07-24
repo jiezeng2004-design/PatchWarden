@@ -67,6 +67,9 @@ it("keeps an idle watcher alive, rejects a duplicate, and recovers a stale lock"
     );
     await sleep(300);
     assert.equal(first.exitCode, null, `idle watcher exited early: ${errors.get(first)}`);
+    const firstHeartbeat = JSON.parse(readFileSync(heartbeatPath, "utf-8"));
+    assert.equal(firstHeartbeat.heartbeat_source, "independent_interval");
+    assert.equal(firstHeartbeat.active_task_id, null);
 
     const duplicate = start("runtime-test-duplicate");
     await waitForExit(duplicate);

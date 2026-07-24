@@ -171,6 +171,15 @@ function applyTheme(value: string | undefined): void {
 }
 
 function currentState(): Record<string, unknown> {
+  const configuredRoot = configuredWorkspaceRoot();
+  const configured = asRecord(activeConfigPath ? readJson(activeConfigPath) : null);
+  const detectedTunnel = detectTunnelClient({
+    config: {
+      ...(typeof configured.tunnelClientPath === "string" ? { tunnelClientPath: configured.tunnelClientPath } : {}),
+      workspaceRoot: configuredRoot,
+    },
+    env: process.env,
+  });
   return {
     mode: appMode,
     version: readCoreVersion(),
@@ -184,6 +193,10 @@ function currentState(): Record<string, unknown> {
     },
     preferences,
     resolvedLanguage: resolveLanguage(preferences?.language),
+    workspaceRoot: configuredRoot,
+    tunnelClient: detectedTunnel.available
+      ? { available: true, path: detectedTunnel.path, source: detectedTunnel.source }
+      : { available: false, path: null, source: null },
     runtimeSettings: activeConfigPath ? readRuntimeSettings(activeConfigPath) : null,
   };
 }

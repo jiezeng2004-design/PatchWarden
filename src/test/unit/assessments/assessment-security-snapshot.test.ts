@@ -61,6 +61,22 @@ function snapshot(cfg = config(), projectPolicy = getDefaultProjectPolicy()) {
   });
 }
 
+function snapshotWith(overrides: Partial<Parameters<typeof buildAssessmentSecuritySnapshot>[0]>) {
+  return buildAssessmentSecuritySnapshot({
+    config: config(),
+    schemaEpoch: "2026-07-19-v15",
+    toolProfile: "chatgpt_core",
+    toolManifestSha256: "a".repeat(64),
+    agent: "codex",
+    repoPath: repo,
+    changePolicy: "repo_scoped_changes",
+    template: "inspect_only",
+    verifyCommands: ["npm test", "npm run build"],
+    projectPolicy: getDefaultProjectPolicy(),
+    ...overrides,
+  });
+}
+
 describe("assessment security snapshot", () => {
   it("is deterministic across object order, set order, and runtime-only fields", () => {
     const reordered = config({
@@ -115,6 +131,8 @@ describe("assessment security snapshot", () => {
       ["protected_paths", snapshot(config(), { ...getDefaultProjectPolicy(), protected_paths: [".env", "secrets/**"] })],
       ["project_policy", snapshot(config(), { ...getDefaultProjectPolicy(), auto_cleanup: { enabled: false, patterns: [], exclude: [] } })],
       ["release_protection", snapshot(config(), { ...getDefaultProjectPolicy(), high_risk_commands: ["git push"] })],
+      ["risk_rules", snapshotWith({ riskRulesVersion: "risk-engine-v2" })],
+      ["task_parameters", snapshotWith({ testCommand: "npm test" })],
     ];
 
     for (const [expectedField, changed] of changedCases) {
@@ -128,5 +146,26 @@ describe("assessment security snapshot", () => {
 
   it("uses an explicit independent snapshot version", () => {
     assert.equal(snapshot().assessment_security_snapshot_version, ASSESSMENT_SECURITY_SNAPSHOT_VERSION);
+  });
+
+  it("treats missing task defaults and explicit defaults identically", () => {
+    const implicit = snapshotWith({});
+    const explicit = snapshotWith({
+      taskTimeoutSeconds: config().defaultTaskTimeoutSeconds,
+      testCommand: null,
+      scope: [],
+      forbidden: [],
+      verification: [],
+      doneEvidence: [],
+    });
+    assert.equal(hashAssessmentSecuritySnapshot(implicit), hashAssessmentSecuritySnapshot(explicit));
+  });
+
+  it("normalizes task path sets and rejects material scope changes", () => {
+    const left = snapshotWith({ scope: ["src\\**", "./README.md", "src/**"] });
+    const right = snapshotWith({ scope: ["README.md", "src/**"] });
+    assert.equal(hashAssessmentSecuritySnapshot(left), hashAssessmentSecuritySnapshot(right));
+    const changed = compareAssessmentSecuritySnapshots(right, snapshotWith({ forbidden: ["release/**"] }));
+    assert.ok(changed.changed_field_names.includes("task_parameters"));
   });
 });

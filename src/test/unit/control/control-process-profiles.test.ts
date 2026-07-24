@@ -1,10 +1,27 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { buildManageEnvironment, classifySupervisorFailure, resolveManageProfiles } from "../../../control/routes/process.js";
-import { buildExperienceStatus, buildSuggestions, reconcileTunnelStatus } from "../../../control/routes/status.js";
+import { buildConnectionSummary, buildExperienceStatus, buildSuggestions, reconcileTunnelStatus } from "../../../control/routes/status.js";
 import { config } from "../../../control/shared.js";
 
 describe("Control Center profile selection", () => {
+  it("exposes bounded connection identity without a raw Tunnel ID", () => {
+    const summary = buildConnectionSummary("direct", {
+      ready: true,
+      profile: "patchwarden-direct",
+      tunnel_id_masked: "tun_***1234",
+    }, {
+      tool_profile: "chatgpt_direct",
+      tool_count: 14,
+      tool_manifest_sha256: "a".repeat(64),
+    });
+    assert.equal(summary.ready, true);
+    assert.equal(summary.tool_count, 14);
+    assert.equal(summary.tunnel_id_masked, "tun_***1234");
+    assert.match(summary.reconnect_guidance, /new chat/);
+    assert.equal(Object.hasOwn(summary, "tunnel_id"), false);
+  });
+
   it("starts only Core and reports Direct skipped when Direct is disabled", () => {
     assert.deepEqual(resolveManageProfiles("all", "start", false), { selected: ["core"], skipped: ["direct"] });
     assert.deepEqual(resolveManageProfiles("all", "restart", false), { selected: ["core"], skipped: ["direct"] });
@@ -173,6 +190,8 @@ describe("Control Center experience status", () => {
           adapter: "opencode",
           model: null,
           capabilities: { model_override: true },
+          availability_scope: "executable_only",
+          provider_status: "not_checked",
           reason: null,
           checked_at: new Date().toISOString(),
         },
@@ -207,6 +226,7 @@ describe("Control Center experience status", () => {
       agents: [{
         name: "opencode", available: true, configured: true, command: "opencode.exe", adapter: "opencode", model: null,
         capabilities: { model_override: true }, reason: null, checked_at: new Date().toISOString(),
+        availability_scope: "executable_only", provider_status: "not_checked",
       }],
       tasks: { total: 1, active: 0, stale: 0, stale_task_ids: [], tasks: [{ task_id: "task_failed", status: "failed" }], reason: null },
       direct_profile_enabled: true,
@@ -225,6 +245,7 @@ describe("Control Center experience status", () => {
       agents: [{
         name: "opencode", available: true, configured: true, command: "opencode.exe", adapter: "opencode", model: null,
         capabilities: { model_override: true }, reason: null, checked_at: new Date().toISOString(),
+        availability_scope: "executable_only", provider_status: "not_checked",
       }],
       tasks: { total: 0, active: 0, stale: 0, stale_task_ids: [], tasks: [], reason: null },
       direct_profile_enabled: false,

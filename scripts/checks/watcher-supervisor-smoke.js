@@ -36,13 +36,40 @@ try {
     }
   });
 
+  await runReusedPidLockScenario();
   await runExternalScenario();
-  console.log("ok - watcher supervisor isolates environment and handles exit, stale heartbeat, retry limit, and external ownership");
+  console.log("ok - watcher supervisor isolates environment and handles exit, stale heartbeat, PID reuse, retry limit, and external ownership");
 } finally {
   for (const child of children) {
     if (child.exitCode === null) child.kill("SIGKILL");
   }
   rmSync(temp, { recursive: true, force: true });
+}
+
+async function runReusedPidLockScenario() {
+  const fixture = createFixture("reused-pid-lock");
+  mkdirSync(dirname(fixture.lockPath), { recursive: true });
+  writeFileSync(fixture.lockPath, JSON.stringify({
+    pid: process.pid,
+    instance_id: "stale-reused-pid",
+    launcher_pid: 999999,
+    started_at: "2026-01-01T00:00:00.000Z",
+  }), "utf-8");
+  writeFileSync(fixture.heartbeatPath, JSON.stringify({
+    status: "running",
+    pid: process.pid,
+    instance_id: "stale-reused-pid",
+    launcher_pid: 999999,
+    started_at: "2026-01-01T00:00:00.000Z",
+    last_heartbeat_at: "2026-01-01T00:00:00.000Z",
+  }), "utf-8");
+
+  const result = runLauncher(fixture, "healthy", 1, 7_000);
+  if (result.error && result.error.code === "ETIMEDOUT") throw result.error;
+  const attempts = Number(readFileSync(fixture.watcherAttemptPath, "utf-8")) || 0;
+  if (attempts < 1 || !result.stdout.includes("Removed stale watcher lock after PID identity verification")) {
+    throw new Error(`Reused PID lock was not safely retired: ${JSON.stringify({ attempts, stdout: result.stdout, stderr: result.stderr })}`);
+  }
 }
 
 async function runScenario(label, mode, maxRestarts, lifetimeMs, assertState) {
@@ -139,6 +166,7 @@ function createFixture(name) {
     watcherPath,
     watcherAttemptPath,
     heartbeatPath: join(workspace, ".patchwarden", "watcher-heartbeat.json"),
+    lockPath: join(workspace, ".patchwarden", "watcher.lock"),
     watcherStatusPath: join(localAppData, "patchwarden", "runtime", "watcher-status.json"),
     mockCmd,
     localAppData,

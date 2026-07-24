@@ -68,6 +68,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     (pathname === "/colors_and_type.css" ||
       pathname === "/desktop.css" ||
       pathname === "/desktop-bridge.js" ||
+      pathname === "/log-parser.js" ||
       pathname === "/i18n.js" ||
       pathname === "/getting-started.js" ||
       pathname === "/settings.js" ||

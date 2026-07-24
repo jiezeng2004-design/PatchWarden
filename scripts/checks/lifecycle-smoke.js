@@ -170,6 +170,9 @@ try {
     if (result.total !== 8 || result.agents.some((agent) => !agent.available)) {
       throw new Error(`Unexpected agent availability: ${JSON.stringify(result)}`);
     }
+    if (result.agents.some((agent) => agent.availability_scope !== "executable_only" || agent.provider_status !== "not_checked")) {
+      throw new Error(`Agent readiness scope was not explicit: ${JSON.stringify(result)}`);
+    }
   });
 
   await test("git diff captures tracked and untracked task changes", async () => {

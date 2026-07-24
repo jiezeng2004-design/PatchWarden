@@ -82,6 +82,7 @@ export interface AssessmentRecord {
   assessment_security_snapshot_version?: string;
   assessment_security_snapshot_sha256?: string;
   assessment_security_snapshot_component_hashes?: Partial<Record<ExecutionConfigChangeCategory, string>>;
+  assessment_schema_epoch?: string;
   workspace_fingerprint: string;
   workspace_snapshot_summary: {
     head: string | null;
@@ -100,6 +101,10 @@ export interface AssessmentRecord {
   agent: string;
   timeout_seconds?: number;
   change_policy?: ChangePolicy;
+  scope?: string[];
+  forbidden?: string[];
+  verification?: string[];
+  done_evidence?: string[];
   requires_confirm: boolean;
   confirmed: boolean;
   confirmed_at: string | null;
@@ -125,6 +130,10 @@ export interface AssessmentCreateInput {
   agent: string;
   timeout_seconds?: number;
   change_policy?: ChangePolicy;
+  scope?: string[];
+  forbidden?: string[];
+  verification?: string[];
+  done_evidence?: string[];
   snapshot: RepoSnapshot;
   assessment_id?: string;
   assessment_dir?: string;
@@ -207,6 +216,12 @@ export function createAssessment(input: AssessmentCreateInput): AssessmentRecord
     change_policy: input.change_policy || "repo_scoped_changes",
     template: input.template || null,
     verify_commands: input.verify_commands || [],
+    test_command: input.test_command || null,
+    task_timeout_seconds: input.timeout_seconds,
+    scope: input.scope,
+    forbidden: input.forbidden,
+    verification: input.verification,
+    done_evidence: input.done_evidence,
   });
 
   const now = new Date();
@@ -229,6 +244,7 @@ export function createAssessment(input: AssessmentCreateInput): AssessmentRecord
     assessment_security_snapshot_version: ASSESSMENT_SECURITY_SNAPSHOT_VERSION,
     assessment_security_snapshot_sha256: executionConfig.hash,
     assessment_security_snapshot_component_hashes: executionConfig.components,
+    assessment_schema_epoch: TOOL_SCHEMA_EPOCH,
     workspace_fingerprint: workspaceFingerprint,
     workspace_snapshot_summary: {
       head: input.snapshot.head,
@@ -247,6 +263,10 @@ export function createAssessment(input: AssessmentCreateInput): AssessmentRecord
     agent: input.agent,
     timeout_seconds: input.timeout_seconds,
     change_policy: input.change_policy || "repo_scoped_changes",
+    scope: input.scope || [],
+    forbidden: input.forbidden || [],
+    verification: input.verification || [],
+    done_evidence: input.done_evidence || [],
     requires_confirm: input.decision === "needs_confirm",
     confirmed: false,
     confirmed_at: null,
@@ -391,6 +411,12 @@ export function validateAssessmentFreshness(
       change_policy: assessment.change_policy || "repo_scoped_changes",
       template: assessment.template || null,
       verify_commands: assessment.verify_commands || [],
+      test_command: assessment.test_command || null,
+      task_timeout_seconds: assessment.timeout_seconds,
+      scope: assessment.scope,
+      forbidden: assessment.forbidden,
+      verification: assessment.verification,
+      done_evidence: assessment.done_evidence,
     });
     if (
       assessment.assessment_security_snapshot_version
@@ -573,6 +599,12 @@ interface ExecutionConfigHashInput {
   change_policy?: string | null;
   template?: string | null;
   verify_commands?: string[];
+  test_command?: string | null;
+  task_timeout_seconds?: number | null;
+  scope?: string[];
+  forbidden?: string[];
+  verification?: string[];
+  done_evidence?: string[];
 }
 
 export function computeExecutionConfigHash(
@@ -608,6 +640,12 @@ function computeExecutionConfigFingerprint(
     changePolicy: input.change_policy,
     template: input.template,
     verifyCommands: input.verify_commands,
+    testCommand: input.test_command,
+    taskTimeoutSeconds: input.task_timeout_seconds,
+    scope: input.scope,
+    forbidden: input.forbidden,
+    verification: input.verification,
+    doneEvidence: input.done_evidence,
     projectPolicy,
     projectPolicyValid,
     projectPolicyIssues,

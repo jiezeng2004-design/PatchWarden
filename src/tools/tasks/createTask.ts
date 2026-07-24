@@ -20,6 +20,7 @@ import {
 } from "../../assessments/assessmentStore.js";
 import { runAgentAssessment } from "../../assessments/agentAssessor.js";
 import { recordAssessmentValidationFailure } from "../../assessments/assessmentDiagnostics.js";
+import { ASSESSMENT_SECURITY_SNAPSHOT_VERSION } from "../../assessments/securitySnapshot.js";
 import { captureRepoSnapshot } from "../../runner/changeCapture.js";
 import { writeTaskProgress } from "../../runner/taskProgress.js";
 import { PatchWardenError } from "../../errors.js";
@@ -30,7 +31,7 @@ import {
   type ChangePolicy,
   type TaskTemplateName,
 } from "../taskTemplates.js";
-import { PATCHWARDEN_VERSION, ARTIFACT_SCHEMA_VERSION } from "../../version.js";
+import { PATCHWARDEN_VERSION, ARTIFACT_SCHEMA_VERSION, TOOL_SCHEMA_EPOCH } from "../../version.js";
 import { getLastToolCatalogSnapshot, resolveToolProfile } from "../catalog/toolCatalog.js";
 import {
   derivePendingReason,
@@ -506,6 +507,10 @@ export async function createTask(input: CreateTaskInput): Promise<CreateTaskResu
       agent: effectiveInput.agent,
       timeout_seconds: timeoutSeconds,
       change_policy: changePolicy,
+      scope: effectiveInput.scope,
+      forbidden: effectiveInput.forbidden,
+      verification: effectiveInput.verification,
+      done_evidence: effectiveInput.done_evidence,
       snapshot,
       ...(preGeneratedAssessmentId ? { assessment_id: preGeneratedAssessmentId } : {}),
       ...(preGeneratedAssessmentDir ? { assessment_dir: preGeneratedAssessmentDir } : {}),
@@ -623,8 +628,16 @@ export async function createTask(input: CreateTaskInput): Promise<CreateTaskResu
             ? {
               config_change_categories: validation.config_change_categories,
               changed_field_names: validation.config_change_categories,
+              changed_config_sections: validation.config_change_categories,
             }
             : {}),
+          assessment_fingerprint_version: validation.assessment?.assessment_security_snapshot_version || null,
+          current_fingerprint_version: ASSESSMENT_SECURITY_SNAPSHOT_VERSION,
+          assessment_schema_epoch: validation.assessment?.assessment_schema_epoch || null,
+          current_schema_epoch: TOOL_SCHEMA_EPOCH,
+          validator_module_path: "dist/assessments/assessmentStore.js",
+          validator_build_id: `patchwarden-${PATCHWARDEN_VERSION}:${TOOL_SCHEMA_EPOCH}:${ASSESSMENT_SECURITY_SNAPSHOT_VERSION}`,
+          watcher_instance_id: process.env.PATCHWARDEN_WATCHER_INSTANCE_ID || null,
         }
       );
     }
@@ -745,6 +758,10 @@ function mergeAssessmentIntoInput(
     test_command: record.test_command || undefined,
     verify_commands: record.verify_commands || [],
     timeout_seconds: record.timeout_seconds,
+    scope: record.scope || [],
+    forbidden: record.forbidden || [],
+    verification: record.verification || [],
+    done_evidence: record.done_evidence || [],
   };
   // Parameter mismatch check: if caller passed explicit params that differ from assessment
   if (input.template && input.template !== record.template) {
@@ -812,6 +829,19 @@ function mergeAssessmentIntoInput(
       true,
       { field: "timeout_seconds" },
     );
+  }
+  for (const field of ["scope", "forbidden", "verification", "done_evidence"] as const) {
+    const callerValue = input[field];
+    const assessmentValue = record[field] || [];
+    if (callerValue && JSON.stringify(callerValue) !== JSON.stringify(assessmentValue)) {
+      throw new PatchWardenError(
+        "assessment_parameter_mismatch",
+        `${field} mismatch: caller passed values different from the assessment.`,
+        "Do not override assessment-locked parameters. Use the same assessment_id as-is.",
+        true,
+        { field },
+      );
+    }
   }
   return merged;
 }

@@ -251,6 +251,7 @@ async function testStaticFiles() {
     const css = await httpGet(`${BASE_URL}/colors_and_type.css`);
     const desktopCss = await httpGet(`${BASE_URL}/desktop.css`);
     const desktopBridge = await httpGet(`${BASE_URL}/desktop-bridge.js`);
+    const logParser = await httpGet(`${BASE_URL}/log-parser.js`);
     const i18n = await httpGet(`${BASE_URL}/i18n.js`);
     const gettingStarted = await httpGet(`${BASE_URL}/pages/getting-started.html`);
     const gettingStartedJs = await httpGet(`${BASE_URL}/getting-started.js`);
@@ -279,6 +280,9 @@ async function testStaticFiles() {
     }
     if (desktopBridge.status !== 200 || !(desktopBridge.headers["content-type"] || "").includes("javascript")) {
       checks.push("desktop bridge is not served as JavaScript");
+    }
+    if (logParser.status !== 200 || !(logParser.headers["content-type"] || "").includes("javascript") || !logParser.body.includes("PatchWardenLogParser")) {
+      checks.push("log parser is not served as JavaScript");
     }
     if (i18n.status !== 200 || !i18n.body.includes("applyTranslations") || !i18n.body.includes('"zh-CN"') || !i18n.body.includes("en:")) {
       checks.push("shared Chinese/English translation dictionary is unavailable");
@@ -940,9 +944,9 @@ async function testReconcileNoToken() {
   }
 }
 
-// ── Test 14: GET /api/direct-sessions returns empty list (not 500)
+// ── Test 14: GET /api/direct-sessions returns a bounded list (not 500)
 async function testDirectSessionsEmptyList() {
-  const name = "Test 14: /api/direct-sessions returns empty list (not 500) when dir missing";
+  const name = "Test 14: /api/direct-sessions returns a bounded list (not 500)";
   try {
     const res = await httpGet(`${BASE_URL}/api/direct-sessions`);
     if (res.status !== 200) {
@@ -961,8 +965,11 @@ async function testDirectSessionsEmptyList() {
     if (!isObject(json.filters) || !isObject(json.filters.options)) problems.push("'filters' contract is missing");
     if (typeof json.direct_profile_enabled !== "boolean") problems.push("'direct_profile_enabled' is not a boolean");
     if (json.reason !== null && typeof json.reason !== "string") problems.push("'reason' is neither null nor string");
-    if (Array.isArray(json.sessions) && json.sessions.length !== json.total) {
-      problems.push(`sessions.length (${json.sessions.length}) != total (${json.total})`);
+    if (Array.isArray(json.sessions) && json.sessions.length > json.total) {
+      problems.push(`sessions.length (${json.sessions.length}) exceeds total (${json.total})`);
+    }
+    if (Array.isArray(json.sessions) && json.sessions.length < json.total && typeof json.nextCursor !== "string") {
+      problems.push("paginated direct sessions response is missing nextCursor");
     }
     const invalidDetail = await httpGet(`${BASE_URL}/api/direct-sessions/invalid.id`);
     const invalidSummary = await httpGet(`${BASE_URL}/api/direct-sessions/invalid.id/summary`);

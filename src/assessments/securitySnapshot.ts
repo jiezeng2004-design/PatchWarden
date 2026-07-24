@@ -9,7 +9,7 @@ import type { ProjectPolicy } from "../policy/projectPolicy.js";
  * Version the security snapshot independently from the server/schema version.
  * Changing the fields or their canonicalization should invalidate old records.
  */
-export const ASSESSMENT_SECURITY_SNAPSHOT_VERSION = "assessment-security-v1";
+export const ASSESSMENT_SECURITY_SNAPSHOT_VERSION = "assessment-security-v2";
 
 export type SecuritySnapshotCategory =
   | "schema_epoch"
@@ -27,6 +27,7 @@ export type SecuritySnapshotCategory =
   | "project_policy"
   | "risk_rules"
   | "confirmation_policy"
+  | "task_parameters"
   | "release_protection"
   | "direct_profile"
   | "assessment_ttl"
@@ -42,6 +43,13 @@ export interface AssessmentSecuritySnapshotInput {
   changePolicy?: string | null;
   template?: string | null;
   verifyCommands?: string[];
+  testCommand?: string | null;
+  taskTimeoutSeconds?: number | null;
+  scope?: string[];
+  forbidden?: string[];
+  verification?: string[];
+  doneEvidence?: string[];
+  riskRulesVersion?: string;
   projectPolicy?: ProjectPolicy | null;
   projectPolicyValid?: boolean | null;
   projectPolicyIssues?: Array<{ code: string; severity: string; field: string }>;
@@ -68,6 +76,13 @@ function sortedUnique(values: readonly string[] | undefined): string[] {
   return [...new Set((values || []).map((value) => String(value).trim()))]
     .filter(Boolean)
     .sort((left, right) => left.localeCompare(right));
+}
+
+function sortedUniqueTaskPaths(values: readonly string[] | undefined): string[] {
+  return sortedUnique(values?.map((value) => {
+    const normalized = String(value).replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/{2,}/g, "/");
+    return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+  }));
 }
 
 function sortedAgentConfig(config: PatchWardenConfig): Record<string, unknown> {
@@ -121,15 +136,21 @@ export function buildAssessmentSecuritySnapshot(input: AssessmentSecuritySnapsho
         .sort((left, right) => stableJsonStringify(left).localeCompare(stableJsonStringify(right))),
     },
     risk_rules: {
-      implementation: "risk-engine-v1",
+      implementation: input.riskRulesVersion || "risk-engine-v1",
       project_high_risk_commands: sortedUnique(input.projectPolicy?.high_risk_commands),
     },
     confirmation_policy: {
       change_policy: input.changePolicy || "repo_scoped_changes",
       template: input.template || null,
-      task_policy: {
-        verify_commands: sortedUnique(input.verifyCommands),
-      },
+    },
+    task_parameters: {
+      test_command: input.testCommand || null,
+      verify_commands: sortedUnique(input.verifyCommands),
+      timeout_seconds: input.taskTimeoutSeconds ?? config.defaultTaskTimeoutSeconds,
+      scope: sortedUniqueTaskPaths(input.scope),
+      forbidden: sortedUniqueTaskPaths(input.forbidden),
+      verification: sortedUnique(input.verification),
+      done_evidence: sortedUniqueTaskPaths(input.doneEvidence),
     },
     release_protection: {
       high_risk_commands: sortedUnique(input.projectPolicy?.high_risk_commands || [

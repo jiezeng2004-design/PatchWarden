@@ -127,6 +127,7 @@ interface TaskContext {
 
 interface ExecutionState {
   agentResult: ManagedProcessResult | null;
+  agentFailureCategory: string | null;
   testResult: TestExecutionResult;
   verifyResults: TestExecutionResult[];
   finalStatus: TaskStatus;
@@ -270,6 +271,7 @@ async function prepareTask(taskId: string): Promise<TaskContext | TaskRunResult>
 async function executeAgent(ctx: TaskContext): Promise<ExecutionState> {
   const state: ExecutionState = {
     agentResult: null,
+    agentFailureCategory: null,
     testResult: skippedTest(ctx.testCommand, ctx.repoPath, "Agent did not complete successfully."),
     verifyResults: [],
     finalStatus: "failed",
@@ -313,7 +315,10 @@ async function executeAgent(ctx: TaskContext): Promise<ExecutionState> {
     } else if (agentResult.spawnError) {
       state.finalError = `Agent spawn failed: ${agentResult.spawnError}`;
     } else if (agentResult.exitCode !== 0) {
-      state.finalError = `Agent exited with code ${agentResult.exitCode}.`;
+      state.agentFailureCategory = classifyAgentFailure(agentResult.stderr);
+      state.finalError = state.agentFailureCategory
+        ? `Agent provider failure (${state.agentFailureCategory}); process exited with code ${agentResult.exitCode}.`
+        : `Agent exited with code ${agentResult.exitCode}.`;
     }
   } catch (error) {
     state.lastCaughtError = error;
@@ -623,6 +628,7 @@ function finalizeTask(ctx: TaskContext, state: ExecutionState, evidence: Artifac
     termination_reason: state.finalStatus === "timeout"
       ? "timeout"
       : state.finalStatus === "canceled" ? "canceled" : null,
+    agent_failure_category: state.agentFailureCategory,
     changed_files: changes.changed_files.map(({ path, change }) => ({ path, change })),
     artifact_hygiene_counts: changes.artifact_hygiene.counts,
     artifact_status: artifactStatus,
@@ -688,6 +694,7 @@ function buildResultJson(input: {
     termination_reason: state.finalStatus === "timeout"
       ? "timeout"
       : state.finalStatus === "canceled" ? "canceled" : null,
+    agent_failure_category: state.agentFailureCategory,
     changed_files: changes.changed_files,
     changed_file_groups: {
       source_changes: changedFileGroups.source_changes.length,
@@ -1368,4 +1375,18 @@ function appendBounded(current: string, next: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function classifyAgentFailure(stderr: string): string | null {
+  const normalized = stderr.toLowerCase();
+  if (normalized.includes("insufficient balance") || normalized.includes("insufficient credits")) {
+    return "provider_insufficient_balance";
+  }
+  if (normalized.includes("unauthorized") || normalized.includes("authentication failed") || normalized.includes("invalid api key")) {
+    return "provider_authentication_failed";
+  }
+  if (normalized.includes("model not found") || normalized.includes("model access") || normalized.includes("permission denied")) {
+    return "provider_model_unavailable";
+  }
+  return null;
 }

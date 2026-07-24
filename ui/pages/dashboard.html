@@ -1132,6 +1132,7 @@ html.dark {
       const svc = (status && status[prefix]) || {};
       const tunnel = (status && status.tunnel && status.tunnel[prefix]) || {};
       const tools = (status && status.tools && status.tools[prefix]) || {};
+      const connection = (status && status.connections && status.connections[prefix]) || {};
 
       const available = !!svc.available;
       const kind = available ? 'success' : 'error';
@@ -1140,6 +1141,9 @@ html.dark {
       const reasonText = svc.reason ? escapeHtml(svc.reason) : '—';
 
       const rows = [
+        { label: 'profile', html: connection.profile ? escapeHtml(connection.profile) : '&mdash;' },
+        { label: 'tunnel_id', html: connection.tunnel_id_masked ? escapeHtml(connection.tunnel_id_masked) : '&mdash;' },
+        { label: 'reconnect', html: connection.reconnect_guidance ? escapeHtml(connection.reconnect_guidance) : '&mdash;' },
         { label: 'PID', html: tunnel.pid != null ? escapeHtml(tunnel.pid) : '—' },
         { label: 'tool_profile', html: tools.tool_profile ? escapeHtml(tools.tool_profile) : '—' },
         { label: 'tool_count', html: tools.tool_count != null ? escapeHtml(tools.tool_count) : '—' },

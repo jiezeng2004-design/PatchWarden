@@ -26,6 +26,7 @@ import { logger } from "./logging.js";
 import { unsafeWorkspaceRootLabel } from "./security/workspaceRootGuard.js";
 import { runSimpleProcessSync } from "./runner/simpleProcess.js";
 import { resolveAgentLaunch } from "./runner/agentInvocation.js";
+import { isDangerousAllowedTestCommand } from "./diagnostics/allowedTestCommandSafety.js";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -655,12 +656,9 @@ const checkAllowedTestCommandsSafety: DoctorCheck = {
     const testCmds = context.config.allowedTestCommands || [];
     results.push(checkResult("allowedTestCommands is non-empty", testCmds.length > 0, testCmds.length > 0 ? `${testCmds.length} commands` : "No test commands configured"));
 
-    const dangerous = ["rm -rf", "del /s", "format", "shutdown", "curl |", "wget |"];
     for (const cmdStr of testCmds) {
-      for (const danger of dangerous) {
-        if (cmdStr.toLowerCase().includes(danger)) {
-          results.push(warnResult(`allowedTestCommands contains dangerous pattern: "${cmdStr}"`));
-        }
+      if (isDangerousAllowedTestCommand(cmdStr)) {
+        results.push(warnResult(`allowedTestCommands contains dangerous pattern: "${cmdStr}"`));
       }
     }
     return results;

@@ -52,6 +52,39 @@ interface Suggestion {
   link?: string;
 }
 
+export interface ConnectionSummary {
+  profile: string;
+  tool_profile: string | null;
+  ready: boolean;
+  tool_count: number | null;
+  tool_manifest_sha256: string | null;
+  tunnel_id_masked: string | null;
+  reconnect_guidance: string;
+}
+
+export function buildConnectionSummary(
+  mode: "core" | "direct",
+  tunnel: Record<string, unknown>,
+  tools: { tool_profile: string | null; tool_count: number | null; tool_manifest_sha256: string | null },
+): ConnectionSummary {
+  const masked = typeof tunnel.tunnel_id_masked === "string" && tunnel.tunnel_id_masked.includes("***")
+    ? tunnel.tunnel_id_masked
+    : null;
+  return {
+    profile: typeof tunnel.profile === "string"
+      ? tunnel.profile
+      : mode === "direct" ? "patchwarden-direct" : "patchwarden",
+    tool_profile: tools.tool_profile,
+    ready: tunnel.ready === true,
+    tool_count: tools.tool_count,
+    tool_manifest_sha256: tools.tool_manifest_sha256,
+    tunnel_id_masked: masked,
+    reconnect_guidance: mode === "direct"
+      ? "If ChatGPT still uses an older Direct Tunnel, update the connector binding and test health_check in a new chat."
+      : "If ChatGPT still uses an older Core Tunnel, update the connector binding and test health_check in a new chat.",
+  };
+}
+
 interface StatusSnapshotForSuggestions {
   core: RuntimeHealth;
   direct: RuntimeHealth;
@@ -290,6 +323,10 @@ export async function handleStatus(res: ServerResponse): Promise<void> {
       watcher,
       tunnel: { core: tunnelCore, direct: tunnelDirect },
       tools: { core: toolsCore, direct: toolsDirect },
+      connections: {
+        core: buildConnectionSummary("core", tunnelCore, toolsCore),
+        direct: buildConnectionSummary("direct", tunnelDirect, toolsDirect),
+      },
       agents,
       workspace_root: workspaceRoot,
       tasks,

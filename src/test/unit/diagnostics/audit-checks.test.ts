@@ -11,6 +11,7 @@ import {
   checkPackageManifestConsistency,
   checkSensitivePathAccess,
   checkUnrecordedCommandExecution,
+  extractNpmRunScriptNames,
 } from "../../../tools/diagnostics/auditTask.js";
 
 // ── Helpers ───────────────────────────────────────────────────────
@@ -37,6 +38,45 @@ describe("auditTask new checks", () => {
 
   afterEach(() => {
     rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  describe("extractNpmRunScriptNames", () => {
+    it("extracts npm and npm.cmd scripts without mangling Windows commands", () => {
+      assert.deepEqual(
+        extractNpmRunScriptNames([
+          "npm run build",
+          "npm.cmd run install:electron-cn",
+          "npm.cmd run dist",
+          "npm.cmd run pack",
+        ].join("\n")),
+        ["build", "install:electron-cn", "dist", "pack"],
+      );
+    });
+
+    it("handles fenced, inline, and explicit plain-text commands separately", () => {
+      assert.deepEqual(
+        extractNpmRunScriptNames([
+          "```powershell",
+          "npm.cmd run install:electron-cn",
+          "```",
+          "Use `npm run dist` to build.",
+          "Command: npm.cmd run pack",
+          "- npm run lint -- --fix=false",
+        ].join("\n")),
+        ["install:electron-cn", "dist", "pack", "lint"],
+      );
+    });
+
+    it("ignores uncertain narrative mentions and internal placeholders", () => {
+      assert.deepEqual(
+        extractNpmRunScriptNames([
+          "This historical note discusses npm run removed but does not instruct execution.",
+          "The parser token npmcmdruninstall:electron-cn must never become a script.",
+          "A sentence may compare npm.cmd run old with another workflow.",
+        ].join("\n")),
+        [],
+      );
+    });
   });
 
   // ── 1. checkForbiddenScope ──────────────────────────────────────

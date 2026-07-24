@@ -161,7 +161,10 @@ describe("assessment cross-process freshness", () => {
       `  plan_title: "Cross-process assessment fixture",`,
       `  repo_path: ".",`,
       `  agent: "codex",`,
-      `  verify_commands: []`,
+      `  verify_commands: [],`,
+      `  scope: ["src/**"],`,
+      `  forbidden: ["release/**"],`,
+      `  done_evidence: ["result.md"]`,
       `});`,
       `process.stdout.write(JSON.stringify(result));`,
     ].join("\n");
@@ -191,6 +194,9 @@ describe("assessment cross-process freshness", () => {
     assert.equal(task.status, "pending");
     const persisted = JSON.parse(readFileSync(join(task.path, "status.json"), "utf-8"));
     assert.equal(persisted.assessment_id, ticket.assessment_id);
+    assert.deepEqual(persisted.scope, ["src/**"]);
+    assert.deepEqual(persisted.forbidden, ["release/**"]);
+    assert.deepEqual(persisted.done_evidence, ["result.md"]);
 
     const { runTask } = await import("../../../runner/runTask.js");
     const completed = await runTask(task.task_id);
