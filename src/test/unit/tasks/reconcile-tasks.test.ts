@@ -59,6 +59,8 @@ interface TaskFixtureOptions {
   watcherInstanceId?: string | null;
   taskStartedSecondsAgo?: number;
   createdSecondsAgo?: number;
+  timeoutSeconds?: number;
+  cancelRequested?: boolean;
   stdoutSecondsAgo?: number;
   stdoutContent?: string;
   stderrSecondsAgo?: number;
@@ -100,6 +102,8 @@ describe("reconcileTasks", () => {
       phase: opts.phase ?? "executing_agent",
       created_at: isoSecondsAgo(statusSecondsAgo),
       updated_at: isoSecondsAgo(statusSecondsAgo),
+      ...(opts.timeoutSeconds !== undefined ? { timeout_seconds: opts.timeoutSeconds } : {}),
+      ...(opts.cancelRequested ? { cancel_requested: true } : {}),
     };
     if (opts.heartbeatSecondsAgo !== undefined) {
       status.last_heartbeat_at = isoSecondsAgo(opts.heartbeatSecondsAgo);
@@ -472,6 +476,7 @@ describe("reconcileTasks", () => {
     const status = readTaskStatus("task-sf-orphan-001");
     assert.equal(status.status, "orphaned");
     assert.equal(status.previous_status, "running");
+    assert.equal(status.process_cleanup_required, true);
   });
 
   // ── 10. Age filter: tasks younger than max_age_minutes are skipped ──
@@ -547,5 +552,147 @@ describe("reconcileTasks", () => {
 
     const tmpPath = join(tasksDir, "task-sf-notmp-001", "status.json.tmp");
     assert.ok(!existsSync(tmpPath), "status.json.tmp should not exist after rename");
+  });
+
+  it("converges a canceled orphan to canceled", () => {
+    buildTask({
+      taskId: "task-canceled-orphan-001",
+      status: "running",
+      phase: "executing_agent",
+      heartbeatSecondsAgo: 600,
+      childPid: DEAD_PID,
+      watcherInstanceId: "watcher-old",
+      cancelRequested: true,
+      createdSecondsAgo: 2000,
+    });
+    writeWatcherHeartbeat("watcher-new", 1);
+
+    const result = reconcileTasks({ mode: "safe_fix", max_age_minutes: 1 / 60 }, config);
+    const report = result.reports.find((item) => item.task_id === "task-canceled-orphan-001");
+    assert.equal(report?.action_taken, "marked_canceled");
+    const status = JSON.parse(readFileSync(join(tasksDir, "task-canceled-orphan-001", "status.json"), "utf-8"));
+    assert.equal(status.status, "canceled");
+    assert.equal(status.error_code, "runner_lost_during_cancel");
+    assert.equal(status.process_cleanup_required, true);
+    assert.match(String(status.process_cleanup_reason), /no untrusted PID was killed/);
+  });
+
+  it("converges an orphan past its deadline to the timeout terminal state", () => {
+    buildTask({
+      taskId: "task-timeout-orphan-001",
+      status: "running",
+      phase: "executing_agent",
+      heartbeatSecondsAgo: 600,
+      childPid: DEAD_PID,
+      watcherInstanceId: "watcher-old",
+      timeoutSeconds: 1,
+      createdSecondsAgo: 600,
+    });
+    writeWatcherHeartbeat("watcher-new", 1);
+
+    const result = reconcileTasks({ mode: "safe_fix", max_age_minutes: 1 / 60 }, config);
+    const report = result.reports.find((item) => item.task_id === "task-timeout-orphan-001");
+    assert.equal(report?.action_taken, "marked_timed_out");
+    const status = JSON.parse(readFileSync(join(tasksDir, "task-timeout-orphan-001", "status.json"), "utf-8"));
+    assert.equal(status.status, "timeout");
+    assert.equal(status.phase, "timeout");
+    assert.equal(status.termination_reason, "timeout");
+    assert.equal(status.error_code, "task_timeout");
+    const resultJson = JSON.parse(readFileSync(join(tasksDir, "task-timeout-orphan-001", "result.json"), "utf-8"));
+    assert.equal(resultJson.artifact_status, "partial");
+    assert.equal(existsSync(join(tasksDir, "task-timeout-orphan-001", "verify.json")), true);
+    assert.equal(existsSync(join(tasksDir, "task-timeout-orphan-001", "result.md")), true);
+    assert.equal(existsSync(join(tasksDir, "task-timeout-orphan-001", "test.log")), true);
+    assert.equal(existsSync(join(tasksDir, "task-timeout-orphan-001", "git.diff")), true);
+    assert.equal(existsSync(join(tasksDir, "task-timeout-orphan-001", "diff.patch")), true);
+  });
+
+  it("bypasses the ordinary age gate for persisted cancellation and timeout", () => {
+    buildTask({
+      taskId: "task-recent-cancel",
+      status: "cancel_requested",
+      phase: "canceling",
+      childPid: DEAD_PID,
+      cancelRequested: true,
+      createdSecondsAgo: 2,
+    });
+    buildTask({
+      taskId: "task-recent-timeout",
+      status: "executing_agent",
+      phase: "executing_agent",
+      childPid: DEAD_PID,
+      timeoutSeconds: 1,
+      createdSecondsAgo: 2,
+    });
+
+    const result = reconcileTasks({ mode: "safe_fix", max_age_minutes: 60 }, config);
+    assert.equal(result.reconciled, 2);
+    assert.equal(readTaskStatus("task-recent-cancel").status, "canceled");
+    assert.equal(readTaskStatus("task-recent-timeout").status, "timeout");
+  });
+
+  it("fails interrupted artifact collection once with structured unavailable evidence", () => {
+    buildTask({
+      taskId: "task-artifacts-interrupted",
+      status: "collecting_artifacts",
+      phase: "collecting_artifacts",
+      heartbeatSecondsAgo: 600,
+      childPid: DEAD_PID,
+      createdSecondsAgo: 600,
+    });
+
+    const first = reconcileTasks({ mode: "safe_fix", max_age_minutes: 1 / 60 }, config);
+    assert.equal(first.reconciled, 1);
+    const status = readTaskStatus("task-artifacts-interrupted");
+    assert.equal(status.status, "failed_stale");
+    assert.equal(status.error_code, "artifact_collection_interrupted");
+    const resultJson = JSON.parse(readFileSync(join(tasksDir, "task-artifacts-interrupted", "result.json"), "utf-8"));
+    assert.equal(resultJson.artifact_status, "partial");
+    assert.equal(resultJson.error_code, "artifact_collection_interrupted");
+    assert.equal(resultJson.verify_status, "failed");
+
+    const second = reconcileTasks({ mode: "safe_fix", max_age_minutes: 1 / 60 }, config);
+    assert.equal(second.reconciled, 0);
+    assert.equal(readTaskStatus("task-artifacts-interrupted").status, "failed_stale");
+  });
+
+  it("does not terminate an untrusted live PID and keeps task IDs isolated", () => {
+    buildTask({
+      taskId: "task-target-orphan",
+      status: "running",
+      phase: "executing_agent",
+      heartbeatSecondsAgo: 1,
+      childPid: ALIVE_PID,
+      watcherInstanceId: "watcher-old",
+      createdSecondsAgo: 1,
+    });
+    buildTask({
+      taskId: "task-unrelated-active",
+      status: "running",
+      phase: "executing_agent",
+      heartbeatSecondsAgo: 1,
+      childPid: ALIVE_PID,
+      watcherInstanceId: "watcher-old",
+      createdSecondsAgo: 1,
+    });
+    writeWatcherHeartbeat("watcher-new", 1);
+
+    const result = reconcileTasks({
+      mode: "safe_fix",
+      max_age_minutes: 60,
+      task_ids: ["task_target_orphan"],
+    }, config);
+    assert.equal(result.reconciled, 0, "invalid task IDs must not select a directory");
+
+    const selected = reconcileTasks({
+      mode: "safe_fix",
+      max_age_minutes: 60,
+      task_ids: ["task-target-orphan"],
+    }, config);
+    assert.equal(selected.reconciled, 1);
+    assert.equal(readTaskStatus("task-target-orphan").status, "orphaned");
+    assert.equal(readTaskStatus("task-target-orphan").process_cleanup_required, true);
+    assert.equal(readTaskStatus("task-unrelated-active").status, "running");
+    assert.doesNotThrow(() => process.kill(ALIVE_PID, 0));
   });
 });

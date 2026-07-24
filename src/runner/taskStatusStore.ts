@@ -4,6 +4,7 @@ import {
   readJsonObjectFileSync,
   type LockedJsonMutation,
 } from "../utils/lockedJsonFile.js";
+import { isAllowedTaskStatusTransition } from "../tools/tasks/taskStates.js";
 
 export type TaskStatusRecord = Record<string, unknown>;
 
@@ -22,7 +23,21 @@ export function mutateTaskStatus<T>(
   statusFile: string,
   mutation: (current: TaskStatusRecord) => TaskStatusMutation<T>,
 ): T {
-  return mutateLockedJsonFileSync(statusFile, mutation, {
+  return mutateLockedJsonFileSync<TaskStatusRecord, T>(statusFile, (current) => {
+    const outcome = mutation(current);
+    if (outcome.next) {
+      const from = String(current.status || "");
+      const to = String(outcome.next.status || from);
+      if (!isAllowedTaskStatusTransition(from, to)) {
+        throw new PatchWardenError(
+          "invalid_task_status_transition",
+          `Task status cannot transition from "${from || "unknown"}" to "${to || "unknown"}".`,
+          "Refresh the task status and apply only a forward lifecycle transition.",
+        );
+      }
+    }
+    return outcome;
+  }, {
     busyError: () => new PatchWardenError(
       "task_status_busy",
       "Task status is currently being updated by another PatchWarden process.",

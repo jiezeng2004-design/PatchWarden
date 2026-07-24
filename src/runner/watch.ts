@@ -38,6 +38,11 @@ import { mutateTaskStatus } from "./taskStatusStore.js";
 import { logger } from "../logging.js";
 import { redactSensitiveContent } from "../security/contentRedaction.js";
 import { atomicWriteFileSync } from "../utils/atomicFile.js";
+import { reconcileTasks } from "../tools/tasks/reconcileTasks.js";
+import {
+  buildAssessmentValidationFailureDiagnostic,
+  recordAssessmentValidationFailure,
+} from "../assessments/assessmentDiagnostics.js";
 //  Note: `runTask` is imported lazily inside `tick()` via `await import("./runTask.js")`.
 //  This keeps `import { acquireWatcherLock }` side-effect-free for unit tests and
 //  avoids eagerly pulling in the full tools/dispatch graph at module load.
@@ -60,6 +65,11 @@ const WATCHER_LAUNCHER_PID = Number.isInteger(Number(process.env.PATCHWARDEN_WAT
 // Track executed tasks to prevent re-execution
 const executedTasks = new Set<string>();
 let consecutiveTickFailures = 0;
+let activeTaskId: string | null = null;
+let activeTaskPhase: string | null = null;
+let tickRunning = false;
+let tickStartedAt: string | null = null;
+let lastTickCompletedAt: string | null = null;
 
 // ── Single-instance lock ─────────────────────────────────────────
 //  watch.ts is a long-running poller; without a lock, two watchers started
@@ -212,6 +222,8 @@ export function createNonOverlappingRunner(
 // ── Main loop ─────────────────────────────────────────────────────
 
 async function tick() {
+  tickRunning = true;
+  tickStartedAt = new Date().toISOString();
   try {
     writeWatcherHeartbeat("running");
     // Ensure tasks directory exists
@@ -220,6 +232,8 @@ async function tick() {
       writeWatcherHeartbeat("running");
       return;
     }
+
+    reconcileInterruptedTasks();
 
     const entries = readdirSync(tasksDir, { withFileTypes: true });
     const taskDirs = entries.filter((e) => e.isDirectory());
@@ -280,7 +294,9 @@ async function tick() {
           const preExecSnapshot = await captureRepoSnapshot(resolvedRepoPath);
           const validation = validateAssessmentFreshness(statusData.assessment_id, preExecSnapshot);
           if (!validation.valid) {
-            throw new Error(`assessment validation failed: ${validation.failure_reason}`);
+            recordAssessmentValidationFailure(validation);
+            const diagnostic = buildAssessmentValidationFailureDiagnostic(validation);
+            throw new Error(`assessment validation failed: ${JSON.stringify(diagnostic)}`);
           }
         }
       } catch (err) {
@@ -312,13 +328,20 @@ async function tick() {
       // ── Execute ──
       logger.info(`[watcher] Executing: ${taskId}`);
       executedTasks.add(taskId);
+      activeTaskId = taskId;
+      activeTaskPhase = "executing_agent";
 
       try {
         const { runTask } = await import("./runTask.js");
         const result = await runTask(taskId);
+        activeTaskPhase = result.status;
         logger.info(`[watcher] ${taskId} → ${result.status}`);
       } catch (err) {
+        activeTaskPhase = "error";
         logger.error(`[watcher] ${taskId} → error: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        activeTaskId = null;
+        activeTaskPhase = null;
       }
     }
     consecutiveTickFailures = 0;
@@ -334,6 +357,26 @@ async function tick() {
         error: heartbeatError instanceof Error ? heartbeatError.message : String(heartbeatError),
       });
     }
+  } finally {
+    tickRunning = false;
+    lastTickCompletedAt = new Date().toISOString();
+  }
+}
+
+function reconcileInterruptedTasks(): void {
+  const result = reconcileTasks({
+    mode: "safe_fix",
+    max_age_minutes: Math.max(config.watcherStaleSeconds / 60, 1 / 60),
+    include_done_candidates: true,
+  }, config);
+  if (result.reconciled > 0) {
+    logger.warn("[watcher] Reconciled tasks left by a previous runner", {
+      reconciled: result.reconciled,
+      task_ids: result.reports
+        .filter((report) => report.action_taken !== "left_unchanged")
+        .map((report) => report.task_id)
+        .slice(0, 20),
+    });
   }
 }
 
@@ -347,7 +390,28 @@ function writeWatcherHeartbeat(status: "running" | "degraded", lastError?: strin
     launcher_pid: WATCHER_LAUNCHER_PID,
     consecutive_failures: consecutiveTickFailures,
     last_error: lastError ? lastError.slice(0, 500) : null,
+    heartbeat_source: "independent_interval",
+    tick_running: tickRunning,
+    tick_started_at: tickStartedAt,
+    last_tick_completed_at: lastTickCompletedAt,
+    active_task_id: activeTaskId,
+    active_task_phase: activeTaskPhase,
   }, null, 2));
+}
+
+function startWatcherHeartbeatLoop(): ReturnType<typeof setInterval> {
+  const intervalMs = Math.min(2000, Math.max(1000, Math.floor(config.watcherStaleSeconds * 1000 / 3)));
+  const timer = setInterval(() => {
+    try {
+      writeWatcherHeartbeat("running");
+    } catch (error) {
+      logger.warn("[watcher] Independent heartbeat write failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, intervalMs);
+  timer.unref?.();
+  return timer;
 }
 
 // ── Start (only when executed as a script) ─────────────────────────
@@ -378,6 +442,7 @@ if (isMainModule) {
   }
 
   logger.info("[watcher] Started");
+  const heartbeatTimer = startWatcherHeartbeatLoop();
   const scheduledTick = createNonOverlappingRunner(tick, () => {
     logger.warn("[watcher] Previous tick is still running; skipping overlapping poll");
   });
@@ -389,6 +454,7 @@ if (isMainModule) {
   // Graceful shutdown
   function shutdown(): void {
     logger.info("[watcher] Stopped");
+    clearInterval(heartbeatTimer);
     try { releaseWatcherLock(WATCHER_LOCK_FILE); } catch (error) {
       logger.warn("[watcher] Failed to release watcher lock", {
         error: error instanceof Error ? error.message : String(error),

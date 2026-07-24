@@ -108,28 +108,37 @@
     syncProxyControls();
   }
 
-  api.getState().then(function (state) {
-    document.getElementById("configPath").textContent = state.configPath || tr("settings.notConfigured");
-    theme.value = state.preferences.theme;
-    language.value = state.preferences.language || "system";
-    closeBehavior.value = state.preferences.closeBehavior;
-    if (state.runtimeSettings) renderRuntime(state.runtimeSettings);
-  });
-  api.getRuntimeSettings().then(function (settings) {
-    renderRuntime(settings);
-    if (!settings.tunnelClientPath) {
-      setRuntimeMessage("settings.autoDetecting");
-      return api.detectTunnelClient().then(function (result) {
-        if (result.available) {
-          selectedTunnelPath = result.path;
-          tunnelClientPath.textContent = tr("settings.autoDetectedPath", { path: result.path, source: result.source });
+  async function initializeSettings() {
+    try {
+      var state = await api.getState();
+      var settings = state.runtimeSettings || await api.getRuntimeSettings();
+      renderRuntime(settings);
+      document.getElementById("configPath").textContent = state.configPath || tr("settings.notConfigured");
+      document.getElementById("workspacePath").textContent = state.workspaceRoot || tr("settings.workspaceHelp");
+      theme.value = state.preferences.theme;
+      language.value = state.preferences.language || "system";
+      closeBehavior.value = state.preferences.closeBehavior;
+
+      if (!settings.tunnelClientPath && state.tunnelClient && state.tunnelClient.available) {
+        selectedTunnelPath = state.tunnelClient.path;
+        tunnelClientPath.textContent = tr("settings.autoDetectedPath", { path: state.tunnelClient.path, source: state.tunnelClient.source });
+        setRuntimeMessage("settings.autoDetected");
+      } else if (!settings.tunnelClientPath) {
+        setRuntimeMessage("settings.autoDetecting");
+        var detected = await api.detectTunnelClient();
+        if (detected.available) {
+          selectedTunnelPath = detected.path;
+          tunnelClientPath.textContent = tr("settings.autoDetectedPath", { path: detected.path, source: detected.source });
           setRuntimeMessage("settings.autoDetected");
         } else {
           setRuntimeMessage("settings.tunnelNotFound");
         }
-      });
+      }
+    } catch (error) {
+      runtimeStatus.textContent = error && error.message ? error.message : tr("settings.loadFailed");
     }
-  }).catch(function (error) { runtimeStatus.textContent = error.message; });
+  }
+  void initializeSettings();
   void loadAgents(false);
   document.getElementById("detectAgents").addEventListener("click", function () { void loadAgents(true); });
   document.getElementById("saveAgents").addEventListener("click", async function () {

@@ -7,6 +7,7 @@ import { redactSensitiveContent } from "../../security/contentRedaction.js";
 import { readTextFileTailLinesSync } from "../../utils/boundedFile.js";
 import { readTaskRuntime } from "../../runner/taskRuntime.js";
 import { isWatcherOwningTask, readWatcherInstanceId } from "../../watcherStatus.js";
+import { isActiveTaskStatus, isTerminalTaskStatus } from "./taskStates.js";
 
 // ── v0.7.0: Task diagnosis types ──────────────────────────────────
 
@@ -153,17 +154,12 @@ export function diagnoseTask(
   const phaseStr = (runtime.phase || (typeof status.phase === "string" ? status.phase : "queued")) as string;
 
   // ── Terminal tasks: no diagnosis needed ──
-  const terminalStatuses = new Set([
-    "done", "done_by_agent", "failed", "failed_verification",
-    "failed_scope_violation", "failed_policy_violation",
-    "failed_stale", "orphaned", "canceled",
-  ]);
-  if (terminalStatuses.has(statusStr)) {
+  if (isTerminalTaskStatus(statusStr)) {
     return buildTerminalDiagnosis(taskId, statusStr, phaseStr);
   }
 
-  // ── Only diagnose running / collecting_artifacts / pending ──
-  if (statusStr !== "running" && statusStr !== "collecting_artifacts" && statusStr !== "pending") {
+  // Diagnose both current status spellings and legacy phase-as-status records.
+  if (!isActiveTaskStatus(statusStr)) {
     return buildUnknownDiagnosis(taskId, statusStr, phaseStr, [`unexpected status "${statusStr}" for diagnosis`]);
   }
 

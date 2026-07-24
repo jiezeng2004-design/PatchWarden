@@ -12,12 +12,15 @@ import {
   createAssessment,
   readAssessment,
   validateAssessmentFreshness,
+  markAssessmentUsed,
   generateAssessmentId,
   createAssessmentDir,
   type AssessmentRecord,
   type AgentAssessmentSummary,
 } from "../../assessments/assessmentStore.js";
 import { runAgentAssessment } from "../../assessments/agentAssessor.js";
+import { recordAssessmentValidationFailure } from "../../assessments/assessmentDiagnostics.js";
+import { ASSESSMENT_SECURITY_SNAPSHOT_VERSION } from "../../assessments/securitySnapshot.js";
 import { captureRepoSnapshot } from "../../runner/changeCapture.js";
 import { writeTaskProgress } from "../../runner/taskProgress.js";
 import { PatchWardenError } from "../../errors.js";
@@ -28,7 +31,7 @@ import {
   type ChangePolicy,
   type TaskTemplateName,
 } from "../taskTemplates.js";
-import { PATCHWARDEN_VERSION, ARTIFACT_SCHEMA_VERSION } from "../../version.js";
+import { PATCHWARDEN_VERSION, ARTIFACT_SCHEMA_VERSION, TOOL_SCHEMA_EPOCH } from "../../version.js";
 import { getLastToolCatalogSnapshot, resolveToolProfile } from "../catalog/toolCatalog.js";
 import {
   derivePendingReason,
@@ -43,7 +46,10 @@ import { atomicWriteJsonFileSync } from "../../utils/atomicFile.js";
 export type TaskStatus =
   | "pending"
   | "running"
+  | "executing_agent"
+  | "verifying"
   | "collecting_artifacts"
+  | "cancel_requested"
   | "done_by_agent"      // v0.7.0: agent self-reported done or status reconciled to done; acceptance_status defaults to "pending"
   | "accepted"           // v0.7.2: audit_task confirmed acceptance
   | "rejected"           // v0.7.2: audit_task confirmed rejection
@@ -56,6 +62,7 @@ export type TaskStatus =
   | "failed_policy_violation"
   | "failed_stale"       // v0.7.0: process dead / heartbeat expired
   | "orphaned"           // v0.7.0: watcher no longer owns the task
+  | "timeout"
   | "canceled";
 
 /**
@@ -83,6 +90,7 @@ export type TaskPhase =
   | "failed_policy_violation"
   | "failed_stale"        // v0.7.0
   | "orphaned"             // v0.7.0
+  | "timeout"
   | "done_by_agent"        // v0.7.0
   | "accepted"             // v0.7.2
   | "rejected"             // v0.7.2
@@ -205,6 +213,15 @@ export async function createTask(input: CreateTaskInput): Promise<CreateTaskResu
   let effectiveInput = input;
   if (executionMode === "execute" && input.assessment_id) {
     assessmentRecord = readAssessment(input.assessment_id);
+    if (assessmentRecord.used_at) {
+      throw new PatchWardenError(
+        "assessment_used",
+        `Assessment "${input.assessment_id}" has already been used.`,
+        "Run create_task with execution_mode=assess_only again to obtain a new assessment_id.",
+        true,
+        { assessment_id: input.assessment_id, used_at: assessmentRecord.used_at },
+      );
+    }
     // Parameter mismatch check: if ChatGPT passes params that differ from the assessment, reject
     effectiveInput = mergeAssessmentIntoInput(input, assessmentRecord);
   }
@@ -490,6 +507,10 @@ export async function createTask(input: CreateTaskInput): Promise<CreateTaskResu
       agent: effectiveInput.agent,
       timeout_seconds: timeoutSeconds,
       change_policy: changePolicy,
+      scope: effectiveInput.scope,
+      forbidden: effectiveInput.forbidden,
+      verification: effectiveInput.verification,
+      done_evidence: effectiveInput.done_evidence,
       snapshot,
       ...(preGeneratedAssessmentId ? { assessment_id: preGeneratedAssessmentId } : {}),
       ...(preGeneratedAssessmentDir ? { assessment_dir: preGeneratedAssessmentDir } : {}),
@@ -585,14 +606,42 @@ export async function createTask(input: CreateTaskInput): Promise<CreateTaskResu
     const snapshot = await captureRepoSnapshot(safeRepoPath);
     const validation = validateAssessmentFreshness(input.assessment_id!, snapshot);
     if (!validation.valid) {
+      recordAssessmentValidationFailure(validation);
       throw new PatchWardenError(
         validation.failure_reason || "assessment_validation_failed",
         `Assessment "${input.assessment_id}" is no longer valid: ${validation.failure_reason}`,
         "Re-run create_task with execution_mode=assess_only to get a fresh assessment_id.",
         true,
-        { assessment_id: input.assessment_id, failure_reason: validation.failure_reason }
+        {
+          assessment_id: input.assessment_id,
+          reason_code: validation.failure_reason,
+          failure_reason: validation.failure_reason,
+          ...(validation.expected_hash ? { expected_hash: validation.expected_hash } : {}),
+          ...(validation.actual_hash ? { actual_hash: validation.actual_hash } : {}),
+          ...(validation.expected_hash ? { assessment_config_sha256: validation.expected_hash } : {}),
+          ...(validation.actual_hash ? { current_config_sha256: validation.actual_hash } : {}),
+          snapshot_version: validation.assessment?.assessment_security_snapshot_version || null,
+          assessment_created_at: validation.assessment?.created_at || null,
+          assessment_expires_at: validation.assessment?.expires_at || null,
+          config_changed: validation.failure_reason === "assessment_stale_config",
+          ...(validation.config_change_categories
+            ? {
+              config_change_categories: validation.config_change_categories,
+              changed_field_names: validation.config_change_categories,
+              changed_config_sections: validation.config_change_categories,
+            }
+            : {}),
+          assessment_fingerprint_version: validation.assessment?.assessment_security_snapshot_version || null,
+          current_fingerprint_version: ASSESSMENT_SECURITY_SNAPSHOT_VERSION,
+          assessment_schema_epoch: validation.assessment?.assessment_schema_epoch || null,
+          current_schema_epoch: TOOL_SCHEMA_EPOCH,
+          validator_module_path: "dist/assessments/assessmentStore.js",
+          validator_build_id: `patchwarden-${PATCHWARDEN_VERSION}:${TOOL_SCHEMA_EPOCH}:${ASSESSMENT_SECURITY_SNAPSHOT_VERSION}`,
+          watcher_instance_id: process.env.PATCHWARDEN_WATCHER_INSTANCE_ID || null,
+        }
       );
     }
+    markAssessmentUsed(input.assessment_id!);
   }
 
   const { taskId, taskDir } = createTaskDirectory(tasksDir, config.workspaceRoot, config.tasksDir);
@@ -700,18 +749,22 @@ function mergeAssessmentIntoInput(
   // Do NOT set template/inline_plan alongside plan_id — createTask requires exactly one plan source.
   const merged: CreateTaskInput = {
     ...input,
-    plan_id: record.plan_id || input.plan_id,
+    plan_id: record.plan_id || undefined,
     template: undefined,
     inline_plan: undefined,
-    goal: record.goal || input.goal,
+    goal: record.goal || undefined,
     agent: record.agent,
     repo_path: record.repo_path,
     test_command: record.test_command || undefined,
-    verify_commands: record.verify_commands || input.verify_commands,
-    timeout_seconds: record.timeout_seconds || input.timeout_seconds,
+    verify_commands: record.verify_commands || [],
+    timeout_seconds: record.timeout_seconds,
+    scope: record.scope || [],
+    forbidden: record.forbidden || [],
+    verification: record.verification || [],
+    done_evidence: record.done_evidence || [],
   };
   // Parameter mismatch check: if caller passed explicit params that differ from assessment
-  if (input.template && record.template && input.template !== record.template) {
+  if (input.template && input.template !== record.template) {
     throw new PatchWardenError(
       "assessment_parameter_mismatch",
       `template mismatch: caller passed "${input.template}" but assessment has "${record.template}".`,
@@ -720,7 +773,7 @@ function mergeAssessmentIntoInput(
       { field: "template", assessment_value: record.template, caller_value: input.template }
     );
   }
-  if (input.goal && record.goal && input.goal !== record.goal) {
+  if (input.goal && input.goal !== record.goal) {
     throw new PatchWardenError(
       "assessment_parameter_mismatch",
       `goal mismatch: caller passed a different goal than the assessment.`,
@@ -737,6 +790,58 @@ function mergeAssessmentIntoInput(
       true,
       { field: "repo_path", assessment_value: record.repo_path, caller_value: input.repo_path }
     );
+  }
+  if (input.agent && input.agent !== record.agent) {
+    throw new PatchWardenError(
+      "assessment_parameter_mismatch",
+      `agent mismatch: caller passed "${input.agent}" but assessment has "${record.agent}".`,
+      "Do not override assessment-locked parameters. Use the same assessment_id as-is.",
+      true,
+      { field: "agent" },
+    );
+  }
+  if (
+    input.verify_commands
+    && JSON.stringify(input.verify_commands) !== JSON.stringify(record.verify_commands || [])
+  ) {
+    throw new PatchWardenError(
+      "assessment_parameter_mismatch",
+      "verify_commands mismatch: caller passed commands different from the assessment.",
+      "Do not override assessment-locked parameters. Use the same assessment_id as-is.",
+      true,
+      { field: "verify_commands" },
+    );
+  }
+  if (input.test_command && input.test_command !== record.test_command) {
+    throw new PatchWardenError(
+      "assessment_parameter_mismatch",
+      "test_command mismatch: caller passed a command different from the assessment.",
+      "Do not override assessment-locked parameters. Use the same assessment_id as-is.",
+      true,
+      { field: "test_command" },
+    );
+  }
+  if (input.timeout_seconds !== undefined && input.timeout_seconds !== record.timeout_seconds) {
+    throw new PatchWardenError(
+      "assessment_parameter_mismatch",
+      "timeout_seconds mismatch: caller passed a timeout different from the assessment.",
+      "Do not override assessment-locked parameters. Use the same assessment_id as-is.",
+      true,
+      { field: "timeout_seconds" },
+    );
+  }
+  for (const field of ["scope", "forbidden", "verification", "done_evidence"] as const) {
+    const callerValue = input[field];
+    const assessmentValue = record[field] || [];
+    if (callerValue && JSON.stringify(callerValue) !== JSON.stringify(assessmentValue)) {
+      throw new PatchWardenError(
+        "assessment_parameter_mismatch",
+        `${field} mismatch: caller passed values different from the assessment.`,
+        "Do not override assessment-locked parameters. Use the same assessment_id as-is.",
+        true,
+        { field },
+      );
+    }
   }
   return merged;
 }

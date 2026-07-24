@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, fsyncSync, openSync, renameSync, rmSync, writeFileSync } from "node:fs";
 
 export interface AtomicWriteOptions {
   encoding?: BufferEncoding;
@@ -24,6 +24,22 @@ export function atomicWriteFileSync(
       flag: "wx",
       ...(options.mode === undefined ? {} : { mode: options.mode }),
     });
+    const descriptor = openSync(temporaryPath, "r");
+    try {
+      try {
+        fsyncSync(descriptor);
+      } catch (error) {
+        const code = error && typeof error === "object" && "code" in error
+          ? String((error as NodeJS.ErrnoException).code || "")
+          : "";
+        // Some Windows filesystems and restricted runtimes reject fsync even
+        // after a successful complete write. Keep the same-directory atomic
+        // rename guarantee there; unexpected I/O errors still fail closed.
+        if (!new Set(["EPERM", "EINVAL", "ENOSYS", "ENOTSUP"]).has(code)) throw error;
+      }
+    } finally {
+      closeSync(descriptor);
+    }
     replaceFileSync(temporaryPath, path);
   } catch (error) {
     try { rmSync(temporaryPath, { force: true }); } catch { /* best effort */ }

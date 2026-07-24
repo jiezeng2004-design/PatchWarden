@@ -1,4 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   existsSync,
   readFileSync,
@@ -18,6 +19,7 @@ import {
   type TaskStatusRecord,
 } from "./taskStatusStore.js";
 import { validateAssessmentFreshness } from "../assessments/assessmentStore.js";
+import { recordAssessmentValidationFailure } from "../assessments/assessmentDiagnostics.js";
 import { buildAgentInvocation, buildExecutionPrompt } from "./agentInvocation.js";
 import type { TaskPhase, TaskStatus } from "../tools/tasks/createTask.js";
 import {
@@ -117,6 +119,7 @@ interface TaskContext {
   timeoutSeconds: number;
   startedAtMs: number;
   deadlineMs: number;
+  runnerInstanceId: string;
   beforeSnapshot: RepoSnapshot;
   beforeWorkspaceSnapshot: RepoSnapshot;
   externalDirtyBaseline: ExternalDirtyFile[];
@@ -124,6 +127,7 @@ interface TaskContext {
 
 interface ExecutionState {
   agentResult: ManagedProcessResult | null;
+  agentFailureCategory: string | null;
   testResult: TestExecutionResult;
   verifyResults: TestExecutionResult[];
   finalStatus: TaskStatus;
@@ -168,6 +172,7 @@ async function prepareTask(taskId: string): Promise<TaskContext | TaskRunResult>
   if (!existsSync(statusFile)) throw new Error(`Task not found: "${taskId}"`);
 
   const startedAtMs = Date.now();
+  const runnerInstanceId = randomUUID().replace(/-/g, "");
   const claim = claimPendingTask(statusFile, {
     status: "running",
     phase: "preparing",
@@ -220,7 +225,11 @@ async function prepareTask(taskId: string): Promise<TaskContext | TaskRunResult>
       const preExecSnapshot = await captureRepoSnapshot(repoPath);
       const validation = validateAssessmentFreshness(assessmentId, preExecSnapshot);
       if (!validation.valid) {
-        const message = `assessment validation failed: ${validation.failure_reason}. Re-run create_task with execution_mode=assess_only to get a fresh assessment_id.`;
+        recordAssessmentValidationFailure(validation);
+        const changedFields = validation.config_change_categories?.length
+          ? ` Changed fields: ${validation.config_change_categories.join(", ")}.`
+          : "";
+        const message = `assessment validation failed: ${validation.failure_reason}.${changedFields} Re-run create_task with execution_mode=assess_only to get a fresh assessment_id.`;
         return failBeforeExecution(taskId, taskDir, message);
       }
     } catch (error) {
@@ -233,6 +242,8 @@ async function prepareTask(taskId: string): Promise<TaskContext | TaskRunResult>
   writeTaskRuntime(taskDir, {
     task_started_at: new Date(startedAtMs).toISOString(),
     watcher_instance_id: process.env.PATCHWARDEN_WATCHER_INSTANCE_ID || undefined,
+    runner_pid: process.pid,
+    runner_instance_id: runnerInstanceId,
   });
   setTaskPhase(taskDir, "preparing", null, "Capturing pre-task repository state.");
 
@@ -253,13 +264,14 @@ async function prepareTask(taskId: string): Promise<TaskContext | TaskRunResult>
   return {
     taskId, taskDir, statusFile, repoPath, wsRoot, config, plansDir, initialStatus,
     planId, agentName, testCommand, changePolicy, verifyCommands, timeoutSeconds,
-    startedAtMs, deadlineMs, beforeSnapshot, beforeWorkspaceSnapshot, externalDirtyBaseline,
+    startedAtMs, deadlineMs, runnerInstanceId, beforeSnapshot, beforeWorkspaceSnapshot, externalDirtyBaseline,
   };
 }
 
 async function executeAgent(ctx: TaskContext): Promise<ExecutionState> {
   const state: ExecutionState = {
     agentResult: null,
+    agentFailureCategory: null,
     testResult: skippedTest(ctx.testCommand, ctx.repoPath, "Agent did not complete successfully."),
     verifyResults: [],
     finalStatus: "failed",
@@ -284,6 +296,7 @@ async function executeAgent(ctx: TaskContext): Promise<ExecutionState> {
       phase: "executing_agent",
       currentCommand: invocation.commandLabel,
       deadlineMs: ctx.deadlineMs,
+      runnerInstanceId: ctx.runnerInstanceId,
       stdoutPath: join(ctx.taskDir, "stdout.log"),
       stderrPath: join(ctx.taskDir, "stderr.log"),
       environmentVariableNames: invocation.environmentVariableNames,
@@ -297,11 +310,15 @@ async function executeAgent(ctx: TaskContext): Promise<ExecutionState> {
         ? "Task was terminated by kill_task."
         : "Task was canceled by user request.";
     } else if (agentResult.terminationReason === "timeout") {
+      state.finalStatus = "timeout";
       state.finalError = `Task timed out after ${ctx.timeoutSeconds} seconds during agent execution.`;
     } else if (agentResult.spawnError) {
       state.finalError = `Agent spawn failed: ${agentResult.spawnError}`;
     } else if (agentResult.exitCode !== 0) {
-      state.finalError = `Agent exited with code ${agentResult.exitCode}.`;
+      state.agentFailureCategory = classifyAgentFailure(agentResult.stderr);
+      state.finalError = state.agentFailureCategory
+        ? `Agent provider failure (${state.agentFailureCategory}); process exited with code ${agentResult.exitCode}.`
+        : `Agent exited with code ${agentResult.exitCode}.`;
     }
   } catch (error) {
     state.lastCaughtError = error;
@@ -318,7 +335,14 @@ async function runVerification(ctx: TaskContext, state: ExecutionState): Promise
     if (ctx.verifyCommands.length > 0) {
       for (const command of ctx.verifyCommands) {
         setTaskPhase(ctx.taskDir, "running_tests", command);
-        const verification = await runTrustedTestCommand(command, ctx.repoPath, ctx.taskDir, ctx.statusFile, ctx.deadlineMs);
+        const verification = await runTrustedTestCommand(
+          command,
+          ctx.repoPath,
+          ctx.taskDir,
+          ctx.statusFile,
+          ctx.deadlineMs,
+          ctx.runnerInstanceId,
+        );
         state.verifyResults.push(verification);
         if (verification.terminationReason || Date.now() >= ctx.deadlineMs) break;
       }
@@ -331,6 +355,7 @@ async function runVerification(ctx: TaskContext, state: ExecutionState): Promise
           ? "Task was terminated by kill_task during verification."
           : "Task was canceled during verification.";
       } else if (interrupted?.terminationReason === "timeout" || Date.now() >= ctx.deadlineMs) {
+        state.finalStatus = "timeout";
         state.finalError = `Task timed out after ${ctx.timeoutSeconds} seconds during verification.`;
       } else if (failedVerification) {
         state.finalStatus = "failed_verification";
@@ -542,7 +567,7 @@ function finalizeTask(ctx: TaskContext, state: ExecutionState, evidence: Artifac
   atomicWriteJsonFileSync(join(ctx.taskDir, "verify.json"), verifyJson);
   atomicWriteFileSync(join(ctx.taskDir, "verify.log"), buildVerifyLog(verifyJson.commands));
 
-  if (!["canceled", "done_by_agent", "failed_verification", "failed_scope_violation", "failed_policy_violation"].includes(state.finalStatus)) state.finalStatus = "failed";
+  if (!["canceled", "timeout", "done_by_agent", "failed_verification", "failed_scope_violation", "failed_policy_violation"].includes(state.finalStatus)) state.finalStatus = "failed";
   const finalPhase: TaskPhase = state.finalStatus === "done_by_agent" ? "done_by_agent" : (state.finalStatus as TaskPhase);
   const followup = buildFailureFollowup(state.finalStatus, state.finalError, verifyJson.commands);
 
@@ -600,6 +625,10 @@ function finalizeTask(ctx: TaskContext, state: ExecutionState, evidence: Artifac
     last_heartbeat_at: finishedAt,
     finished_at: finishedAt,
     error: state.finalError,
+    termination_reason: state.finalStatus === "timeout"
+      ? "timeout"
+      : state.finalStatus === "canceled" ? "canceled" : null,
+    agent_failure_category: state.agentFailureCategory,
     changed_files: changes.changed_files.map(({ path, change }) => ({ path, change })),
     artifact_hygiene_counts: changes.artifact_hygiene.counts,
     artifact_status: artifactStatus,
@@ -662,6 +691,10 @@ function buildResultJson(input: {
     template: ctx.initialStatus.template || null,
     change_policy: ctx.changePolicy,
     summary: state.finalError || "Agent execution and configured verification completed successfully.",
+    termination_reason: state.finalStatus === "timeout"
+      ? "timeout"
+      : state.finalStatus === "canceled" ? "canceled" : null,
+    agent_failure_category: state.agentFailureCategory,
     changed_files: changes.changed_files,
     changed_file_groups: {
       source_changes: changedFileGroups.source_changes.length,
@@ -792,6 +825,7 @@ async function runManagedProcess(options: {
   environmentVariableNames?: string[];
   blockedEnvironmentVariableNames?: string[];
   maxLogBytes?: number;
+  runnerInstanceId: string;
 }): Promise<ManagedProcessResult> {
   if (Date.now() >= options.deadlineMs) {
     return { exitCode: null, stdout: "", stderr: "", spawnError: null, terminationReason: "timeout" };
@@ -825,6 +859,9 @@ async function runManagedProcess(options: {
   writeTaskRuntime(options.taskDir, {
     child_pid: child.pid,
     child_started_at: new Date().toISOString(),
+    runner_pid: process.pid,
+    runner_instance_id: options.runnerInstanceId,
+    child_owned_by_runner_instance_id: options.runnerInstanceId,
   });
 
   let stdout = "";
@@ -939,7 +976,8 @@ async function runTrustedTestCommand(
   repoPath: string,
   taskDir: string,
   statusFile: string,
-  deadlineMs: number
+  deadlineMs: number,
+  runnerInstanceId: string,
 ): Promise<TestExecutionResult> {
   const config = getConfig();
   const trusted = guardTestCommand(testCommand, config, repoPath);
@@ -962,6 +1000,7 @@ async function runTrustedTestCommand(
     phase: "running_tests",
     currentCommand: trusted,
     deadlineMs,
+    runnerInstanceId,
     stdoutPath: join(taskDir, "test.stdout.log"),
     stderrPath: join(taskDir, "test.stderr.log"),
   });
@@ -1336,4 +1375,18 @@ function appendBounded(current: string, next: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function classifyAgentFailure(stderr: string): string | null {
+  const normalized = stderr.toLowerCase();
+  if (normalized.includes("insufficient balance") || normalized.includes("insufficient credits")) {
+    return "provider_insufficient_balance";
+  }
+  if (normalized.includes("unauthorized") || normalized.includes("authentication failed") || normalized.includes("invalid api key")) {
+    return "provider_authentication_failed";
+  }
+  if (normalized.includes("model not found") || normalized.includes("model access") || normalized.includes("permission denied")) {
+    return "provider_model_unavailable";
+  }
+  return null;
 }

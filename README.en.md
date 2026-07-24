@@ -35,6 +35,12 @@ pin an actually published version for npm/CLI use. See the
 [CHANGELOG](CHANGELOG.md), [migration guide](docs/migration-from-safe-bifrost.md), and
 [release checklist](docs/release-checklist.md).
 
+> [!NOTE]
+> The desktop installer is currently available for Windows x64 only. macOS,
+> Linux, and users who are not installing Desktop yet can continue using the
+> existing stable npm package and its built-in local Dashboard. This change
+> does not publish a new npm package.
+
 > [!IMPORTANT]
 > PatchWarden is not a general-purpose remote shell. MCP clients cannot run
 > arbitrary commands: files must remain inside the configured workspace,
@@ -683,7 +689,7 @@ country list.
 Use this sequence:
 
 1. `health_check` — verify version, workspace, Watcher, and tool catalog.
-2. `list_agents` — confirm the local execution agent is available.
+2. `list_agents` — confirm the local agent executable is available. This read-only check does not verify provider balance, login state, or model permissions; `provider_status` is `not_checked` by default.
 3. `list_workspace` — identify the correct `repo_path`.
 4. `save_plan`, or provide an `inline_plan` when creating the task.
 5. `create_task` — specify the agent, repository, and verification commands.

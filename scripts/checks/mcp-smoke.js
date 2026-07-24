@@ -14,7 +14,10 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
-const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+const sourceRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+const root = process.env.PATCHWARDEN_TEST_RUNTIME_ROOT
+  ? resolve(process.env.PATCHWARDEN_TEST_RUNTIME_ROOT)
+  : sourceRoot;
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf-8"));
 const expectedServerVersion = packageJson.version;
 const tempRoot = mkdtempSync(join(tmpdir(), "patchwarden-mcp-"));
@@ -291,6 +294,33 @@ try {
     throw new Error(`guarded template metadata mismatch: ${JSON.stringify(templateTask)}`);
   }
   ok("create_task accepts inline plans and guarded templates");
+
+  const assessment = await parseToolJson("create_task", {
+    execution_mode: "assess_only",
+    template: "inspect_only",
+    goal: "Inspect package metadata without changing files.",
+    agent: "codex",
+    repo_path: ".",
+    verify_commands: [],
+    scope: ["package.json"],
+    forbidden: ["release/**"],
+  });
+  const assessmentFile = join(workspaceRoot, ".patchwarden", "assessments", assessment.assessment_id, "assessment.json");
+  const assessmentRecord = JSON.parse(readFileSync(assessmentFile, "utf-8"));
+  if (
+    !/^[a-f0-9]{64}$/.test(assessmentRecord.execution_config_hash || "") ||
+    assessmentRecord.assessment_security_snapshot_version !== "assessment-security-v2"
+  ) {
+    throw new Error(`assessment security fingerprint missing: ${JSON.stringify(assessmentRecord)}`);
+  }
+  const assessedTask = await parseToolJson("create_task", {
+    execution_mode: "execute",
+    assessment_id: assessment.assessment_id,
+  });
+  if (assessedTask.status !== "pending" || !assessedTask.task_id) {
+    throw new Error(`two-stage assessment did not create a pending task: ${JSON.stringify(assessedTask)}`);
+  }
+  ok("assess_only then execute preserves the versioned security fingerprint");
 
   const blockedAgent = await client.callTool({
     name: "create_task",

@@ -140,6 +140,40 @@ function findMdFiles(
     return { files: results, truncated };
 }
 
+export function extractNpmRunScriptNames(content: string): string[] {
+  const names = new Set<string>();
+  const collectCommands = (text: string) => {
+    const pattern = /\bnpm(?:\.cmd)?\s+run\s+([a-zA-Z0-9:_-]+)/gi;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(text)) !== null) {
+      if (match[1]) names.add(match[1]);
+    }
+  };
+
+  // Markdown code blocks are explicit command-bearing regions. Keep their
+  // content separate from prose so token boundaries cannot be concatenated.
+  const withoutFences = content.replace(/(?:```|~~~)[^\r\n]*\r?\n([\s\S]*?)(?:```|~~~)/g, (_whole, body: string) => {
+    collectCommands(body);
+    return "\n";
+  });
+
+  // Inline code is also explicit. Remove it from the prose pass afterward to
+  // avoid double-counting and accidental cross-node matches.
+  const withoutInlineCode = withoutFences.replace(/`([^`\r\n]+)`/g, (_whole, body: string) => {
+    collectCommands(body);
+    return " ";
+  });
+
+  // In ordinary text, accept only a standalone command line (optionally a
+  // list item, shell prompt, or Run:/Command: label). Narrative mentions such
+  // as "this guide discusses npm run deploy" are not executable evidence.
+  const explicitPlainCommand = /^\s*(?:(?:[-*+]\s+|\d+[.)]\s+|>\s*|\$\s*|PS>\s*)|(?:(?:run|command|命令)\s*[:：]\s*))?npm(?:\.cmd)?\s+run\s+[a-zA-Z0-9:_-]+(?:\s+(?:--[^\r\n#]*|#[^\r\n]*))?\s*$/i;
+  for (const line of withoutInlineCode.split(/\r?\n/)) {
+    if (explicitPlainCommand.test(line)) collectCommands(line);
+  }
+  return [...names];
+}
+
 function readAuditEvidence(path: string): { content: string; truncated: boolean } {
     const half = Math.floor(MAX_AUDIT_EVIDENCE_BYTES / 2);
     const prefix = readTextFilePrefixSync(path, half);
@@ -515,7 +549,7 @@ export function auditTask(taskId: string): AuditTaskOutput {
     };
     // ── 1. Task status ──
     const taskStatus = statusData.status || "unknown";
-    const failedStatuses = new Set(["failed", "failed_verification", "failed_scope_violation", "failed_policy_violation", "canceled"]);
+    const failedStatuses = new Set(["failed", "failed_verification", "failed_scope_violation", "failed_policy_violation", "canceled", "timeout"]);
     const doneStatuses = new Set(["done", "done_by_agent"]);
     checks.push({
         name: "task_status",
@@ -729,12 +763,8 @@ export function auditTask(taskId: string): AuditTaskOutput {
             continue;
         }
         // Extract npm run xxx
-        const refs = content.match(/npm(?:\.cmd)?\s+run\s+([a-zA-Z0-9:_-]+)/gi) || [];
-        for (const ref of refs) {
-            const scriptName = ref.replace(/npm\s+run\s+/i, "").replace(/[^a-zA-Z0-9:_-]/g, "");
-            if (scriptName)
-                allNpmRunRefs.add(scriptName);
-        }
+        for (const scriptName of extractNpmRunScriptNames(content))
+            allNpmRunRefs.add(scriptName);
         // Check release claims
         const claims = scanForReleaseClaims(content);
         for (const c of claims)

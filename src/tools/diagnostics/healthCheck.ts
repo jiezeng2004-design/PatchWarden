@@ -9,6 +9,7 @@ import type { ToolCatalogSnapshot } from "../catalog/toolCatalog.js";
 import { CHATGPT_CORE_TOOL_NAMES, CHATGPT_DIRECT_TOOL_NAMES, CHATGPT_SEARCH_TOOL_NAMES, resolveToolProfile } from "../catalog/toolCatalog.js";
 import { readWatcherStatus } from "../../watcherStatus.js";
 import { listTasks } from "../tasks/listTasks.js";
+import { readLastAssessmentValidationFailure } from "../../assessments/assessmentDiagnostics.js";
 
 const SERVER_STARTED_AT = Date.now();
 
@@ -130,8 +131,23 @@ export function healthCheck(catalog?: ToolCatalogSnapshot, input: HealthCheckInp
     workspace_root: workspace,
     tasks_dir: tasks,
     tunnel,
+    config_path: agents.config_path,
+    runtime_build_layout: typeof watcher.supervisor?.runtime_build_layout === "string"
+      ? watcher.supervisor.runtime_build_layout
+      : null,
+    watcher_entry_path: typeof watcher.supervisor?.watcher_entry_path === "string"
+      ? watcher.supervisor.watcher_entry_path
+      : null,
+    validator_module_path: typeof watcher.supervisor?.validator_module_path === "string"
+      ? watcher.supervisor.validator_module_path
+      : null,
     agents: agents.agents,
     agent_status: Object.fromEntries(agents.agents.map((agent) => [agent.name, agent.available ? "ok" : "missing"])),
+    agent_readiness: Object.fromEntries(agents.agents.map((agent) => [agent.name, {
+      executable_available: agent.available,
+      provider_status: agent.provider_status,
+      availability_scope: agent.availability_scope,
+    }])),
     ...(input.detail === "self_diagnostic" ? { self_diagnostic: buildSelfDiagnostic(config) } : {}),
     last_error: tunnel.last_error || (!watcher.available ? watcher.reason : null) || mismatchReport[0] || null,
   };
@@ -140,7 +156,7 @@ export function healthCheck(catalog?: ToolCatalogSnapshot, input: HealthCheckInp
 function buildSelfDiagnostic(config: ReturnType<typeof getConfig>) {
   const recent = listTasks({ limit: 20 });
   const failures = recent.tasks
-    .filter((task) => task.status.startsWith("failed") || task.status === "canceled")
+    .filter((task) => task.status.startsWith("failed") || task.status === "canceled" || task.status === "timeout")
     .slice(0, 10)
     .map((task) => ({
       task_id: task.task_id,
@@ -156,6 +172,7 @@ function buildSelfDiagnostic(config: ReturnType<typeof getConfig>) {
     configured_agents: Object.keys(config.agents),
     recent_tasks_returned: recent.tasks.length,
     recent_failures: failures,
+    last_assessment_validation_failure: readLastAssessmentValidationFailure(),
   };
   const safe = redactSensitiveValue(diagnostic);
   return {
@@ -182,6 +199,11 @@ function readWatcherSupervisorStatus(): Record<string, unknown> {
       restart_attempts: Number.isInteger(Number(raw.restart_attempts)) ? Number(raw.restart_attempts) : 0,
       last_error: safeText(raw.last_error, 500) || null,
       checked_at: safeText(raw.checked_at, 80) || null,
+      project_root: safeText(raw.project_root, 500) || null,
+      config_path: safeText(raw.config_path, 500) || null,
+      watcher_entry_path: safeText(raw.watcher_entry_path, 500) || null,
+      validator_module_path: safeText(raw.validator_module_path, 500) || null,
+      runtime_build_layout: safeText(raw.runtime_build_layout, 80) || null,
     };
   } catch {
     return { observed: true, managed: false, status: "invalid_status_file" };
@@ -242,6 +264,12 @@ function readTunnelStatus(): Record<string, unknown> & { last_error: string | nu
         : [],
       tool_manifest_sha256: safeText(raw.tool_manifest_sha256, 80) || null,
       core_tools_ready: Boolean(raw.core_tools_ready),
+      project_root: safeText(raw.project_root, 500) || null,
+      config_path: safeText(raw.config_path, 500) || null,
+      mcp_entry_path: safeText(raw.mcp_entry_path, 500) || null,
+      watcher_entry_path: safeText(raw.watcher_entry_path, 500) || null,
+      validator_module_path: safeText(raw.validator_module_path, 500) || null,
+      runtime_build_layout: safeText(raw.runtime_build_layout, 80) || null,
     };
     const redacted = redactSensitiveContent(JSON.stringify(allowed));
     return JSON.parse(redacted.content);

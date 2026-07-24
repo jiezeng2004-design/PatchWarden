@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -36,6 +36,7 @@ it("keeps an idle watcher alive, rejects a duplicate, and recovers a stale lock"
     tasksDir: ".patchwarden/tasks",
     agents: {},
     allowedTestCommands: [],
+    watcherStaleSeconds: 5,
   }), "utf-8");
 
   const children: ChildProcess[] = [];
@@ -66,6 +67,9 @@ it("keeps an idle watcher alive, rejects a duplicate, and recovers a stale lock"
     );
     await sleep(300);
     assert.equal(first.exitCode, null, `idle watcher exited early: ${errors.get(first)}`);
+    const firstHeartbeat = JSON.parse(readFileSync(heartbeatPath, "utf-8"));
+    assert.equal(firstHeartbeat.heartbeat_source, "independent_interval");
+    assert.equal(firstHeartbeat.active_task_id, null);
 
     const duplicate = start("runtime-test-duplicate");
     await waitForExit(duplicate);
@@ -75,6 +79,25 @@ it("keeps an idle watcher alive, rejects a duplicate, and recovers a stale lock"
     first.kill("SIGTERM");
     await waitForExit(first);
 
+    const interruptedTaskDir = join(root, ".patchwarden", "tasks", "task-interrupted");
+    mkdirSync(interruptedTaskDir, { recursive: true });
+    const old = new Date(Date.now() - 2_000).toISOString();
+    writeFileSync(join(interruptedTaskDir, "status.json"), JSON.stringify({
+      task_id: "task-interrupted",
+      status: "running",
+      phase: "executing_agent",
+      created_at: old,
+      started_at: old,
+      updated_at: old,
+      timeout_seconds: 1,
+    }), "utf-8");
+    writeFileSync(join(interruptedTaskDir, "runtime.json"), JSON.stringify({
+      phase: "executing_agent",
+      last_heartbeat_at: old,
+      watcher_instance_id: "runtime-test-first",
+      child_pid: 999999,
+    }), "utf-8");
+
     const replacement = start("runtime-test-replacement");
     await waitUntil(() => {
       try {
@@ -83,6 +106,14 @@ it("keeps an idle watcher alive, rejects a duplicate, and recovers a stale lock"
         return false;
       }
     }, 3000, `replacement watcher did not take over the stale lock: ${errors.get(replacement)}`);
+    await waitUntil(() => {
+      try {
+        const status = JSON.parse(readFileSync(join(interruptedTaskDir, "status.json"), "utf-8"));
+        return status.status === "timeout" && status.phase === "timeout" && status.termination_reason === "timeout";
+      } catch {
+        return false;
+      }
+    }, 3000, `replacement watcher did not reconcile the interrupted task: ${errors.get(replacement)}`);
     await sleep(300);
     assert.equal(replacement.exitCode, null, `replacement watcher exited early: ${errors.get(replacement)}`);
   } finally {

@@ -16,6 +16,7 @@ import { afterEach, describe, it } from "node:test";
 import { reloadConfig } from "../../../config.js";
 import { PatchWardenError } from "../../../errors.js";
 import {
+  appendDirectSessionOperation,
   readDirectSession,
   withDirectSessionMutationLock,
   withDirectSessionMutationLockAsync,
@@ -130,6 +131,54 @@ describe("Direct session store", () => {
 
     assert.equal(existsSync(join(sessionDir, "workspace-mutation.lock")), false);
   });
+
+  it("waits beyond the generic two-second budget for bounded metadata contention", { timeout: 10_000 }, async () => {
+    root = mkdtempSync(join(tmpdir(), "patchwarden-direct-record-wait-"));
+    const repoPath = join(root, "repo");
+    const sessionId = "direct-record-wait";
+    const sessionDir = join(root, ".patchwarden", "direct-sessions", sessionId);
+    const sessionFile = join(sessionDir, "session.json");
+    const configPath = join(root, "patchwarden.config.json");
+    const lockedFile = join(root, "locked");
+    mkdirSync(repoPath, { recursive: true });
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(configPath, JSON.stringify({ workspaceRoot: root }), "utf-8");
+    writeFileSync(sessionFile, JSON.stringify(makeSession(sessionId, repoPath)), "utf-8");
+    process.env.PATCHWARDEN_CONFIG = configPath;
+    reloadConfig();
+
+    const lockModulePath = resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      "../../../utils/lockedJsonFile.js",
+    );
+    const source = [
+      `const fs = await import("node:fs");`,
+      `const locks = await import(${JSON.stringify(pathToFileURL(lockModulePath).href)});`,
+      `locks.withFileLockSync(process.argv[1], () => {`,
+      `  fs.writeFileSync(process.argv[2], "locked", "utf-8");`,
+      `  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2600);`,
+      `});`,
+    ].join("\n");
+    const holder = runWorker(source, [sessionFile, lockedFile], configPath);
+    await waitForFile(lockedFile);
+
+    const startedAt = Date.now();
+    appendDirectSessionOperation(sessionId, {
+      index: 0,
+      timestamp: new Date().toISOString(),
+      path: "src/waited.ts",
+      before_sha256: null,
+      after_sha256: "after",
+      operations_applied: 1,
+      bytes_changed: 1,
+    });
+    const elapsedMs = Date.now() - startedAt;
+    await holder;
+
+    assert.ok(elapsedMs >= 2_000, `metadata update did not wait for the owner: ${elapsedMs}ms`);
+    assert.ok(elapsedMs < 9_000, `metadata update exceeded its bounded wait: ${elapsedMs}ms`);
+    assert.equal(readDirectSession(sessionId).operations.length, 1);
+  });
 });
 
 function makeSession(sessionId: string, repoPath: string): DirectSessionRecord {
@@ -191,6 +240,14 @@ async function waitForReadyWorkers(readyPrefix: string, workerCount: number): Pr
     ).every(existsSync);
     if (ready) return;
     if (Date.now() >= deadline) throw new Error("append workers did not become ready");
+    await delay(10);
+  }
+}
+
+async function waitForFile(path: string): Promise<void> {
+  const deadline = Date.now() + 3_000;
+  while (!existsSync(path)) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${path}`);
     await delay(10);
   }
 }

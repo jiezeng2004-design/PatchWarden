@@ -80,6 +80,15 @@ if (-not $ConfigPath) {
 }
 $McpLauncherName = if ($ToolProfile -eq "chatgpt_direct") { "patchwarden-mcp-direct.cmd" } else { "patchwarden-mcp-stdio.cmd" }
 $McpStdioLauncher = Join-Path $ProjectRoot "scripts\mcp\$McpLauncherName"
+$McpEntryPath = Join-Path $ProjectRoot "dist\index.js"
+$WatcherEntryPath = Join-Path $ProjectRoot "dist\runner\watch.js"
+$RuntimeBuildLayout = if (Test-Path -LiteralPath (Join-Path $ProjectRoot ".git")) {
+  "git_worktree"
+} elseif ($ProjectRoot -match '(?i)[\\/]resources[\\/]core$') {
+  "desktop_packaged_core"
+} else {
+  "standalone_build"
+}
 $McpStdioLauncherForTunnel = $McpStdioLauncher -replace "\\", "/"
 $OpencodeConfigHome = Join-Path $env:LOCALAPPDATA "patchwarden\opencode-config"
 $ProfilePath = Join-Path $env:APPDATA "tunnel-client\$Profile.yaml"
@@ -243,6 +252,14 @@ function Get-LastDiagnosticLine {
   return $Fallback
 }
 
+function Get-MaskedTunnelId {
+  param([string]$Value)
+  if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+  $trimmed = $Value.Trim()
+  if ($trimmed.Length -le 8) { return "***" }
+  return "$($trimmed.Substring(0, 4))***$($trimmed.Substring($trimmed.Length - 4))"
+}
+
 function Write-TunnelStatus {
   param(
     [string]$Status,
@@ -263,6 +280,8 @@ function Write-TunnelStatus {
     status = $Status
     reason_code = $ReasonCode
     ready = $Ready
+    profile = $Profile
+    tunnel_id_masked = Get-MaskedTunnelId -Value $TunnelId
     attempt = $Attempt
     pid = $ProcessId
     checked_at = (Get-Date).ToUniversalTime().ToString("o")
@@ -281,6 +300,12 @@ function Write-TunnelStatus {
     tool_manifest_sha256 = if ($script:ToolManifest) { $script:ToolManifest.tool_manifest_sha256 } else { $null }
     tools_ready = [bool]($script:ToolManifest -and $script:ToolManifest.ok)
     core_tools_ready = [bool]($ToolProfile -eq "chatgpt_core" -and $script:ToolManifest -and $script:ToolManifest.ok)
+    project_root = $ProjectRoot
+    config_path = $ConfigPath
+    mcp_entry_path = $McpEntryPath
+    watcher_entry_path = $WatcherEntryPath
+    validator_module_path = (Join-Path $ProjectRoot "dist\assessments\assessmentStore.js")
+    runtime_build_layout = $RuntimeBuildLayout
   }
   $temporary = "$StatusFile.tmp"
   $payload | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $temporary -Encoding UTF8
@@ -344,6 +369,30 @@ function Get-WatcherHeartbeatState {
   }
 }
 
+function Repair-StaleWatcherLock {
+  $settings = Get-WatcherSettings
+  $lockPath = Join-Path (Split-Path -Parent $settings.HeartbeatPath) "watcher.lock"
+  if (-not (Test-Path -LiteralPath $lockPath)) { return "not_present" }
+  try {
+    $lock = Get-Content -LiteralPath $lockPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $lockPid = [int]$lock.pid
+    if ($lockPid -le 0) { return "unverified" }
+    $candidate = Get-CimInstance Win32_Process -Filter "ProcessId = $lockPid" -ErrorAction Stop
+    if ($candidate) {
+      $normalizedCommand = ([string]$candidate.CommandLine).Replace("/", "\")
+      $normalizedExpected = ([System.IO.Path]::GetFullPath($WatcherEntryPath)).Replace("/", "\")
+      $isExpectedWatcher = [string]$candidate.Name -ieq "node.exe" -and
+        $normalizedCommand.IndexOf($normalizedExpected, [StringComparison]::OrdinalIgnoreCase) -ge 0
+      if ($isExpectedWatcher) { return "expected_watcher_alive" }
+    }
+    Remove-Item -LiteralPath $lockPath -Force -ErrorAction Stop
+    Write-Host "[watch] Removed stale watcher lock after PID identity verification."
+    return "removed"
+  } catch {
+    return "unverified"
+  }
+}
+
 function Write-WatcherStatus {
   param([string]$Status, [string]$LastError = $null)
   New-Item -ItemType Directory -Force -Path $RuntimeDirectory | Out-Null
@@ -356,6 +405,11 @@ function Write-WatcherStatus {
     restart_attempts = $script:WatcherRestartAttempts
     checked_at = (Get-Date).ToUniversalTime().ToString("o")
     last_error = if ($LastError) { ($LastError -replace '[\r\n]+', ' ').Substring(0, [Math]::Min(500, ($LastError -replace '[\r\n]+', ' ').Length)) } else { $null }
+    project_root = $ProjectRoot
+    config_path = $ConfigPath
+    watcher_entry_path = $WatcherEntryPath
+    validator_module_path = (Join-Path $ProjectRoot "dist\assessments\assessmentStore.js")
+    runtime_build_layout = $RuntimeBuildLayout
   }
   $temporary = "$WatcherStatusFile.tmp"
   $payload | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $temporary -Encoding UTF8
@@ -379,6 +433,7 @@ function Start-OwnedWatcherProcess {
   $script:WatcherHealthySince = $null
   $previousWatcherInstanceId = $env:PATCHWARDEN_WATCHER_INSTANCE_ID
   $previousWatcherLauncherPid = $env:PATCHWARDEN_WATCHER_LAUNCHER_PID
+  $previousToolProfile = $env:PATCHWARDEN_TOOL_PROFILE
   $previousXdgConfigHome = $env:XDG_CONFIG_HOME
   $previousPath = $env:PATH
   $previousControlPlaneApiKey = $env:CONTROL_PLANE_API_KEY
@@ -386,17 +441,19 @@ function Start-OwnedWatcherProcess {
   try {
     $env:PATCHWARDEN_WATCHER_INSTANCE_ID = $script:WatcherInstanceId
     $env:PATCHWARDEN_WATCHER_LAUNCHER_PID = [string]$PID
+    $env:PATCHWARDEN_TOOL_PROFILE = $ToolProfile
     $env:XDG_CONFIG_HOME = $OpencodeConfigHome
     if ($OpencodeBin) { $env:PATH = "$OpencodeBin;$env:PATH" }
     Remove-Item Env:CONTROL_PLANE_API_KEY -ErrorAction SilentlyContinue
     Remove-Item Env:PATCHWARDEN_OWNER_TOKEN -ErrorAction SilentlyContinue
     $script:WatcherProcess = Start-Process -FilePath $node `
-      -ArgumentList @((Join-Path $ProjectRoot "dist\runner\watch.js")) `
+      -ArgumentList @($WatcherEntryPath) `
       -WorkingDirectory $ProjectRoot -PassThru -WindowStyle Hidden `
       -RedirectStandardOutput $stdout -RedirectStandardError $stderr
   } finally {
     if ($null -eq $previousWatcherInstanceId) { Remove-Item Env:PATCHWARDEN_WATCHER_INSTANCE_ID -ErrorAction SilentlyContinue } else { $env:PATCHWARDEN_WATCHER_INSTANCE_ID = $previousWatcherInstanceId }
     if ($null -eq $previousWatcherLauncherPid) { Remove-Item Env:PATCHWARDEN_WATCHER_LAUNCHER_PID -ErrorAction SilentlyContinue } else { $env:PATCHWARDEN_WATCHER_LAUNCHER_PID = $previousWatcherLauncherPid }
+    if ($null -eq $previousToolProfile) { Remove-Item Env:PATCHWARDEN_TOOL_PROFILE -ErrorAction SilentlyContinue } else { $env:PATCHWARDEN_TOOL_PROFILE = $previousToolProfile }
     if ($null -eq $previousXdgConfigHome) { Remove-Item Env:XDG_CONFIG_HOME -ErrorAction SilentlyContinue } else { $env:XDG_CONFIG_HOME = $previousXdgConfigHome }
     if ($null -eq $previousControlPlaneApiKey) { Remove-Item Env:CONTROL_PLANE_API_KEY -ErrorAction SilentlyContinue } else { $env:CONTROL_PLANE_API_KEY = $previousControlPlaneApiKey }
     if ($null -eq $previousOwnerToken) { Remove-Item Env:PATCHWARDEN_OWNER_TOKEN -ErrorAction SilentlyContinue } else { $env:PATCHWARDEN_OWNER_TOKEN = $previousOwnerToken }
@@ -412,6 +469,13 @@ function Start-PatchWardenWatcher {
     $script:WatcherManaged = $false
     Write-WatcherStatus -Status "external_healthy"
     Write-Host "[watch] Existing watcher heartbeat is fresh; it remains external and will not be managed."
+    return
+  }
+  $lockRepair = Repair-StaleWatcherLock
+  if ($lockRepair -eq "expected_watcher_alive" -or $lockRepair -eq "unverified") {
+    $script:WatcherManaged = $false
+    Write-WatcherStatus -Status "external_stale" -LastError "A stale watcher lock could not be safely retired."
+    Write-Host "[watch] Stale watcher lock retained because process ownership could not be disproved."
     return
   }
   Start-OwnedWatcherProcess

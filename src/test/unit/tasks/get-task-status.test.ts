@@ -180,6 +180,33 @@ describe("getTaskStatus", () => {
     assert.equal(result.execution_blocked, false);
   });
 
+  it("does not let stale runtime phase resurrect a terminal task", () => {
+    const taskDir = writeTaskStatus("task-reconciled-001", {
+      task_id: "task-reconciled-001",
+      plan_id: "plan-001",
+      agent: "codex",
+      workspace_root: tempDir,
+      repo_path: "repo",
+      resolved_repo_path: join(tempDir, "repo"),
+      status: "canceled",
+      phase: "canceled",
+      created_at: "2026-07-12T10:00:00Z",
+      updated_at: "2026-07-12T10:05:00Z",
+      finished_at: "2026-07-12T10:05:00Z",
+      timeout_seconds: 900,
+      error: "runner lost",
+    });
+    writeTaskRuntime(taskDir, {
+      phase: "executing_agent",
+      last_heartbeat_at: "2026-07-12T10:00:12Z",
+      current_command: "codex exec",
+    });
+
+    const result = getTaskStatus("task-reconciled-001");
+    assert.equal(result.status, "canceled");
+    assert.equal(result.phase, "canceled");
+  });
+
   // ── status.json missing ──
   it("throws when status.json is missing (task not found)", () => {
     // guardReadPath throws "File not found" before the existsSync "Task not found" check

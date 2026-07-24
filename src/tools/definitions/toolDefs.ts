@@ -62,7 +62,7 @@ export function getToolDefs(): ToolDef[] {
     {
       name: "health_check",
       description:
-        "Check MCP catalog consistency, watcher freshness/supervisor state, workspace readiness, and configured agents. Use detail=self_diagnostic for expanded read-only evidence.",
+        "Check MCP catalog consistency, watcher freshness/supervisor state, workspace readiness, and configured agents. Agent availability is executable-only unless an explicit provider probe is requested. Use detail=self_diagnostic for expanded read-only evidence.",
       inputSchema: {
         type: "object",
         properties: {
@@ -78,7 +78,7 @@ export function getToolDefs(): ToolDef[] {
     {
       name: "list_agents",
       description:
-        "List configured local agents and check whether each executable currently exists. This does not start an agent or contact its model provider.",
+        "List agents from the active runtime config, verify executable and model-argument wiring, and report the config path used by this process. provider_status remains not_checked because this read-only check does not contact a model provider or test account balance.",
       inputSchema: {
         type: "object",
         properties: {},
@@ -416,7 +416,7 @@ export function getToolDefs(): ToolDef[] {
         properties: {
           status: {
             type: "string",
-            description: "Filter by status: pending, running, done, failed, failed_verification, failed_scope_violation, failed_policy_violation, canceled",
+            description: "Filter by status: pending, running, done, failed, failed_verification, failed_scope_violation, failed_policy_violation, timeout, canceled",
           },
           limit: {
             type: "number",

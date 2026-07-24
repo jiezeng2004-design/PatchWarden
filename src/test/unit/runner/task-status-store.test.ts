@@ -42,6 +42,25 @@ describe("task status store", () => {
     assert.deepEqual(readdirSync(root).filter((name) => name.includes(".tmp") || name.endsWith(".lock")), []);
   });
 
+  it("rejects reverse transitions from terminal states", () => {
+    assert.equal(claimPendingTask(statusFile, { status: "running", phase: "preparing" }).claimed, true);
+    updateTaskStatusFile(statusFile, { status: "failed", phase: "failed" });
+    assert.throws(
+      () => updateTaskStatusFile(statusFile, { status: "running", phase: "executing_agent" }),
+      (error: unknown) => (error as { reason?: string }).reason === "invalid_task_status_transition",
+    );
+    assert.equal(readTaskStatusFile(statusFile).status, "failed");
+  });
+
+  it("rejects backward active-state transitions", () => {
+    assert.equal(claimPendingTask(statusFile, { status: "running", phase: "preparing" }).claimed, true);
+    updateTaskStatusFile(statusFile, { status: "collecting_artifacts", phase: "collecting_artifacts" });
+    assert.throws(
+      () => updateTaskStatusFile(statusFile, { status: "executing_agent", phase: "executing_agent" }),
+      (error: unknown) => (error as { reason?: string }).reason === "invalid_task_status_transition",
+    );
+  });
+
   it("allows only one of several processes to claim the same task", { timeout: 10_000 }, async () => {
     const modulePath = resolve(
       dirname(fileURLToPath(import.meta.url)),

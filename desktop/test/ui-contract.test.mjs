@@ -49,6 +49,14 @@ describe("desktop UI contracts", () => {
     for (const key of ["settings.autoDetecting", "settings.doctorFailed", "settings.savedReload", "settings.saveFailed"]) {
       assert.ok(settingsClient.includes(`"${key}"`), key);
     }
+    assert.match(settingsClient, /async function initializeSettings\(\)/);
+    assert.match(settingsClient, /state\.runtimeSettings \|\| await api\.getRuntimeSettings\(\)/);
+    assert.match(settingsClient, /state\.workspaceRoot \|\| tr\("settings\.workspaceHelp"\)/);
+    assert.match(settingsClient, /state\.tunnelClient && state\.tunnelClient\.available/);
+    assert.match(settingsClient, /tr\("settings\.loadFailed"\)/);
+    for (const id of ["tunnelClientPath", "configPath", "workspacePath"]) {
+      assert.doesNotMatch(settingsPage, new RegExp(`id="${id}"[^>]*data-i18n=`), id);
+    }
   });
 
   it("does not gate Dashboard toolbar layout on preload", () => {
@@ -106,6 +114,20 @@ describe("desktop UI contracts", () => {
     assert.equal(raw.structured, false);
     assert.equal(raw.level, "");
     assert.equal(raw.summary, "plain stderr output");
+  });
+
+  it("keeps the logs page usable when the parser asset is missing", () => {
+    const logs = read("ui/pages/logs.html");
+    assert.match(logs, /<script src="\/log-parser\.js"><\/script>/);
+    assert.match(logs, /if \(!window\.PatchWardenLogParser \|\| typeof window\.PatchWardenLogParser\.parseLine !== 'function'\)/);
+    assert.match(logs, /structured: entry !== null/);
+  });
+
+  it("shows bounded Core and Direct connection identity", () => {
+    const dashboard = read("ui/pages/dashboard.html");
+    assert.match(dashboard, /status\.connections && status\.connections\[prefix\]/);
+    assert.match(dashboard, /connection\.tunnel_id_masked/);
+    assert.match(dashboard, /connection\.reconnect_guidance/);
   });
 
   it("boots the desktop theme before CSS and keeps desktop navigation static", () => {
