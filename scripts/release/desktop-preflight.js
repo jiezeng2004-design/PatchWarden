@@ -183,7 +183,7 @@ try {
   const manifestOutput = run("isolated packaged runtime manifest", process.execPath, ["scripts/checks/mcp-manifest-check.js", "--profile", "chatgpt_core"], isolatedRoot);
   report.runtime_manifest = JSON.parse(manifestOutput);
   if (!report.runtime_manifest.ok || report.runtime_manifest.server_version !== rootPackage.version || report.runtime_manifest.tool_count !== 26) {
-    throw new Error("Packaged runtime manifest did not match the 1.6.1 26-tool contract.");
+    throw new Error(`Packaged runtime manifest did not match the ${rootPackage.version} 26-tool contract.`);
   }
 
   if (!skipUiSmoke) {
