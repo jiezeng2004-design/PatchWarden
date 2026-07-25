@@ -1,5 +1,29 @@
 # PatchWarden CHANGELOG
 
+## v1.6.2 (2026-07-25)
+
+### Demo runtime stability
+
+- Kept Watcher heartbeat updates independent from long-running Agent tasks so
+  Supervisor monitoring no longer restarts a healthy Watcher mid-task.
+- Added restart-safe task reconciliation for cancellation, timeout, artifact
+  collection, and Watcher ownership transitions without weakening process
+  ownership checks.
+- Unified Desktop, Core, Direct, Watcher, and Tunnel launch paths on the active
+  runtime configuration and exposed bounded Agent adapter/model diagnostics.
+
+### Assessment and verification
+
+- Added versioned Assessment security snapshots with cross-process canonical
+  tool manifests, material configuration fingerprints, and value-free stale
+  diagnostics.
+- Preserved Assessment validity across Watcher restarts while continuing to
+  fail closed on project-policy, command, scope, timeout, or schema changes.
+- Expanded packaged-runtime E2E coverage for Assessment execution, Watcher
+  restart, Audit, Direct verification, and active-task cleanup.
+- Normalized Windows drive paths independently of the CI host platform so the
+  same Assessment fingerprint is produced on Windows and Linux.
+
 ## v1.6.1 (2026-07-20)
 
 ### Security and concurrency hardening

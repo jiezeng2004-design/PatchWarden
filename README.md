@@ -15,9 +15,9 @@ ChatGPT、Codex、OpenCode 或其他 MCP 客户端负责规划与验收，
 PatchWarden 负责把计划保存成工作区内任务，再由预先配置的本地 Agent
 执行，并返回结果、代码差异和独立测试记录。
 
-[下载 Windows 安装版 v1.6.1](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.1/PatchWarden-Setup-1.6.1-x64.exe)
-· [免安装 ZIP](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.1/PatchWarden-Portable-1.6.1-x64.zip)
-· [校验文件](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.1/PatchWarden-Desktop-SHA256SUMS.txt)
+[下载 Windows 安装版 v1.6.2](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.2/PatchWarden-Setup-1.6.2-x64.exe)
+· [免安装 ZIP](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.2/PatchWarden-Portable-1.6.2-x64.zip)
+· [校验文件](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.2/PatchWarden-Desktop-SHA256SUMS.txt)
 · [三分钟快速开始](#三分钟快速开始)
 · [Discussions](https://github.com/jiezeng2004-design/PatchWarden/discussions)
 
@@ -25,14 +25,14 @@ PatchWarden 负责把计划保存成工作区内任务，再由预先配置的�
 
 <sub>PatchWarden Desktop 真实首启界面，来自隐私安全的桌面 smoke 验收；截图未使用真实工作区、账号或凭据。</sub>
 
-当前源码版本、Windows Release 和 npm `latest`：**v1.6.1**。
-Windows 首次体验推荐上面的安装版；npm/CLI 用户请固定已发布版本。查看
+当前源码版本和 Windows Release：**v1.6.2**。npm `latest` 由维护者独立手动发布，
+请以页面顶部的 npm 徽章和注册表查询结果为准。Windows 首次体验推荐上面的安装版；查看
 [CHANGELOG](CHANGELOG.md)、[迁移指南](docs/migration-from-safe-bifrost.md)和
 [发布检查清单](docs/release-checklist.md)。
 
 > [!NOTE]
 > 当前桌面安装包暂时只提供 Windows x64。macOS、Linux 或暂时不安装桌面版的用户，
-> 可以继续使用 npm 上已有的稳定版本及其内置本地 Dashboard；本次改动不发布新的 npm 包。
+> 可以继续使用 npm 上已有的稳定版本及其内置本地 Dashboard；本次 GitHub Release 不自动执行 `npm publish`。
 
 > [!IMPORTANT]
 > PatchWarden 不是通用远程 Shell。MCP 客户端不能随意执行命令：
@@ -152,16 +152,15 @@ CLI，或者先把 OpenCode 配置为执行 Agent。
 
 ### 方案 A：Windows 安装版（首次体验推荐）
 
-1. 下载 [Windows 安装版 v1.6.1](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.1/PatchWarden-Setup-1.6.1-x64.exe)
-   和 [SHA256 校验文件](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.1/PatchWarden-Desktop-SHA256SUMS.txt)。
+1. 下载 [Windows 安装版 v1.6.2](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.2/PatchWarden-Setup-1.6.2-x64.exe)
+   和 [SHA256 校验文件](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.2/PatchWarden-Desktop-SHA256SUMS.txt)。
 2. 在 PowerShell 中校验安装包：
 
 ```powershell
-Get-FileHash .\PatchWarden-Setup-1.6.1-x64.exe -Algorithm SHA256
+Get-FileHash .\PatchWarden-Setup-1.6.2-x64.exe -Algorithm SHA256
 ```
 
-当前发布值应为 `aef23bd687a7ef1728901f59078c11cf3046a7ca2af87a0492516f475c55e677`；
-仍应以同一 Release 的校验文件为准。安装包尚未代码签名，Windows SmartScreen
+请以同一 Release 的校验文件为准。安装包尚未代码签名，Windows SmartScreen
 可能显示“未知发布者”。
 
 3. 安装并打开 PatchWarden Desktop，选择一个只包含项目的专用工作区。
