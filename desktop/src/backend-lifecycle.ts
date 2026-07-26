@@ -9,6 +9,16 @@ export interface QuitCleanupCoordinator {
   run(): Promise<void>;
 }
 
+export function mayStopOwnedServices(
+  ownedChild: unknown,
+  capturedChild: unknown,
+  probeKind: string,
+): boolean {
+  return Boolean(ownedChild)
+    && ownedChild === capturedChild
+    && probeKind === "patchwarden";
+}
+
 export function createQuitCleanupCoordinator(
   cleanup: () => Promise<void>,
 ): QuitCleanupCoordinator {

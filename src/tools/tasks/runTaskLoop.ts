@@ -15,6 +15,7 @@ import type { TaskTemplateName } from "../taskTemplates.js";
 import { isTerminalTaskStatus } from "./taskStates.js";
 import {
   createLineageId,
+  failInterruptedTaskLineage,
   getTaskLineage,
   writeTaskLineage,
   type SafeTaskLineage,
@@ -26,7 +27,7 @@ import {
 } from "./taskLineage.js";
 import { stableJsonStringify } from "../../utils/stableJson.js";
 import { atomicWriteJsonFileSync } from "../../utils/atomicFile.js";
-import { withFileLockSync } from "../../utils/lockedJsonFile.js";
+import { withFileLock, withFileLockSync } from "../../utils/lockedJsonFile.js";
 
 export interface RunTaskLoopInput {
   repo_path: string;
@@ -108,6 +109,8 @@ const DEFAULT_DEPS: RunTaskLoopDeps = {
 const activeLoopStarts = new Map<string, Promise<RunTaskLoopOutput>>();
 const activeLoopExecutions = new Map<string, Promise<RunTaskLoopOutput>>();
 
+class LoopExecutionBusyError extends Error {}
+
 export async function runTaskLoop(input: RunTaskLoopInput): Promise<RunTaskLoopOutput> {
   return runTaskLoopCoordinatedWithDeps(input, DEFAULT_DEPS);
 }
@@ -124,7 +127,8 @@ export async function runTaskLoopCoordinatedWithDeps(
       : activeLoopStarts.get(reservation.request_id);
     if (active) return { ...(await active), reused_request: true };
     try {
-      return buildLoopOutput(getTaskLineage(reservation.lineage_id), normalized, true);
+      const persisted = getTaskLineage(reservation.lineage_id);
+      if (persisted.final_status !== "running") return buildLoopOutput(persisted, normalized, true);
     } catch {
       // A prior process may have stopped after reserving but before writing the lineage.
     }
@@ -137,15 +141,41 @@ export async function runTaskLoopCoordinatedWithDeps(
     rejectStarted = rejectPromise;
   });
   activeLoopStarts.set(reservation.request_id, started);
-  const execution = runTaskLoopWithDeps(
-    { ...input, request_id: reservation.request_id },
-    deps,
-    {
-      lineageId: reservation.lineage_id,
-      requestId: reservation.request_id,
-      onMainTaskCreated: resolveStarted,
+  const execution = withFileLock(
+    reservation.execution_lock_path,
+    async () => {
+      if (reservation.reused) {
+        let persisted: SafeTaskLineage | null = null;
+        try {
+          persisted = getTaskLineage(reservation.lineage_id);
+        } catch {
+          // No lineage was written, so the reserved request can safely start once.
+        }
+        if (persisted?.final_status === "running") {
+          return buildLoopOutput(failInterruptedTaskLineage(reservation.lineage_id, deps.now()), normalized, true);
+        }
+        if (persisted) return buildLoopOutput(persisted, normalized, true);
+      }
+      return runTaskLoopWithDeps(
+        { ...input, request_id: reservation.request_id },
+        deps,
+        {
+          lineageId: reservation.lineage_id,
+          requestId: reservation.request_id,
+          onMainTaskCreated: resolveStarted,
+        },
+      );
     },
-  );
+    {
+      waitMs: 500,
+      busyError: () => new LoopExecutionBusyError("Task loop execution is active in another Core process."),
+    },
+  ).catch((error: unknown) => {
+    if (error instanceof LoopExecutionBusyError) {
+      return buildLoopOutput(getTaskLineage(reservation.lineage_id), normalized, true);
+    }
+    throw error;
+  });
   activeLoopExecutions.set(reservation.request_id, execution);
   void execution.then(resolveStarted, rejectStarted).finally(() => {
     activeLoopStarts.delete(reservation.request_id);
@@ -354,6 +384,7 @@ function reserveLoopRequest(normalized: ReturnType<typeof normalizeInput>): {
   request_id: string;
   lineage_id: string;
   reused: boolean;
+  execution_lock_path: string;
 } {
   const requestId = normalized.request_id || `loopreq_${randomBytes(12).toString("hex")}`;
   if (!/^[A-Za-z0-9_-]{8,128}$/.test(requestId)) {
@@ -379,6 +410,7 @@ function reserveLoopRequest(normalized: ReturnType<typeof normalizeInput>): {
         request_id: requestId,
         lineage_id: String(current.lineage_id || ""),
         reused: true,
+        execution_lock_path: `${recordPath}.execution`,
       };
     }
     const lineageId = createLineageId();
@@ -389,7 +421,7 @@ function reserveLoopRequest(normalized: ReturnType<typeof normalizeInput>): {
       input_sha256: inputDigest,
       created_at: new Date().toISOString(),
     });
-    return { request_id: requestId, lineage_id: lineageId, reused: false };
+    return { request_id: requestId, lineage_id: lineageId, reused: false, execution_lock_path: `${recordPath}.execution` };
   });
 }
 

@@ -5,10 +5,21 @@ import { describe, it } from "node:test";
 import {
   createQuitCleanupCoordinator,
   createSerializedRestartScheduler,
+  mayStopOwnedServices,
   stopBackendChild,
 } from "../dist/backend-lifecycle.js";
 
 describe("desktop backend lifecycle", () => {
+  it("stops services only for the captured child with a verified PatchWarden identity", () => {
+    const owned = {};
+    assert.equal(mayStopOwnedServices(owned, owned, "patchwarden"), true);
+    assert.equal(mayStopOwnedServices(owned, {}, "patchwarden"), false);
+    assert.equal(mayStopOwnedServices(null, owned, "patchwarden"), false);
+    assert.equal(mayStopOwnedServices(owned, owned, "mismatched_patchwarden"), false);
+    assert.equal(mayStopOwnedServices(owned, owned, "outdated_patchwarden"), false);
+    assert.equal(mayStopOwnedServices(owned, owned, "foreign"), false);
+  });
+
   it("waits for the owned child exit event after kill", async () => {
     const child = new EventEmitter();
     child.kill = () => { setTimeout(() => child.emit("exit"), 30); };

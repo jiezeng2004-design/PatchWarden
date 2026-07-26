@@ -6,6 +6,7 @@ import { guardReadPath } from "../../security/pathGuard.js";
 import { redactSensitiveValue } from "../../security/contentRedaction.js";
 import { PatchWardenError } from "../../errors.js";
 import { atomicWriteFileSync, atomicWriteJsonFileSync } from "../../utils/atomicFile.js";
+import { withFileLockSync } from "../../utils/lockedJsonFile.js";
 
 export type TaskLoopStopReason =
   | "success"
@@ -19,7 +20,8 @@ export type TaskLoopStopReason =
   | "watcher_blocked"
   | "direct_profile_disabled"
   | "direct_verification_failed"
-  | "direct_audit_failed";
+  | "direct_audit_failed"
+  | "recovery_required";
 
 export interface TaskLineageDirectSession {
   session_id: string;
@@ -155,6 +157,28 @@ export function getTaskLineage(lineageId: string, options: { max_items?: number 
   const raw = readFileSync(lineageFile, "utf-8").replace(/^\uFEFF/, "");
   const record = JSON.parse(raw) as TaskLineageRecord;
   return toSafeTaskLineage(redactSensitiveValue(record).value as TaskLineageRecord, maxItems);
+}
+
+export function failInterruptedTaskLineage(lineageId: string, now = new Date()): SafeTaskLineage {
+  if (!/^[A-Za-z0-9_-]+$/.test(lineageId)) {
+    throw new Error("Invalid lineage ID for interrupted-loop recovery.");
+  }
+  const config = getConfig();
+  const lineageFile = resolve(config.workspaceRoot, ".patchwarden", "lineages", lineageId, "lineage.json");
+  guardReadPath(lineageFile, config.workspaceRoot, ".patchwarden/lineages");
+  return withFileLockSync(lineageFile, () => {
+    const record = JSON.parse(readFileSync(lineageFile, "utf-8").replace(/^\uFEFF/, "")) as TaskLineageRecord;
+    if (record.final_status !== "running") return toSafeTaskLineage(record);
+    record.final_status = "failed";
+    record.stop_reason = "recovery_required";
+    record.next_action = "rerun_run_task_loop_with_a_new_request_id";
+    record.updated_at = now.toISOString();
+    record.errors.push("The previous Core process exited before this task loop reached a terminal state; no tasks were duplicated during recovery.");
+    const safeRecord = redactSensitiveValue(record).value as TaskLineageRecord;
+    atomicWriteJsonFileSync(lineageFile, safeRecord);
+    atomicWriteFileSync(resolve(lineageFile, "..", "SUMMARY.md"), buildSummaryMarkdown(safeRecord));
+    return toSafeTaskLineage(safeRecord);
+  });
 }
 
 export function toSafeTaskLineage(record: TaskLineageRecord, maxItems = 8): SafeTaskLineage {

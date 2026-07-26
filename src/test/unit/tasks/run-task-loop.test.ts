@@ -279,6 +279,36 @@ describe("runTaskLoop", () => {
     );
   });
 
+  it("fails a persisted running lineage closed after the original Core exits", async () => {
+    const { deps, calls } = depsFor({});
+    const input = {
+      repo_path: ".",
+      goal: "Recover an interrupted guarded task loop",
+      agent: "fake",
+      verify_commands: ["npm test"],
+      request_id: "request-recovery-001",
+      wait_for_completion: true,
+    };
+
+    const completed = await runTaskLoopCoordinatedWithDeps(input, deps);
+    await new Promise((resolvePromise) => setImmediate(resolvePromise));
+    const lineagePath = join(tempDir, ".patchwarden", "lineages", completed.lineage_id, "lineage.json");
+    const interrupted = JSON.parse(readFileSync(lineagePath, "utf-8"));
+    interrupted.final_status = "running";
+    interrupted.stop_reason = "task_queued";
+    interrupted.next_action = "wait_for_task_then_get_task_lineage";
+    writeFileSync(lineagePath, JSON.stringify(interrupted), "utf-8");
+
+    const recovered = await runTaskLoopCoordinatedWithDeps(input, deps);
+    assert.equal(recovered.reused_request, true);
+    assert.equal(recovered.final_status, "failed");
+    assert.equal(recovered.stop_reason, "recovery_required");
+    assert.equal(recovered.continuation_required, false);
+    assert.equal(recovered.next_action, "rerun_run_task_loop_with_a_new_request_id");
+    assert.equal(recovered.tasks.main, "task-main");
+    assert.equal(calls.filter((entry) => entry === "execute").length, 1);
+  });
+
   it("keeps v1.3 behavior when direct_verify is false", async () => {
     const { deps } = depsFor({});
     const result = await runTaskLoopWithDeps({

@@ -32,7 +32,12 @@ import {
 import type { AgentDetection, AgentDetectionInput, AgentRegistration, DiscoveredModel } from "./agent-adapters.js";
 import type { AgentSelection, DesktopPaths, DesktopPreferences } from "./config-store.js";
 import { mayStopBackend, probeControlCenter, type ProbeFetchImpl } from "./backend-probe.js";
-import { createQuitCleanupCoordinator, createSerializedRestartScheduler, stopBackendChild } from "./backend-lifecycle.js";
+import {
+  createQuitCleanupCoordinator,
+  createSerializedRestartScheduler,
+  mayStopOwnedServices,
+  stopBackendChild,
+} from "./backend-lifecycle.js";
 import { detectTunnelClient, validateTunnelClientPath } from "./runtime-settings.js";
 import { resolveCoreRoot, utilityProcessOptions } from "./runtime-root.js";
 import {
@@ -76,12 +81,18 @@ let activeConfigPath: string | null = null;
 let desktopLogPath: string | null = null;
 
 const quitCleanup = createQuitCleanupCoordinator(async () => {
-  if (activeConfigPath && configIsUsable(activeConfigPath)) {
+  const capturedBackend = ownedBackend;
+  if (capturedBackend && activeConfigPath && configIsUsable(activeConfigPath)) {
     try {
-      writeAppLog("Stopping PatchWarden Core and Direct before Desktop exit.");
-      await controlAction("stop");
+      const probe = await probeControlCenter(probeFetch, CONTROL_URL, activeConfigPath, readCoreVersion());
+      if (mayStopOwnedServices(ownedBackend, capturedBackend, probe.kind)) {
+        writeAppLog("Stopping services owned by this PatchWarden Desktop instance before exit.");
+        await controlAction("stop");
+      } else {
+        writeAppLog(`Skipping service stop during Desktop exit because ownership was not verified (${probe.kind}).`);
+      }
     } catch (error) {
-      writeAppLog("Desktop exit could not stop all PatchWarden services through Control Center.", error);
+      writeAppLog("Desktop exit could not verify or stop its owned PatchWarden services through Control Center.", error);
     }
   }
   const backendStopped = await stopOwnedBackend();
