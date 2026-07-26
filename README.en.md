@@ -22,6 +22,7 @@ independent verification evidence.
 [Download Windows installer v1.6.3](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Setup-1.6.3-x64.exe)
 · [Portable ZIP](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Portable-1.6.3-x64.zip)
 · [Checksums](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Desktop-SHA256SUMS.txt)
+· [Project website](https://patchwarden-showcase-redesign.yistart.chatgpt.site)
 · [Three-minute quick start](#three-minute-quick-start)
 · [Discussions](https://github.com/jiezeng2004-design/PatchWarden/discussions)
 
