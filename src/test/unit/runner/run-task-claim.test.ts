@@ -204,7 +204,7 @@ describe("runTask claim", () => {
   });
 
   it("completes two queued subgoals with two deterministic Agents in serial", { timeout: 30_000 }, async () => {
-    writeFileSync(join(repo, "main.js"), "export const ready = true;\n", "utf-8");
+    writeFileSync(join(repo, "main.js"), "const ready = true;\n", "utf-8");
     const agentScript = "process.exit(0)";
     writeFileSync(configPath, JSON.stringify({
       workspaceRoot: root,

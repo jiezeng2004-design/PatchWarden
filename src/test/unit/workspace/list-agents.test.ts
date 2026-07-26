@@ -22,7 +22,7 @@ describe("listAgents invocation preflight", () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("marks Node plus a native executable as not invocation-ready", () => {
+  it("marks Node plus a native executable as not invocation-ready", { skip: process.platform !== "win32" }, () => {
     const nativeEntry = join(tempDir, "claude.exe");
     const configPath = join(tempDir, "patchwarden.config.json");
     writeFileSync(nativeEntry, "not a real executable", "utf-8");
