@@ -18,6 +18,7 @@ PatchWarden 负责把计划保存成工作区内任务，再由预先配置的�
 [下载 Windows 安装版 v1.6.3](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Setup-1.6.3-x64.exe)
 · [免安装 ZIP](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Portable-1.6.3-x64.zip)
 · [校验文件](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Desktop-SHA256SUMS.txt)
+· [项目网站](https://patchwarden-showcase-redesign.yistart.chatgpt.site)
 · [三分钟快速开始](#三分钟快速开始)
 · [Discussions](https://github.com/jiezeng2004-design/PatchWarden/discussions)
 
