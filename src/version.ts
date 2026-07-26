@@ -1,3 +1,3 @@
-export const PATCHWARDEN_VERSION = "1.6.2";
+export const PATCHWARDEN_VERSION = "1.6.3";
 export const TOOL_SCHEMA_EPOCH = "2026-07-19-v15";
 export const ARTIFACT_SCHEMA_VERSION = TOOL_SCHEMA_EPOCH;

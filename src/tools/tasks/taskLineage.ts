@@ -6,9 +6,11 @@ import { guardReadPath } from "../../security/pathGuard.js";
 import { redactSensitiveValue } from "../../security/contentRedaction.js";
 import { PatchWardenError } from "../../errors.js";
 import { atomicWriteFileSync, atomicWriteJsonFileSync } from "../../utils/atomicFile.js";
+import { withFileLockSync } from "../../utils/lockedJsonFile.js";
 
 export type TaskLoopStopReason =
   | "success"
+  | "task_queued"
   | "max_iterations_reached"
   | "verification_failed"
   | "high_risk_blocked"
@@ -18,7 +20,8 @@ export type TaskLoopStopReason =
   | "watcher_blocked"
   | "direct_profile_disabled"
   | "direct_verification_failed"
-  | "direct_audit_failed";
+  | "direct_audit_failed"
+  | "recovery_required";
 
 export interface TaskLineageDirectSession {
   session_id: string;
@@ -65,11 +68,12 @@ export interface TaskLineageRound {
 
 export interface TaskLineageRecord {
   lineage_id: string;
+  request_id?: string;
   goal: string;
   repo_path: string;
   created_at: string;
   updated_at: string;
-  final_status: "accepted" | "needs_fix" | "blocked" | "failed";
+  final_status: "running" | "accepted" | "needs_fix" | "blocked" | "failed";
   stop_reason: TaskLoopStopReason;
   next_action: string;
   main_task: string | null;
@@ -85,6 +89,7 @@ export interface TaskLineageRecord {
 
 export interface SafeTaskLineage {
   lineage_id: string;
+  request_id: string;
   goal: string;
   repo_path: string;
   created_at: string;
@@ -107,6 +112,7 @@ export interface SafeTaskLineage {
   rounds: TaskLineageRound[];
   warnings: string[];
   errors: string[];
+  continuation_required: boolean;
   truncated: boolean;
 }
 
@@ -153,12 +159,35 @@ export function getTaskLineage(lineageId: string, options: { max_items?: number 
   return toSafeTaskLineage(redactSensitiveValue(record).value as TaskLineageRecord, maxItems);
 }
 
+export function failInterruptedTaskLineage(lineageId: string, now = new Date()): SafeTaskLineage {
+  if (!/^[A-Za-z0-9_-]+$/.test(lineageId)) {
+    throw new Error("Invalid lineage ID for interrupted-loop recovery.");
+  }
+  const config = getConfig();
+  const lineageFile = resolve(config.workspaceRoot, ".patchwarden", "lineages", lineageId, "lineage.json");
+  guardReadPath(lineageFile, config.workspaceRoot, ".patchwarden/lineages");
+  return withFileLockSync(lineageFile, () => {
+    const record = JSON.parse(readFileSync(lineageFile, "utf-8").replace(/^\uFEFF/, "")) as TaskLineageRecord;
+    if (record.final_status !== "running") return toSafeTaskLineage(record);
+    record.final_status = "failed";
+    record.stop_reason = "recovery_required";
+    record.next_action = "rerun_run_task_loop_with_a_new_request_id";
+    record.updated_at = now.toISOString();
+    record.errors.push("The previous Core process exited before this task loop reached a terminal state; no tasks were duplicated during recovery.");
+    const safeRecord = redactSensitiveValue(record).value as TaskLineageRecord;
+    atomicWriteJsonFileSync(lineageFile, safeRecord);
+    atomicWriteFileSync(resolve(lineageFile, "..", "SUMMARY.md"), buildSummaryMarkdown(safeRecord));
+    return toSafeTaskLineage(safeRecord);
+  });
+}
+
 export function toSafeTaskLineage(record: TaskLineageRecord, maxItems = 8): SafeTaskLineage {
   const rounds = record.rounds.slice(0, maxItems);
   const latest = record.rounds[record.rounds.length - 1];
   const directSessions = normalizeDirectSessions(record.direct_sessions);
   return {
     lineage_id: record.lineage_id,
+    request_id: truncate(String(record.request_id || record.lineage_id), 128),
     goal: record.goal,
     repo_path: record.repo_path,
     created_at: record.created_at,
@@ -186,6 +215,7 @@ export function toSafeTaskLineage(record: TaskLineageRecord, maxItems = 8): Safe
     rounds,
     warnings: record.warnings.slice(0, maxItems).map((value) => truncate(value, 240)),
     errors: record.errors.slice(0, maxItems).map((value) => truncate(value, 240)),
+    continuation_required: record.final_status === "running",
     truncated:
       record.rounds.length > maxItems ||
       record.fix_tasks.length > maxItems ||
@@ -204,6 +234,7 @@ function buildSummaryMarkdown(record: TaskLineageRecord): string {
     "# PatchWarden Task Lineage",
     "",
     `- Lineage: ${record.lineage_id}`,
+    `- Request: ${record.request_id || record.lineage_id}`,
     `- Goal: ${record.goal}`,
     `- Repo: ${record.repo_path}`,
     `- Final status: ${record.final_status}`,

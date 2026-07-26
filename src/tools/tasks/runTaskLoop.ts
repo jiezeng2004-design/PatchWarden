@@ -1,4 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
+import { createHash, randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { getConfig } from "../../config.js";
 import { createWorktree } from "../../goal/worktreeManager.js";
 import { guardWorkspacePath } from "../../security/pathGuard.js";
@@ -12,6 +15,8 @@ import type { TaskTemplateName } from "../taskTemplates.js";
 import { isTerminalTaskStatus } from "./taskStates.js";
 import {
   createLineageId,
+  failInterruptedTaskLineage,
+  getTaskLineage,
   writeTaskLineage,
   type SafeTaskLineage,
   type TaskLineageDirectSession,
@@ -20,6 +25,9 @@ import {
   type TaskLineageWorktree,
   type TaskLoopStopReason,
 } from "./taskLineage.js";
+import { stableJsonStringify } from "../../utils/stableJson.js";
+import { atomicWriteJsonFileSync } from "../../utils/atomicFile.js";
+import { withFileLock, withFileLockSync } from "../../utils/lockedJsonFile.js";
 
 export interface RunTaskLoopInput {
   repo_path: string;
@@ -39,6 +47,8 @@ export interface RunTaskLoopInput {
   isolation_mode?: "current_repo" | "worktree";
   worktree_base_branch?: string;
   worktree_cleanup?: "keep" | "archive" | "delete_ignored_only";
+  request_id?: string;
+  wait_for_completion?: boolean;
 }
 
 export interface RunTaskLoopOutput extends SafeTaskLineage {
@@ -49,6 +59,15 @@ export interface RunTaskLoopOutput extends SafeTaskLineage {
   isolation_mode: "current_repo" | "worktree";
   worktree: TaskLineageWorktree;
   stopped_before_execution: boolean;
+  request_id: string;
+  continuation_required: boolean;
+  reused_request: boolean;
+}
+
+interface RunTaskLoopExecutionOptions {
+  lineageId?: string;
+  requestId?: string;
+  onMainTaskCreated?: (output: RunTaskLoopOutput) => void;
 }
 
 interface RunTaskLoopDeps {
@@ -87,13 +106,88 @@ const DEFAULT_DEPS: RunTaskLoopDeps = {
   sleep,
 };
 
+const activeLoopStarts = new Map<string, Promise<RunTaskLoopOutput>>();
+const activeLoopExecutions = new Map<string, Promise<RunTaskLoopOutput>>();
+
+class LoopExecutionBusyError extends Error {}
+
 export async function runTaskLoop(input: RunTaskLoopInput): Promise<RunTaskLoopOutput> {
-  return runTaskLoopWithDeps(input, DEFAULT_DEPS);
+  return runTaskLoopCoordinatedWithDeps(input, DEFAULT_DEPS);
+}
+
+export async function runTaskLoopCoordinatedWithDeps(
+  input: RunTaskLoopInput,
+  deps: RunTaskLoopDeps,
+): Promise<RunTaskLoopOutput> {
+  const normalized = normalizeInput(input);
+  const reservation = reserveLoopRequest(normalized);
+  if (reservation.reused) {
+    const active = normalized.wait_for_completion
+      ? activeLoopExecutions.get(reservation.request_id)
+      : activeLoopStarts.get(reservation.request_id);
+    if (active) return { ...(await active), reused_request: true };
+    try {
+      const persisted = getTaskLineage(reservation.lineage_id);
+      if (persisted.final_status !== "running") return buildLoopOutput(persisted, normalized, true);
+    } catch {
+      // A prior process may have stopped after reserving but before writing the lineage.
+    }
+  }
+
+  let resolveStarted!: (output: RunTaskLoopOutput) => void;
+  let rejectStarted!: (error: unknown) => void;
+  const started = new Promise<RunTaskLoopOutput>((resolvePromise, rejectPromise) => {
+    resolveStarted = resolvePromise;
+    rejectStarted = rejectPromise;
+  });
+  activeLoopStarts.set(reservation.request_id, started);
+  const execution = withFileLock(
+    reservation.execution_lock_path,
+    async () => {
+      if (reservation.reused) {
+        let persisted: SafeTaskLineage | null = null;
+        try {
+          persisted = getTaskLineage(reservation.lineage_id);
+        } catch {
+          // No lineage was written, so the reserved request can safely start once.
+        }
+        if (persisted?.final_status === "running") {
+          return buildLoopOutput(failInterruptedTaskLineage(reservation.lineage_id, deps.now()), normalized, true);
+        }
+        if (persisted) return buildLoopOutput(persisted, normalized, true);
+      }
+      return runTaskLoopWithDeps(
+        { ...input, request_id: reservation.request_id },
+        deps,
+        {
+          lineageId: reservation.lineage_id,
+          requestId: reservation.request_id,
+          onMainTaskCreated: resolveStarted,
+        },
+      );
+    },
+    {
+      waitMs: 500,
+      busyError: () => new LoopExecutionBusyError("Task loop execution is active in another Core process."),
+    },
+  ).catch((error: unknown) => {
+    if (error instanceof LoopExecutionBusyError) {
+      return buildLoopOutput(getTaskLineage(reservation.lineage_id), normalized, true);
+    }
+    throw error;
+  });
+  activeLoopExecutions.set(reservation.request_id, execution);
+  void execution.then(resolveStarted, rejectStarted).finally(() => {
+    activeLoopStarts.delete(reservation.request_id);
+    activeLoopExecutions.delete(reservation.request_id);
+  });
+  return normalized.wait_for_completion ? execution : started;
 }
 
 export async function runTaskLoopWithDeps(
   input: RunTaskLoopInput,
-  deps: RunTaskLoopDeps
+  deps: RunTaskLoopDeps,
+  options: RunTaskLoopExecutionOptions = {},
 ): Promise<RunTaskLoopOutput> {
   const normalized = normalizeInput(input);
   const resolvedRepoPath = guardWorkspacePath(normalized.repo_path, getConfig().workspaceRoot);
@@ -101,14 +195,15 @@ export async function runTaskLoopWithDeps(
   const selectedAgent = routing.selected_agent;
   const now = deps.now().toISOString();
   const lineage: TaskLineageRecord = {
-    lineage_id: deps.createLineageId(deps.now()),
+    lineage_id: options.lineageId || deps.createLineageId(deps.now()),
+    request_id: options.requestId || normalized.request_id || undefined,
     goal: normalized.goal,
     repo_path: resolvedRepoPath,
     created_at: now,
     updated_at: now,
-    final_status: "blocked",
-    stop_reason: "policy_blocked",
-    next_action: "inspect_lineage",
+    final_status: "running",
+    stop_reason: "task_queued",
+    next_action: "wait_for_task_then_get_task_lineage",
     main_task: null,
     fix_tasks: [],
     cleanup_tasks: [],
@@ -140,18 +235,11 @@ export async function runTaskLoopWithDeps(
     lineage.updated_at = deps.now().toISOString();
     if (error) lineage.errors.push(error);
     const safe = deps.writeTaskLineage(lineage);
-    return {
-      ...safe,
-      created_task_count: [lineage.main_task, ...lineage.fix_tasks, ...lineage.cleanup_tasks].filter(Boolean).length,
-      auto_fix_tests: normalized.auto_fix_tests,
-      auto_cleanup_artifacts: normalized.auto_cleanup_artifacts,
-      direct_verify: normalized.direct_verify,
-      isolation_mode: normalized.isolation_mode,
-      worktree: safe.worktree,
-      stopped_before_execution: lineage.main_task === null,
-    };
+    return buildLoopOutput(safe, normalized, false);
   };
 
+  deps.writeTaskLineage(lineage);
+  try {
   let taskRepoPath = resolvedRepoPath;
   if (normalized.isolation_mode === "worktree") {
     try {
@@ -209,6 +297,11 @@ export async function runTaskLoopWithDeps(
     const created = asRecord(await deps.createTask({
       execution_mode: "execute",
       assessment_id: String(assessment.assessment_id || ""),
+      agent_routing_metadata: {
+        requested_agent: routing.requested_agent,
+        selected_agent: routing.selected_agent,
+        fallback_used: routing.fallback,
+      },
     }));
     const taskId = String(created.task_id || "");
     if (!taskId) {
@@ -216,6 +309,9 @@ export async function runTaskLoopWithDeps(
     }
     if (role === "main") lineage.main_task = taskId;
     else lineage.fix_tasks.push(taskId);
+    lineage.updated_at = deps.now().toISOString();
+    const queued = buildLoopOutput(deps.writeTaskLineage(lineage), normalized, false);
+    if (role === "main") options.onMainTaskCreated?.(queued);
 
     const wait = await waitUntilTerminal(taskId, normalized.task_timeout_seconds, deps);
     if (wait.stop_reason) {
@@ -254,6 +350,79 @@ export async function runTaskLoopWithDeps(
   }
 
   return finalize("needs_fix", "max_iterations_reached", "review_lineage_and_create_manual_followup");
+  } catch (error) {
+    return finalize(
+      "failed",
+      "policy_blocked",
+      "inspect_lineage",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
+function buildLoopOutput(
+  safe: SafeTaskLineage,
+  normalized: ReturnType<typeof normalizeInput>,
+  reusedRequest: boolean,
+): RunTaskLoopOutput {
+  return {
+    ...safe,
+    request_id: safe.request_id,
+    continuation_required: safe.final_status === "running",
+    reused_request: reusedRequest,
+    created_task_count: [safe.tasks.main, ...safe.tasks.fix, ...safe.tasks.cleanup].filter(Boolean).length,
+    auto_fix_tests: normalized.auto_fix_tests,
+    auto_cleanup_artifacts: normalized.auto_cleanup_artifacts,
+    direct_verify: normalized.direct_verify,
+    isolation_mode: normalized.isolation_mode,
+    worktree: safe.worktree,
+    stopped_before_execution: safe.tasks.main === null,
+  };
+}
+
+function reserveLoopRequest(normalized: ReturnType<typeof normalizeInput>): {
+  request_id: string;
+  lineage_id: string;
+  reused: boolean;
+  execution_lock_path: string;
+} {
+  const requestId = normalized.request_id || `loopreq_${randomBytes(12).toString("hex")}`;
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(requestId)) {
+    throw new Error("request_id must contain 8-128 letters, numbers, underscores, or hyphens.");
+  }
+  const config = getConfig();
+  const directory = resolve(config.workspaceRoot, ".patchwarden", "lineage-requests");
+  mkdirSync(directory, { recursive: true });
+  const recordPath = join(directory, `${requestId}.json`);
+  const digestInput = {
+    ...normalized,
+    request_id: undefined,
+    wait_for_completion: undefined,
+  };
+  const inputDigest = createHash("sha256").update(stableJsonStringify(digestInput)).digest("hex");
+  return withFileLockSync(recordPath, () => {
+    if (existsSync(recordPath)) {
+      const current = JSON.parse(readFileSync(recordPath, "utf-8")) as Record<string, unknown>;
+      if (current.input_sha256 !== inputDigest) {
+        throw new Error("request_id was already used with different run_task_loop arguments.");
+      }
+      return {
+        request_id: requestId,
+        lineage_id: String(current.lineage_id || ""),
+        reused: true,
+        execution_lock_path: `${recordPath}.execution`,
+      };
+    }
+    const lineageId = createLineageId();
+    atomicWriteJsonFileSync(recordPath, {
+      schema_version: "patchwarden-loop-request-v1",
+      request_id: requestId,
+      lineage_id: lineageId,
+      input_sha256: inputDigest,
+      created_at: new Date().toISOString(),
+    });
+    return { request_id: requestId, lineage_id: lineageId, reused: false, execution_lock_path: `${recordPath}.execution` };
+  });
 }
 
 async function waitUntilTerminal(
@@ -494,7 +663,7 @@ function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-function normalizeInput(input: RunTaskLoopInput): Required<Omit<RunTaskLoopInput, "agent" | "scope_files" | "worktree_base_branch">> & { agent?: string; scope_files?: string[]; worktree_base_branch?: string } {
+function normalizeInput(input: RunTaskLoopInput): Required<Omit<RunTaskLoopInput, "agent" | "scope_files" | "worktree_base_branch" | "request_id">> & { agent?: string; scope_files?: string[]; worktree_base_branch?: string; request_id?: string } {
   const config = getConfig();
   const repoPath = String(input.repo_path || "").trim();
   const goal = String(input.goal || "").trim();
@@ -549,5 +718,7 @@ function normalizeInput(input: RunTaskLoopInput): Required<Omit<RunTaskLoopInput
       input.worktree_cleanup === "archive" || input.worktree_cleanup === "delete_ignored_only"
         ? input.worktree_cleanup
         : "keep",
+    request_id: input.request_id ? String(input.request_id).trim() : undefined,
+    wait_for_completion: input.wait_for_completion === true,
   };
 }

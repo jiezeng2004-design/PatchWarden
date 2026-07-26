@@ -504,7 +504,7 @@ describe("reconcileTasks", () => {
   });
 
   // ── 11. Non-running tasks are not candidates ──
-  it("does not consider terminal tasks as candidates", () => {
+  it("reports terminal tasks with missing recovery evidence without changing status", () => {
     buildTask({
       taskId: "task-done-001",
       status: "done",
@@ -521,7 +521,28 @@ describe("reconcileTasks", () => {
     const result = reconcileTasks({ mode: "report_only" }, config);
 
     assert.equal(result.scanned, 2);
-    assert.equal(result.candidates, 0);
+    assert.equal(result.candidates, 2);
+    assert.equal(result.reports.length, 2);
+    assert.ok(result.reports.every((report) => report.action_taken === "left_unchanged"));
+    assert.ok(result.reports.every((report) => (report.evidence_summary.missing_artifacts?.length || 0) > 0));
+  });
+
+  it("repairs missing terminal evidence as partial without changing the original status", () => {
+    buildTask({
+      taskId: "task-terminal-repair-001",
+      status: "failed_verification",
+      phase: "failed_verification",
+      createdSecondsAgo: 1000,
+    });
+
+    const result = reconcileTasks({ mode: "safe_fix", task_ids: ["task-terminal-repair-001"] }, config);
+    assert.equal(result.reconciled, 1);
+    assert.equal(result.reports[0]?.action_taken, "repaired_partial_evidence");
+    assert.equal(readTaskStatus("task-terminal-repair-001").status, "failed_verification");
+    const recovered = JSON.parse(readFileSync(join(tasksDir, "task-terminal-repair-001", "result.json"), "utf-8"));
+    assert.equal(recovered.artifact_status, "partial");
+    assert.equal(recovered.evidence_status, "unavailable");
+    assert.equal(existsSync(join(tasksDir, "task-terminal-repair-001", "status.json.bak")), true);
   });
 
   // ── 12. Empty tasks dir returns zero-scanned result ──

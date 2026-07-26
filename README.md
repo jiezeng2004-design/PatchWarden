@@ -15,9 +15,9 @@ ChatGPT、Codex、OpenCode 或其他 MCP 客户端负责规划与验收，
 PatchWarden 负责把计划保存成工作区内任务，再由预先配置的本地 Agent
 执行，并返回结果、代码差异和独立测试记录。
 
-[下载 Windows 安装版 v1.6.2](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.2/PatchWarden-Setup-1.6.2-x64.exe)
-· [免安装 ZIP](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.2/PatchWarden-Portable-1.6.2-x64.zip)
-· [校验文件](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.2/PatchWarden-Desktop-SHA256SUMS.txt)
+[下载 Windows 安装版 v1.6.3](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Setup-1.6.3-x64.exe)
+· [免安装 ZIP](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Portable-1.6.3-x64.zip)
+· [校验文件](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Desktop-SHA256SUMS.txt)
 · [三分钟快速开始](#三分钟快速开始)
 · [Discussions](https://github.com/jiezeng2004-design/PatchWarden/discussions)
 
@@ -25,9 +25,9 @@ PatchWarden 负责把计划保存成工作区内任务，再由预先配置的�
 
 <sub>PatchWarden Desktop 真实首启界面，来自隐私安全的桌面 smoke 验收；截图未使用真实工作区、账号或凭据。</sub>
 
-当前源码版本和 Windows Release：**v1.6.2**。npm `latest` 由维护者独立手动发布，
+当前源码版本和 Windows Release：**v1.6.3**。npm `latest` 由维护者独立手动发布，
 请以页面顶部的 npm 徽章和注册表查询结果为准。Windows 首次体验推荐上面的安装版；查看
-[CHANGELOG](CHANGELOG.md)、[迁移指南](docs/migration-from-safe-bifrost.md)和
+[CHANGELOG](CHANGELOG.md)、[贡献名单](CONTRIBUTORS.md)、[迁移指南](docs/migration-from-safe-bifrost.md)和
 [发布检查清单](docs/release-checklist.md)。
 
 > [!NOTE]
@@ -152,12 +152,12 @@ CLI，或者先把 OpenCode 配置为执行 Agent。
 
 ### 方案 A：Windows 安装版（首次体验推荐）
 
-1. 下载 [Windows 安装版 v1.6.2](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.2/PatchWarden-Setup-1.6.2-x64.exe)
-   和 [SHA256 校验文件](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.2/PatchWarden-Desktop-SHA256SUMS.txt)。
+1. 下载 [Windows 安装版 v1.6.3](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Setup-1.6.3-x64.exe)
+   和 [SHA256 校验文件](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Desktop-SHA256SUMS.txt)。
 2. 在 PowerShell 中校验安装包：
 
 ```powershell
-Get-FileHash .\PatchWarden-Setup-1.6.2-x64.exe -Algorithm SHA256
+Get-FileHash .\PatchWarden-Setup-1.6.3-x64.exe -Algorithm SHA256
 ```
 
 请以同一 Release 的校验文件为准。安装包尚未代码签名，Windows SmartScreen
@@ -964,10 +964,22 @@ PatchWarden v0.4.0 不自动读取旧 CLI、旧环境变量、旧 Header、旧�
 
 `get_task_summary` 默认保留兼容的 `standard` 视图；ChatGPT 应优先使用
 `view: "compact"`，终态 `wait_for_task` 也只内嵌 compact 验收证据。
+`list_tasks` 默认只返回 `history_state=active`；可用 `archived` 或 `all`
+读取保留的历史证据。Control Center 归档不删除任务目录，恢复后任务重新出现在默认列表。
+
+桌面 Agent 模型设置控制本地 Codex、OpenCode、Claude 等 CLI 的 `--model` 参数，
+不会改变当前 ChatGPT 会话自身选择的模型。运行时任务证据只记录 adapter、effective model、
+provider、requested/selected Agent、配置 revision、模型参数是否存在、fallback 与 exit code，
+不记录完整参数、提示词或环境变量值。CLI 失败会归类为 `invalid_arguments`、
+`authentication`、`rate_limit`、`insufficient_balance`、`model_not_found`、`network`、
+`cli_startup` 或 `unknown`。
 
 `run_task_loop` 是 v1.2 的安全编排入口：它只组合现有 `create_task`、`wait_for_task`、safe summary 和
-`audit_task`，不会绕过 Watcher、命令白名单、workspace confinement 或确认边界。`get_task_lineage`
-读取 `.patchwarden/lineages/<lineage_id>/` 中的有界链路摘要，不返回完整日志或 diff。
+`audit_task`，不会绕过 Watcher、命令白名单、workspace confinement 或确认边界。默认调用在主任务
+创建后立即返回 `request_id`、`lineage_id` 和 `task_id`；随后用 `wait_for_task` 查询主任务，并用
+`get_task_lineage` 获取后台循环的最新有界摘要。重试时复用同一 `request_id` 和相同参数可避免重复
+创建任务；参数不同会被拒绝。仅在本地 transport 超时足够长时使用 `wait_for_completion=true`
+恢复同步等待。
 
 v1.4 adds Direct-assisted loop verification. `run_task_loop(direct_verify=true)`
 will create a Direct session only after the watcher-driven task and normal audit
@@ -987,6 +999,8 @@ stdout/stderr tails, full diffs, verification logs, or sensitive file content.
 
 Goal Session 的状态变更通过共享的跨进程 mutation lock 串行化并原子落盘；
 非空 Goal 的所有子目标都被 `accept_subgoal` 接受后，Goal 会自动转为 `completed`。
+关联任务创建后 subgoal 为 `queued`，只有 Runner claim 后才进入 `running`；终态失败、
+取消或超时会同步为 `needs_fix`。单 Watcher 仍按顺序执行，不提供并行 Agent 执行。
 `create_subgoal_task` 以 Goal 已保存的 `repo_path` 为权威，调用方传入其他仓库会以
 `goal_repo_mismatch` 拒绝；隔离 worktree 也从该仓库创建，且 create/merge/discard
 共用仓库级 lifecycle lock。

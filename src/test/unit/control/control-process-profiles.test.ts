@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildManageEnvironment, classifySupervisorFailure, resolveManageProfiles } from "../../../control/routes/process.js";
+import { buildManageArguments, buildManageEnvironment, classifySupervisorFailure, resolveManageProfiles } from "../../../control/routes/process.js";
 import { buildConnectionSummary, buildExperienceStatus, buildSuggestions, reconcileTunnelStatus } from "../../../control/routes/status.js";
 import { config } from "../../../control/shared.js";
 
 describe("Control Center profile selection", () => {
+  it("restarts the packaged runtime without invoking a development build", () => {
+    const args = buildManageArguments("restart", "all");
+    assert.deepEqual(args.slice(-4), ["restart", "all", "-Background", "-SkipBuild"]);
+  });
+
   it("exposes bounded connection identity without a raw Tunnel ID", () => {
     const summary = buildConnectionSummary("direct", {
       ready: true,
@@ -192,6 +197,7 @@ describe("Control Center experience status", () => {
           capabilities: { model_override: true },
           availability_scope: "executable_only",
           provider_status: "not_checked",
+          agent_config_revision: "test-revision",
           reason: null,
           checked_at: new Date().toISOString(),
         },
@@ -226,7 +232,7 @@ describe("Control Center experience status", () => {
       agents: [{
         name: "opencode", available: true, configured: true, command: "opencode.exe", adapter: "opencode", model: null,
         capabilities: { model_override: true }, reason: null, checked_at: new Date().toISOString(),
-        availability_scope: "executable_only", provider_status: "not_checked",
+        availability_scope: "executable_only", provider_status: "not_checked", agent_config_revision: "test-revision",
       }],
       tasks: { total: 1, active: 0, stale: 0, stale_task_ids: [], tasks: [{ task_id: "task_failed", status: "failed" }], reason: null },
       direct_profile_enabled: true,
@@ -245,7 +251,7 @@ describe("Control Center experience status", () => {
       agents: [{
         name: "opencode", available: true, configured: true, command: "opencode.exe", adapter: "opencode", model: null,
         capabilities: { model_override: true }, reason: null, checked_at: new Date().toISOString(),
-        availability_scope: "executable_only", provider_status: "not_checked",
+        availability_scope: "executable_only", provider_status: "not_checked", agent_config_revision: "test-revision",
       }],
       tasks: { total: 0, active: 0, stale: 0, stale_task_ids: [], tasks: [], reason: null },
       direct_profile_enabled: false,

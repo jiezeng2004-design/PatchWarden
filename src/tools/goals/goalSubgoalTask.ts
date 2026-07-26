@@ -6,7 +6,7 @@
  *   2. addSubgoal（校验 depends_on 引用已有 subgoal）
  *   3. createTask 创建关联任务（写入 goal_id / subgoal_id 到 task status.json）
  *   4. linkTaskToSubgoal（将 task_id 关联到 subgoal）
- *   5. updateSubgoalStatus(running)（ready → running）
+ *   5. updateSubgoalStatus(queued); the Runner claim later moves it to running
  *   6. 写回 goal_status.json
  *
  * 注意：
@@ -54,7 +54,7 @@ export interface CreateSubgoalTaskInput {
 export interface CreateSubgoalTaskOutput {
   subgoal_id: string;
   task_id: string;
-  subgoal_status: "running";
+  subgoal_status: "queued";
 }
 
 // ── 函数实现 ──────────────────────────────────────────────────────
@@ -159,26 +159,26 @@ export async function createSubgoalTask(input: CreateSubgoalTaskInput): Promise<
     throw createTaskErr;
   }
 
-  // 4. linkTaskToSubgoal + updateSubgoalStatus(running)
+  // 4. Link the task and mark it queued. The Runner claim moves it to running.
   const withTask = linkTaskToSubgoal(withSubgoal, subgoalId, taskId);
-  let withRunning = updateSubgoalStatus(withTask, subgoalId, "running");
+  let withQueued = updateSubgoalStatus(withTask, subgoalId, "queued");
 
   // 4.5 隔离模式下，把 worktree_id 记录到 subgoal 对象（写入 goal_status.json）
   if (isolate && worktreeId) {
-    const newSubgoals: Subgoal[] = withRunning.subgoals.map((s) =>
+    const newSubgoals: Subgoal[] = withQueued.subgoals.map((s) =>
       s.id === subgoalId
         ? { ...s, worktree_id: worktreeId }
         : s
     );
-    withRunning = { ...withRunning, subgoals: newSubgoals };
+    withQueued = { ...withQueued, subgoals: newSubgoals };
   }
 
   return {
-    next: withRunning,
+    next: withQueued,
     result: {
       subgoal_id: subgoalId,
       task_id: taskId,
-      subgoal_status: "running" as const,
+      subgoal_status: "queued" as const,
     },
   };
   });

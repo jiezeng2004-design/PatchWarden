@@ -110,6 +110,7 @@ function buildReportMarkdown(
   lines.push("| accepted | " + report.summary.accepted + " |");
   lines.push("| rejected | " + report.summary.rejected + " |");
   lines.push("| running | " + report.summary.running + " |");
+  lines.push("| queued | " + report.summary.queued + " |");
   lines.push("| ready | " + report.summary.ready + " |");
   lines.push("| needs_fix | " + report.summary.needs_fix + " |");
   lines.push("");
@@ -192,7 +193,7 @@ export function exportGoalReport(
 
   const noSubgoals = goalStatus.subgoals.length === 0;
   const hasIncomplete = goalStatus.subgoals.some(
-    (s) => s.status === "running" || s.status === "ready"
+    (s) => s.status === "queued" || s.status === "running" || s.status === "ready"
   );
   const incomplete = goalStatus.status === "active" && hasIncomplete;
 

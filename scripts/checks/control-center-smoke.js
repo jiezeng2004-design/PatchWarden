@@ -161,16 +161,21 @@ async function testLoopbackHostBoundary() {
   }
 }
 
-function httpPost(url, headers = {}) {
+function httpPost(url, headers = {}, body = null) {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
+    const payload = body === null ? null : JSON.stringify(body);
     const req = http.request(
       {
         hostname: parsed.hostname,
         port: parsed.port,
         path: parsed.pathname,
         method: "POST",
-        headers,
+        headers: payload === null ? headers : {
+          ...headers,
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(payload),
+        },
       },
       (res) => {
         let data = "";
@@ -179,6 +184,7 @@ function httpPost(url, headers = {}) {
       }
     );
     req.on("error", reject);
+    if (payload !== null) req.write(payload);
     req.setTimeout(REQUEST_TIMEOUT_MS, () => req.destroy(new Error("timeout")));
     req.end();
   });
@@ -1444,6 +1450,30 @@ async function testHideStaleWithToken(token) {
   }
 }
 
+async function testArchiveTasksApi(token) {
+  const noTokenName = "Task archive API requires the control token";
+  const withoutToken = await httpPost(`${BASE_URL}/api/tasks/archive`, {}, {
+    task_ids: ["task-smoke-missing"],
+  });
+  record(noTokenName, withoutToken.status === 403, `status ${withoutToken.status}`);
+
+  const name = "Task archive API parses bounded task_ids without deleting data";
+  try {
+    const res = await httpPost(`${BASE_URL}/api/tasks/archive`, {
+      "X-PatchWarden-Control-Token": token,
+    }, { task_ids: ["task-smoke-missing"] });
+    const json = tryJson(res.body);
+    const ok = res.status === 200
+      && isObject(json)
+      && Array.isArray(json.archived)
+      && Array.isArray(json.rejected)
+      && json.rejected[0]?.reason === "task_not_found";
+    record(name, ok, ok ? undefined : `status ${res.status}: ${res.body.slice(0, 200)}`);
+  } catch (err) {
+    record(name, false, `error: ${err.message}`);
+  }
+}
+
 // ── Test 28: GET /api/warnings returns valid JSON ───────────────
 async function testWarningsApi() {
   const name = "Test 28: /api/warnings returns valid JSON with warnings array";
@@ -1604,6 +1634,7 @@ async function main() {
     await testStaleTasksExplanation();
     await testHideStaleNoToken();
     if (token) await testHideStaleWithToken(token);
+    if (token) await testArchiveTasksApi(token);
     // P1 Task 10/11 coverage
     await testWarningsApi();
     await testDiagnosticsApi();

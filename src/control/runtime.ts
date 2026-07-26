@@ -20,6 +20,7 @@ import { atomicWriteFileSync, atomicWriteJsonFileSync } from "../utils/atomicFil
 import { withFileLockSync } from "../utils/lockedJsonFile.js";
 import { logger } from "../logging.js";
 import { TERMINAL_TASK_STATUSES as SHARED_TERMINAL_TASK_STATUSES } from "../tools/tasks/taskStates.js";
+import { isValidTaskIdSegment, readTaskHistoryState } from "../tools/tasks/taskHistory.js";
 import {
   config,
   controlCenterEventsPath,
@@ -441,6 +442,7 @@ export function reconstructTaskEntry(
     timeout_seconds: Number(statusData.timeout_seconds) || config.defaultTaskTimeoutSeconds,
     pending_reason: null,
     watcher_status: watcher.status,
+    history_state: readTaskHistoryState(statusData),
   };
 }
 
@@ -469,7 +471,7 @@ export function isValidDirectSessionId(sessionId: string): boolean {
 }
 
 export function isValidTaskId(taskId: string): boolean {
-  return /^[A-Za-z0-9][A-Za-z0-9_-]{0,159}$/.test(taskId);
+  return isValidTaskIdSegment(taskId);
 }
 
 function readStoredStringArray(path: string): string[] {

@@ -1,7 +1,12 @@
 import { existsSync, statSync } from "node:fs";
 import { basename, delimiter, extname, isAbsolute, join, resolve } from "node:path";
-import { getConfig } from "../../config.js";
+import { getAgentRuntimeMetadata, refreshAgentConfig } from "../../config.js";
 import { sanitizeTrustedPath } from "../../runner/processSecurity.js";
+import {
+  assertConfiguredNodeLaunch,
+  resolveAgentLaunch,
+  resolveConfiguredNativeAgentLaunch,
+} from "../../runner/agentInvocation.js";
 
 export interface AgentAvailability {
   name: string;
@@ -17,10 +22,11 @@ export interface AgentAvailability {
   provider_status: "not_checked";
   invocation_ready?: boolean;
   model_argument_present?: boolean;
+  agent_config_revision: string;
 }
 
 export function listAgents(): { agents: AgentAvailability[]; total: number; config_path: string; workspace_root: string } {
-  const config = getConfig();
+  const config = refreshAgentConfig();
   const checkedAt = new Date().toISOString();
   const configPath = process.env.PATCHWARDEN_CONFIG
     ? resolve(process.env.PATCHWARDEN_CONFIG)
@@ -29,26 +35,53 @@ export function listAgents(): { agents: AgentAvailability[]; total: number; conf
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([name, agent]) => {
       const available = commandExists(agent.command, config.workspaceRoot);
-      const modelArgumentPresent = typeof agent.model === "string"
-        ? agent.args.some((arg, index) => arg === "--model" && agent.args[index + 1] === agent.model)
-        : true;
+      const runtime = getAgentRuntimeMetadata(name, config);
+      const modelArgumentPresent = runtime.model_argument_present;
+      const launch = validateInvocationLaunch(name, agent.command, agent.args, agent.adapter || name, config.workspaceRoot);
+      const modelReady = runtime.effective_model === null || modelArgumentPresent;
+      const invocationReady = available && modelReady && launch.ready;
       return {
         name,
         configured: true as const,
         available,
         command: basename(agent.command),
-        reason: available ? null : "Configured executable was not found on disk or PATH.",
+        reason: !available
+          ? "Configured executable was not found on disk or PATH."
+          : launch.reason,
         checked_at: checkedAt,
-        adapter: typeof agent.adapter === "string" ? agent.adapter : ["codex", "opencode"].includes(name) ? name : null,
-        model: typeof agent.model === "string" ? agent.model : null,
-        capabilities: { model_override: typeof agent.adapter === "string" || ["codex", "opencode"].includes(name) },
+        adapter: runtime.adapter,
+        model: runtime.effective_model,
+        capabilities: { model_override: runtime.adapter !== null },
         availability_scope: "executable_only" as const,
         provider_status: "not_checked" as const,
-        invocation_ready: available && modelArgumentPresent,
+        invocation_ready: invocationReady,
         model_argument_present: modelArgumentPresent,
+        agent_config_revision: runtime.agent_config_revision,
       };
     });
   return { agents, total: agents.length, config_path: configPath, workspace_root: config.workspaceRoot };
+}
+
+function validateInvocationLaunch(
+  name: string,
+  command: string,
+  args: readonly string[],
+  adapter: string,
+  workspaceRoot: string,
+): { ready: boolean; reason: string | null } {
+  try {
+    const configuredNative = resolveConfiguredNativeAgentLaunch(name, adapter, command, args);
+    assertConfiguredNodeLaunch(name, command, args, configuredNative);
+    if (!configuredNative) {
+      resolveAgentLaunch(name, command, process.platform, process.env.PATH || "", existsSync, workspaceRoot, adapter);
+    }
+    return { ready: true, reason: null };
+  } catch (error) {
+    return {
+      ready: false,
+      reason: error instanceof Error ? error.message.slice(0, 240) : "Configured Agent launch is invalid.",
+    };
+  }
 }
 
 function commandExists(command: string, workspaceRoot: string): boolean {

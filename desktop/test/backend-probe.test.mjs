@@ -21,6 +21,17 @@ describe("desktop backend ownership", () => {
     assert.equal(result.kind, "foreign");
   });
 
+  it("does not reuse a Core from a different PatchWarden version", async () => {
+    const expected = "C:\\Users\\student\\PatchWarden\\patchwarden.config.json";
+    const result = await probeControlCenter(
+      async () => ({ ok: true, json: async () => ({ server_version: "1.6.1", config_identity_sha256: configIdentity(expected, "win32") }) }),
+      "http://127.0.0.1:8090",
+      expected,
+      "1.6.3",
+    );
+    assert.deepEqual(result, { kind: "outdated_patchwarden", version: "1.6.1" });
+  });
+
   it("stops only the exact owned child handle", () => {
     const owned = {};
     assert.equal(mayStopBackend(owned, owned), true);

@@ -204,7 +204,7 @@ try {
       create_task: ["inline_plan", "verify_commands"],
       wait_for_task: ["timeout_seconds", "wait_seconds"],
       health_check: ["detail"],
-      list_tasks: ["repo_path", "active_only"],
+      list_tasks: ["repo_path", "active_only", "history_state"],
       get_task_summary: ["view", "max_items"],
       run_task_loop: ["repo_path", "goal", "verify_commands", "direct_verify", "isolation_mode", "worktree_cleanup"],
       recommend_agent_for_task: ["repo_path", "goal"],

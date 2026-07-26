@@ -128,6 +128,12 @@ export interface CreateTaskInput {
     template: string | null;
     change_policy: ChangePolicy;
   };
+  /** Internal Agent routing evidence supplied by run_task_loop. */
+  agent_routing_metadata?: {
+    requested_agent: string | null;
+    selected_agent: string;
+    fallback_used: boolean;
+  };
 }
 
 export interface AssessOnlyOutput {
@@ -207,6 +213,9 @@ export async function createTask(input: CreateTaskInput): Promise<CreateTaskResu
   const plansDir = getPlansDir(config);
 
   const executionMode = input.execution_mode || "execute";
+  const originallyRequestedAgent = typeof input.agent === "string" && input.agent.trim()
+    ? input.agent.trim()
+    : null;
 
   // ── assessment_id execute mode: load record and override params ──
   let assessmentRecord: AssessmentRecord | null = null;
@@ -668,6 +677,10 @@ export async function createTask(input: CreateTaskInput): Promise<CreateTaskResu
       retry_count: retryMetadata.retry_count,
     } : {}),
     agent: effectiveInput.agent,
+    requested_agent: effectiveInput.agent_routing_metadata?.requested_agent
+      ?? (agentSelectionReason ? "auto" : originallyRequestedAgent ?? effectiveInput.agent),
+    selected_agent: effectiveInput.agent_routing_metadata?.selected_agent ?? effectiveInput.agent,
+    fallback_used: effectiveInput.agent_routing_metadata?.fallback_used ?? agentSelectionReason?.fallback ?? false,
     workspace_root: resolve(config.workspaceRoot),
     repo_path: resolvedRepoPath,
     resolved_repo_path: safeRepoPath,

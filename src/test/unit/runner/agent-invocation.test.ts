@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { PatchWardenConfig } from "../../../config.js";
-import { buildAgentInvocation, resolveAgentExecutable, resolveAgentLaunch } from "../../../runner/agentInvocation.js";
+import { assertConfiguredNodeLaunch, buildAgentInvocation, resolveAgentExecutable, resolveAgentLaunch, resolveConfiguredNativeAgentLaunch } from "../../../runner/agentInvocation.js";
 import { resolvePackageManagerInvocation } from "../../../runner/processSecurity.js";
 
 describe("agent executable resolution", () => {
@@ -38,6 +38,72 @@ describe("agent executable resolution", () => {
     );
     assert.equal(launch.command.toLowerCase(), node.toLowerCase());
     assert.deepEqual(launch.argsPrefix.map((path) => path.toLowerCase()), [cli.toLowerCase()]);
+  });
+
+  it("executes a verified native npm package bin directly", () => {
+    const shimRoot = "C:\\Users\\student\\AppData\\Roaming\\npm";
+    const shim = `${shimRoot}\\claude.cmd`;
+    const manifest = `${shimRoot}\\node_modules\\@anthropic-ai\\claude-code\\package.json`;
+    const native = `${shimRoot}\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe`;
+    const files = new Set([shim, manifest, native].map((path) => path.toLowerCase()));
+    const launch = resolveAgentLaunch(
+      "claude",
+      shim,
+      "win32",
+      shimRoot,
+      (path) => files.has(path.toLowerCase()),
+      "C:\\work\\repo",
+      "claude",
+      () => JSON.stringify({ name: "@anthropic-ai/claude-code", bin: { claude: "bin/claude.exe" } }),
+    );
+    assert.equal(launch.command.toLowerCase(), native.toLowerCase());
+    assert.deepEqual(launch.argsPrefix, []);
+  });
+
+  it("upgrades a verified legacy node plus native Agent registration", () => {
+    const packageRoot = "C:\\Users\\student\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code";
+    const native = `${packageRoot}\\bin\\claude.exe`;
+    const manifest = `${packageRoot}\\package.json`;
+    const files = new Set([native, manifest].map((path) => path.toLowerCase()));
+    const launch = resolveConfiguredNativeAgentLaunch(
+      "claude",
+      "claude",
+      "C:\\Program Files\\nodejs\\node.exe",
+      [native, "-p", "{prompt}"],
+      "win32",
+      (path) => files.has(path.toLowerCase()),
+      () => JSON.stringify({ name: "@anthropic-ai/claude-code", bin: { claude: "bin/claude.exe" } }),
+    );
+    assert.equal(launch?.command.toLowerCase(), native.toLowerCase());
+    assert.deepEqual(launch?.args, ["-p", "{prompt}"]);
+  });
+
+  it("fails closed when Node is configured to load an unverified native executable", () => {
+    assert.throws(
+      () => assertConfiguredNodeLaunch(
+        "claude",
+        "C:\\Program Files\\nodejs\\node.exe",
+        ["C:\\untrusted\\claude.exe", "--print"],
+        null,
+        "win32",
+      ),
+      /configured to load \.exe through Node/,
+    );
+  });
+
+  it("uses Node only for JavaScript entry files", () => {
+    const cli = "C:\\tools\\agent.mjs";
+    const node = "C:\\Program Files\\nodejs\\node.exe";
+    const launch = resolveAgentLaunch(
+      "custom",
+      cli,
+      "win32",
+      "C:\\Program Files\\nodejs",
+      (path) => [cli, node].some((entry) => entry.toLowerCase() === path.toLowerCase()),
+      "C:\\work\\repo",
+    );
+    assert.equal(launch.command.toLowerCase(), node.toLowerCase());
+    assert.deepEqual(launch.argsPrefix.map((entry) => entry.toLowerCase()), [cli.toLowerCase()]);
   });
 
   it("skips a same-named executable under the repository when resolving PATH", () => {

@@ -19,9 +19,9 @@ PatchWarden stores that plan as a workspace-scoped task, lets a preconfigured
 local agent execute it, and returns results, diffs, artifact manifests, and
 independent verification evidence.
 
-[Download Windows installer v1.6.2](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.2/PatchWarden-Setup-1.6.2-x64.exe)
-· [Portable ZIP](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.2/PatchWarden-Portable-1.6.2-x64.zip)
-· [Checksums](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.2/PatchWarden-Desktop-SHA256SUMS.txt)
+[Download Windows installer v1.6.3](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Setup-1.6.3-x64.exe)
+· [Portable ZIP](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Portable-1.6.3-x64.zip)
+· [Checksums](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Desktop-SHA256SUMS.txt)
 · [Three-minute quick start](#three-minute-quick-start)
 · [Discussions](https://github.com/jiezeng2004-design/PatchWarden/discussions)
 
@@ -29,10 +29,10 @@ independent verification evidence.
 
 <sub>Real PatchWarden Desktop first-run UI from a privacy-safe smoke run; no real workspace, account, or credential data is shown.</sub>
 
-Current source version and Windows Release: **v1.6.2**. npm `latest` is
+Current source version and Windows Release: **v1.6.3**. npm `latest` is
 published separately by the maintainer; use the npm badge above or query the
 registry for its current value. Use the installer above for the first Windows experience. See the
-[CHANGELOG](CHANGELOG.md), [migration guide](docs/migration-from-safe-bifrost.md), and
+[CHANGELOG](CHANGELOG.md), [contributors](CONTRIBUTORS.md), [migration guide](docs/migration-from-safe-bifrost.md), and
 [release checklist](docs/release-checklist.md).
 
 > [!NOTE]
@@ -245,12 +245,12 @@ three minutes. A ChatGPT Tunnel is not required for this first run.
 
 ### Option A: Windows installer (recommended for a first run)
 
-1. Download the [Windows installer v1.6.2](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.2/PatchWarden-Setup-1.6.2-x64.exe)
-   and its [SHA256 checksum file](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.2/PatchWarden-Desktop-SHA256SUMS.txt).
+1. Download the [Windows installer v1.6.3](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Setup-1.6.3-x64.exe)
+   and its [SHA256 checksum file](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Desktop-SHA256SUMS.txt).
 2. Verify the installer in PowerShell:
 
 ```powershell
-Get-FileHash .\PatchWarden-Setup-1.6.2-x64.exe -Algorithm SHA256
+Get-FileHash .\PatchWarden-Setup-1.6.3-x64.exe -Algorithm SHA256
 ```
 
 Always use the checksum file from the same Release. The installer is not
@@ -1086,13 +1086,29 @@ names.
 `get_task_summary` keeps the backward-compatible `standard` view by default.
 ChatGPT should request `view: "compact"` first; terminal `wait_for_task`
 responses also embed compact acceptance evidence only.
+`list_tasks` defaults to `history_state=active`; use `archived` or `all` to
+inspect retained history. Control Center archive operations never delete task
+directories, and restored tasks return to the default view.
+
+Desktop Agent model settings control the local Codex, OpenCode, Claude, and
+other CLI `--model` arguments. They cannot change the model selected for the
+current ChatGPT conversation. Runtime evidence stores only the adapter,
+effective model, provider, requested/selected Agent, configuration revision,
+model-argument presence, fallback, and exit code. It never stores complete
+arguments, prompts, or environment values. CLI failures are classified as
+`invalid_arguments`, `authentication`, `rate_limit`, `insufficient_balance`,
+`model_not_found`, `network`, `cli_startup`, or `unknown`.
 
 `run_task_loop` is the v1.2 safe orchestration entrypoint. It only composes
 existing `create_task`, `wait_for_task`, safe summary, and `audit_task`
 behavior; it does not bypass the Watcher, command allowlist, workspace
-confinement, or local confirmation boundaries. `get_task_lineage` reads the
-bounded `.patchwarden/lineages/<lineage_id>/` summary without returning full
-logs or diffs.
+confinement, or local confirmation boundaries. By default it returns the
+`request_id`, `lineage_id`, and main `task_id` immediately after task creation.
+Use `wait_for_task` for the main task and `get_task_lineage` for the latest
+bounded background-loop state. Retrying identical arguments with the same
+`request_id` does not create another task; different arguments are rejected.
+Use `wait_for_completion=true` only when the local transport timeout is long
+enough for synchronous compatibility.
 
 `get_project_policy` is the v1.3 read-only policy entrypoint. It returns the
 bounded effective `.patchwarden/project-policy.json` policy and release
@@ -1125,6 +1141,9 @@ lock and committed atomically. A non-empty Goal automatically becomes
 Goal's stored `repo_path` as authoritative and rejects a caller-supplied mismatch
 with `goal_repo_mismatch`; isolated worktrees are created from that repository,
 and create/merge/discard share a repository lifecycle lock.
+New linked tasks leave their subgoal `queued`; only a Runner claim changes it to
+`running`. Failed, canceled, and timed-out tasks synchronize to `needs_fix`.
+The single Watcher remains serial and does not execute Agents in parallel.
 
 `full` additionally provides:
 

@@ -26,6 +26,48 @@ import { launchFileManager } from "../fileManager.js";
 import { config, errorMessage, guardControlPath, readJsonFileSafe, sendJson } from "../shared.js";
 import { atomicWriteJsonFileSync } from "../../utils/atomicFile.js";
 import { mutateTaskStatus } from "../../runner/taskStatusStore.js";
+import { archiveTasks, restoreTask } from "../../tools/tasks/taskHistory.js";
+
+export function handleArchiveTasks(res: ServerResponse, body: unknown): void {
+  try {
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      sendJson(res, 400, { error: "Expected JSON body with task_ids." });
+      return;
+    }
+    const taskIds = (body as { task_ids?: unknown }).task_ids;
+    if (!Array.isArray(taskIds) || !taskIds.every((value) => typeof value === "string")) {
+      sendJson(res, 400, { error: "task_ids must be an array of task ids." });
+      return;
+    }
+    const output = archiveTasks(taskIds, config);
+    recordEvent("task.history_archived", {
+      archived: output.archived.length,
+      unchanged: output.unchanged.length,
+      rejected: output.rejected.length,
+    });
+    sendJson(res, 200, output);
+  } catch (err) {
+    sendJson(res, 400, { error: errorMessage(err) });
+  }
+}
+
+export function handleRestoreTask(res: ServerResponse, taskId: string): void {
+  try {
+    if (!isValidTaskId(taskId)) {
+      sendJson(res, 400, { error: "Invalid task id" });
+      return;
+    }
+    const output = restoreTask(taskId, config);
+    recordEvent("task.history_restored", {
+      task_id: taskId,
+      restored: output.restored.length === 1,
+      rejected: output.rejected.length,
+    });
+    sendJson(res, output.rejected.length > 0 ? 409 : 200, output);
+  } catch (err) {
+    sendJson(res, 400, { error: errorMessage(err) });
+  }
+}
 
 /**
  * Reconcile a stale task. Does NOT delete the task. Reads the task files,

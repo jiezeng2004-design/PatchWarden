@@ -29,7 +29,7 @@ import {
 } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
-import { loadConfig, getConfig, getTasksDir, resolveWorkspaceRoot } from "../config.js";
+import { loadConfig, getConfig, getTasksDir, refreshAgentConfig, resolveWorkspaceRoot } from "../config.js";
 import { guardWorkspacePath } from "../security/pathGuard.js";
 import { guardAgentCommand, guardTestCommand } from "../security/commandGuard.js";
 import { validateAssessmentFreshness } from "../assessments/assessmentStore.js";
@@ -225,6 +225,7 @@ async function tick() {
   tickRunning = true;
   tickStartedAt = new Date().toISOString();
   try {
+    const runtimeConfig = refreshAgentConfig();
     writeWatcherHeartbeat("running");
     // Ensure tasks directory exists
     if (!existsSync(tasksDir)) {
@@ -277,15 +278,15 @@ async function tick() {
         const resolvedRepoPath = guardWorkspacePath(repoPath, wsRoot);
 
         // Check agent
-        guardAgentCommand(typeof statusData.agent === "string" ? statusData.agent : "", config);
+        guardAgentCommand(typeof statusData.agent === "string" ? statusData.agent : "", runtimeConfig);
 
         // Check test_command
         if (typeof statusData.test_command === "string" && statusData.test_command) {
-          guardTestCommand(statusData.test_command, config, resolvedRepoPath);
+          guardTestCommand(statusData.test_command, runtimeConfig, resolvedRepoPath);
         }
         if (Array.isArray(statusData.verify_commands)) {
           for (const command of statusData.verify_commands) {
-            guardTestCommand(String(command), config, resolvedRepoPath);
+            guardTestCommand(String(command), runtimeConfig, resolvedRepoPath);
           }
         }
 

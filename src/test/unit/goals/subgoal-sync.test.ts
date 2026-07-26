@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createGoal, readGoalStatus, writeGoalStatus } from "../../../goal/goalStore.js";
 import { addSubgoal, updateSubgoalStatus } from "../../../goal/goalStatus.js";
-import { syncSubgoalOnTaskDone, readTaskGoalMeta } from "../../../goal/subgoalSync.js";
+import { syncSubgoalOnTaskDone, syncSubgoalOnTaskStatus, readTaskGoalMeta } from "../../../goal/subgoalSync.js";
 
 // ── Helpers ───────────────────────────────────────────────────────
 
@@ -52,6 +52,40 @@ function writeTaskStatus(
 // ── Tests ─────────────────────────────────────────────────────────
 
 describe("subgoalSync", () => {
+
+  describe("queued task lifecycle", () => {
+    it("moves queued to running only on claim, then to done_by_agent", () => {
+      const { goal_id } = createGoal("repo", "Queued Goal", "desc", tempDir);
+      let status = readGoalStatus(goal_id, tempDir);
+      const added = addSubgoal(status, "Queued subgoal");
+      status = updateSubgoalStatus(added.goalStatus, added.subgoalId, "queued");
+      writeGoalStatus(goal_id, status, tempDir);
+
+      syncSubgoalOnTaskStatus("task-queued-001", { goal_id, subgoal_id: added.subgoalId }, "running", null, tempDir);
+      let current = readGoalStatus(goal_id, tempDir).subgoals[0];
+      assert.equal(current.status, "running");
+      assert.equal(current.last_task_status, "running");
+
+      syncSubgoalOnTaskStatus("task-queued-001", { goal_id, subgoal_id: added.subgoalId }, "done_by_agent", null, tempDir);
+      current = readGoalStatus(goal_id, tempDir).subgoals[0];
+      assert.equal(current.status, "done_by_agent");
+      assert.equal(current.last_task_id, "task-queued-001");
+    });
+
+    it("moves queued or running failures to needs_fix with bounded metadata", () => {
+      const { goal_id } = createGoal("repo", "Failed Goal", "desc", tempDir);
+      let status = readGoalStatus(goal_id, tempDir);
+      const added = addSubgoal(status, "Queued subgoal");
+      status = updateSubgoalStatus(added.goalStatus, added.subgoalId, "queued");
+      writeGoalStatus(goal_id, status, tempDir);
+
+      syncSubgoalOnTaskStatus("task-failed-001", { goal_id, subgoal_id: added.subgoalId }, "failed", "x".repeat(800), tempDir);
+      const current = readGoalStatus(goal_id, tempDir).subgoals[0];
+      assert.equal(current.status, "needs_fix");
+      assert.equal(current.last_task_status, "failed");
+      assert.equal(current.last_task_error?.length, 500);
+    });
+  });
 
   describe("syncSubgoalOnTaskDone", () => {
     it("无 goal_id/subgoal_id 直接返回（向后兼容）", () => {

@@ -1,5 +1,36 @@
 # PatchWarden CHANGELOG
 
+## v1.6.3 (2026-07-26)
+
+### Agent model enforcement and evidence
+
+- Hot-reloaded trusted Agent-only configuration before invocation and failed
+  closed when the configured model did not match the CLI model argument.
+- Added bounded runtime evidence for the effective adapter, model, argument
+  presence, and Agent configuration revision without exposing prompts or
+  credentials.
+- Made Desktop model saves verify the running Core configuration and clearly
+  distinguish applied changes from changes that require a Core restart.
+
+### Task history and Goal orchestration
+
+- Added recoverable task history archive and restore flows, repaired missing
+  legacy terminal evidence without inventing successful results, and excluded
+  archived failures from active warnings and dashboard summaries.
+- Added queued Subgoal state and synchronized watcher claim, completion,
+  failure, cancellation, and reconciliation transitions with the linked Goal.
+- Made `run_task_loop` asynchronous and idempotent while preserving bounded
+  repair iterations, lineage evidence, and single-watcher execution.
+
+### Desktop lifecycle reliability
+
+- Fixed packaged Dashboard restart actions by skipping development builds that
+  are unavailable in the production dependency bundle.
+- Made normal Desktop exit wait for Core, Direct, Tunnel, Watcher, and the
+  owned Control Center to stop before Electron exits.
+- Added regression coverage and real packaged-runtime validation for restart,
+  process ownership, shutdown cleanup, and model-aware Agent invocation.
+
 ## v1.6.2 (2026-07-25)
 
 ### Demo runtime stability

@@ -33,6 +33,7 @@ const include = [
   "ui",
   "PatchWarden.cmd",
   ".gitignore",
+  "CONTRIBUTORS.md",
   "LICENSE",
   "README.md",
   "package-lock.json",
@@ -198,7 +199,7 @@ for (const item of include) {
 pruneForbiddenEntries(releaseDir);
 
 const releaseFiles = listFiles(releaseDir);
-const requiredReleaseEntries = ["package.json", "README.md", "dist/index.js"];
+const requiredReleaseEntries = ["package.json", "README.md", "CONTRIBUTORS.md", "dist/index.js"];
 const missingReleaseEntries = requiredReleaseEntries.filter(
   (entry) => !existsSync(resolve(releaseDir, entry))
 );

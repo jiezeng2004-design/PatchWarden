@@ -1,6 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, join } from "node:path";
-import { getTasksDir, getConfig } from "../../config.js";
+import { getTasksDir, getConfig, sanitizeAgentRuntimeMetadata, type AgentRuntimeMetadata } from "../../config.js";
 import { guardReadPath } from "../../security/pathGuard.js";
 import { guardSensitivePath } from "../../security/sensitiveGuard.js";
 import type { TaskStatus } from "./createTask.js";
@@ -13,6 +13,7 @@ import {
   type WatcherStatusSnapshot,
 } from "../../watcherStatus.js";
 import { isTerminalTaskStatus } from "./taskStates.js";
+import { readTaskHistoryState, type TaskHistoryState } from "./taskHistory.js";
 
 export interface GetTaskStatusOutput {
   task_id: string;
@@ -21,6 +22,7 @@ export interface GetTaskStatusOutput {
   template?: string | null;
   change_policy?: "repo_scoped_changes" | "no_changes";
   agent: string;
+  agent_runtime?: AgentRuntimeMetadata | null;
   workspace_root: string;
   repo_path: string;
   resolved_repo_path: string;
@@ -51,6 +53,7 @@ export interface GetTaskStatusOutput {
   watcher: WatcherStatusSnapshot;
   pending_reason: PendingReason;
   execution_blocked: boolean;
+  history_state: TaskHistoryState;
 }
 
 export function getTaskStatus(taskId: string): GetTaskStatusOutput {
@@ -88,5 +91,7 @@ export function getTaskStatus(taskId: string): GetTaskStatusOutput {
     watcher,
     pending_reason: pendingReason,
     execution_blocked: status.status === "pending" && !watcher.available,
+    history_state: readTaskHistoryState(status as unknown as Record<string, unknown>),
+    agent_runtime: sanitizeAgentRuntimeMetadata(status.agent_runtime),
   };
 }

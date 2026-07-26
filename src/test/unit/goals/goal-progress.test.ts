@@ -41,12 +41,12 @@ afterEach(() => {
 /**
  * 在 {workspaceRoot}/.patchwarden/tasks/{taskId}/status.json 创建任务状态文件。
  */
-function createTestTask(workspaceRoot: string, taskId: string, status: string): void {
+function createTestTask(workspaceRoot: string, taskId: string, status: string, acceptanceStatus?: string): void {
   const taskDir = join(workspaceRoot, ".patchwarden", "tasks", taskId);
   mkdirSync(taskDir, { recursive: true });
   writeFileSync(
     join(taskDir, "status.json"),
-    JSON.stringify({ task_id: taskId, status }),
+    JSON.stringify({ task_id: taskId, status, ...(acceptanceStatus ? { acceptance_status: acceptanceStatus } : {}) }),
     "utf-8"
   );
 }
@@ -133,6 +133,18 @@ describe("goalProgress", () => {
       assert.equal(sub.status, "accepted");
       assert.equal(sub.accepted_at, result.accepted_at);
       assert.equal(status.status, "completed");
+    });
+
+    it("accepts the audit_task contract done_by_agent/accepted and completes the Goal", () => {
+      const { goal_id, subgoal_id } = setupGoalWithSubgoal(tempDir, {
+        subgoalStatus: "done_by_agent",
+        taskIds: ["task-audited-001"],
+      });
+      createTestTask(tempDir, "task-audited-001", "done_by_agent", "accepted");
+
+      const result = acceptSubgoal(goal_id, subgoal_id, tempDir);
+      assert.equal(result.status, "accepted");
+      assert.equal(readGoalStatus(goal_id, tempDir).status, "completed");
     });
 
     it("有未 accepted 的 task（done_by_agent）→ 抛 subgoal_not_ready，detail 含 unaccepted_tasks", () => {

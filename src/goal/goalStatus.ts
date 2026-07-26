@@ -18,6 +18,7 @@ import { redactSensitiveContent } from "../security/contentRedaction.js";
 
 export type SubgoalStatus =
   | "ready"
+  | "queued"
   | "running"
   | "done_by_agent"
   | "accepted"
@@ -38,6 +39,10 @@ export interface Subgoal {
   scope_hints?: string[];
   /** Managed git worktree associated with an isolated subgoal task. */
   worktree_id?: string;
+  last_task_id?: string;
+  last_task_status?: string;
+  last_task_error?: string | null;
+  last_task_updated_at?: string;
 }
 
 export interface GoalStatus {
@@ -55,12 +60,13 @@ export interface GoalStatus {
 // ── 合法状态转换表 ────────────────────────────────────────────────
 
 const LEGAL_TRANSITIONS: Record<SubgoalStatus, SubgoalStatus[]> = {
-  ready: ["running"],
-  running: ["done_by_agent"],
+  ready: ["queued", "running"],
+  queued: ["running", "needs_fix"],
+  running: ["done_by_agent", "needs_fix"],
   done_by_agent: ["accepted", "rejected", "needs_fix"],
   accepted: [],
   rejected: [],
-  needs_fix: ["running"],
+  needs_fix: ["queued", "running"],
 };
 
 // ── 函数实现 ──────────────────────────────────────────────────────

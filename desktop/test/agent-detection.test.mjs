@@ -48,4 +48,19 @@ describe("desktop agent detection", () => {
     assert.equal(result.command, node);
     assert.deepEqual(result.prefixArgs, [entry]);
   });
+
+  it("selects a verified native npm package bin without a Node prefix", () => {
+    const shim = "C:\\Users\\student\\AppData\\Roaming\\npm\\claude.cmd";
+    const node = "C:\\Program Files\\nodejs\\node.exe";
+    const manifest = "C:\\Users\\student\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\package.json";
+    const entry = "C:\\Users\\student\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe";
+    const files = new Set([shim, node, manifest, entry]);
+    const result = selectAgentExecutable("claude", shim, "win32", {
+      nodeOutput: node,
+      fileExists: (path) => files.has(path),
+      readText: () => JSON.stringify({ name: "@anthropic-ai/claude-code", bin: { claude: "bin/claude.exe" } }),
+    });
+    assert.equal(result.command, entry);
+    assert.deepEqual(result.prefixArgs, []);
+  });
 });

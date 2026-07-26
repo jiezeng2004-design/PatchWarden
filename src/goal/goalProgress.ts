@@ -28,6 +28,7 @@ export interface GoalProgressSummary {
   accepted: number;
   rejected: number;
   running: number;
+  queued: number;
   ready: number;
   needs_fix: number;
   done_by_agent: number;
@@ -58,15 +59,18 @@ function resolveTaskStatusPath(taskId: string, workspaceRoot?: string): string {
  * 读取单个任务的 status 字段。
  * 如果 status.json 不存在或无法解析，返回 null（视为未 accepted）。
  */
-function readTaskStatus(taskId: string, workspaceRoot?: string): string | null {
+function readTaskStatus(taskId: string, workspaceRoot?: string): { status: string; acceptance_status: string | null } | null {
   const statusPath = resolveTaskStatusPath(taskId, workspaceRoot);
   if (!existsSync(statusPath)) {
     return null;
   }
   try {
     const raw = readFileSync(statusPath, "utf-8");
-    const parsed = JSON.parse(raw) as { status?: string };
-    return typeof parsed.status === "string" ? parsed.status : null;
+    const parsed = JSON.parse(raw) as { status?: string; acceptance_status?: string };
+    return typeof parsed.status === "string" ? {
+      status: parsed.status,
+      acceptance_status: typeof parsed.acceptance_status === "string" ? parsed.acceptance_status : null,
+    } : null;
   } catch {
     return null;
   }
@@ -121,10 +125,14 @@ export function acceptSubgoal(
   const unacceptedTasks: Array<{ task_id: string; current_status: string }> = [];
   for (const taskId of subgoal.task_ids) {
     const taskStatus = readTaskStatus(taskId, workspaceRoot);
-    if (taskStatus !== "accepted") {
+    const accepted = taskStatus?.status === "accepted"
+      || (taskStatus?.status === "done_by_agent" && taskStatus.acceptance_status === "accepted");
+    if (!accepted) {
       unacceptedTasks.push({
         task_id: taskId,
-        current_status: taskStatus ?? "missing",
+        current_status: taskStatus
+          ? `${taskStatus.status}${taskStatus.acceptance_status ? `/${taskStatus.acceptance_status}` : ""}`
+          : "missing",
       });
     }
   }
@@ -254,6 +262,7 @@ export function summarizeGoalProgress(
   const accepted = subgoals.filter((s) => s.status === "accepted").length;
   const rejected = subgoals.filter((s) => s.status === "rejected").length;
   const running = subgoals.filter((s) => s.status === "running").length;
+  const queued = subgoals.filter((s) => s.status === "queued").length;
   const ready = subgoals.filter((s) => s.status === "ready").length;
   const needsFix = subgoals.filter((s) => s.status === "needs_fix").length;
   const doneByAgent = subgoals.filter((s) => s.status === "done_by_agent").length;
@@ -295,6 +304,7 @@ export function summarizeGoalProgress(
     accepted,
     rejected,
     running,
+    queued,
     ready,
     needs_fix: needsFix,
     done_by_agent: doneByAgent,

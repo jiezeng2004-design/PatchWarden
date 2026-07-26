@@ -5,7 +5,7 @@ import {
   readFileSync,
 } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { getTasksDir, getPlansDir, getConfig, resolveWorkspaceRoot } from "../config.js";
+import { getTasksDir, getPlansDir, getConfig, refreshAgentConfig, resolveWorkspaceRoot } from "../config.js";
 import { guardPath, guardWorkspacePath } from "../security/pathGuard.js";
 import {
   guardTestCommand,
@@ -43,6 +43,7 @@ import { PatchWardenError, errorPayload } from "../errors.js";
 import { ARTIFACT_SCHEMA_VERSION } from "../version.js";
 import { diagnoseAndroidBuild } from "../tools/workspace/androidDoctor.js";
 import { runPostTaskCleanup, type PostTaskCleanupReport } from "./postTaskCleanup.js";
+import { readTaskGoalMeta, syncSubgoalOnTaskStatus } from "../goal/subgoalSync.js";
 import { atomicWriteFileSync, atomicWriteJsonFileSync } from "../utils/atomicFile.js";
 import {
   allowedEnvironmentValues,
@@ -128,6 +129,7 @@ interface TaskContext {
 interface ExecutionState {
   agentResult: ManagedProcessResult | null;
   agentFailureCategory: string | null;
+  agentRuntime: import("../config.js").AgentRuntimeMetadata | null;
   testResult: TestExecutionResult;
   verifyResults: TestExecutionResult[];
   finalStatus: TaskStatus;
@@ -161,15 +163,22 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
 }
 
 async function prepareTask(taskId: string): Promise<TaskContext | TaskRunResult> {
-  const config = getConfig();
-  const tasksDir = getTasksDir(config);
-  const plansDir = getPlansDir(config);
-  const wsRoot = resolveWorkspaceRoot(config);
+  const baseConfig = getConfig();
+  const tasksDir = getTasksDir(baseConfig);
+  const wsRoot = resolveWorkspaceRoot(baseConfig);
   const taskDir = resolve(tasksDir, taskId);
-  guardPath(taskDir, wsRoot, config.tasksDir);
+  guardPath(taskDir, wsRoot, baseConfig.tasksDir);
 
   const statusFile = join(taskDir, "status.json");
   if (!existsSync(statusFile)) throw new Error(`Task not found: "${taskId}"`);
+
+  let config: ReturnType<typeof getConfig>;
+  try {
+    config = refreshAgentConfig();
+  } catch (error) {
+    return failBeforeExecution(taskId, taskDir, `Agent configuration refresh failed: ${errorMessage(error)}`, error);
+  }
+  const plansDir = getPlansDir(config);
 
   const startedAtMs = Date.now();
   const runnerInstanceId = randomUUID().replace(/-/g, "");
@@ -191,6 +200,10 @@ async function prepareTask(taskId: string): Promise<TaskContext | TaskRunResult>
   }
 
   const initialStatus = claim.status;
+  syncSubgoalOnTaskStatus(taskId, {
+    goal_id: typeof initialStatus.goal_id === "string" ? initialStatus.goal_id : null,
+    subgoal_id: typeof initialStatus.subgoal_id === "string" ? initialStatus.subgoal_id : null,
+  }, "running", null, config.workspaceRoot);
   const planId = String(initialStatus.plan_id || "");
   const agentName = String(initialStatus.agent || "");
   const rawRepoPath = String(initialStatus.resolved_repo_path || initialStatus.repo_path || wsRoot);
@@ -272,6 +285,7 @@ async function executeAgent(ctx: TaskContext): Promise<ExecutionState> {
   const state: ExecutionState = {
     agentResult: null,
     agentFailureCategory: null,
+    agentRuntime: null,
     testResult: skippedTest(ctx.testCommand, ctx.repoPath, "Agent did not complete successfully."),
     verifyResults: [],
     finalStatus: "failed",
@@ -284,7 +298,18 @@ async function executeAgent(ctx: TaskContext): Promise<ExecutionState> {
     if (!existsSync(planFile)) throw new Error(`Plan not found: "${ctx.planId}". Save the plan first.`);
     const planContent = readFileSync(planFile, "utf-8");
     const prompt = buildExecutionPrompt(planContent, ctx.repoPath, ctx.testCommand);
-    const invocation = buildAgentInvocation(ctx.agentName, ctx.repoPath, prompt, ctx.config);
+    const invocation = buildAgentInvocation(ctx.agentName, ctx.repoPath, prompt, ctx.config, undefined, {
+      requested_agent: typeof ctx.initialStatus.requested_agent === "string"
+        ? ctx.initialStatus.requested_agent
+        : ctx.agentName,
+      selected_agent: typeof ctx.initialStatus.selected_agent === "string"
+        ? ctx.initialStatus.selected_agent
+        : ctx.agentName,
+      fallback_used: ctx.initialStatus.fallback_used === true,
+    });
+
+    state.agentRuntime = invocation.runtime;
+    updateStatus(ctx.taskDir, { agent_runtime: invocation.runtime });
 
     setTaskPhase(ctx.taskDir, "executing_agent", invocation.commandLabel);
     state.agentResult = await runManagedProcess({
@@ -304,6 +329,8 @@ async function executeAgent(ctx: TaskContext): Promise<ExecutionState> {
     });
 
     const agentResult = state.agentResult;
+    state.agentRuntime = { ...invocation.runtime, exit_code: agentResult.exitCode };
+    updateStatus(ctx.taskDir, { agent_runtime: state.agentRuntime });
     if (agentResult.terminationReason === "canceled" || agentResult.terminationReason === "killed") {
       state.finalStatus = "canceled";
       state.finalError = agentResult.terminationReason === "killed"
@@ -313,12 +340,11 @@ async function executeAgent(ctx: TaskContext): Promise<ExecutionState> {
       state.finalStatus = "timeout";
       state.finalError = `Task timed out after ${ctx.timeoutSeconds} seconds during agent execution.`;
     } else if (agentResult.spawnError) {
+      state.agentFailureCategory = "cli_startup";
       state.finalError = `Agent spawn failed: ${agentResult.spawnError}`;
     } else if (agentResult.exitCode !== 0) {
-      state.agentFailureCategory = classifyAgentFailure(agentResult.stderr);
-      state.finalError = state.agentFailureCategory
-        ? `Agent provider failure (${state.agentFailureCategory}); process exited with code ${agentResult.exitCode}.`
-        : `Agent exited with code ${agentResult.exitCode}.`;
+      state.agentFailureCategory = classifyAgentFailure(`${agentResult.stderr}\n${agentResult.stdout}`);
+      state.finalError = `Agent failure (${state.agentFailureCategory}); process exited with code ${agentResult.exitCode}.`;
     }
   } catch (error) {
     state.lastCaughtError = error;
@@ -629,6 +655,7 @@ function finalizeTask(ctx: TaskContext, state: ExecutionState, evidence: Artifac
       ? "timeout"
       : state.finalStatus === "canceled" ? "canceled" : null,
     agent_failure_category: state.agentFailureCategory,
+    agent_runtime: state.agentRuntime,
     changed_files: changes.changed_files.map(({ path, change }) => ({ path, change })),
     artifact_hygiene_counts: changes.artifact_hygiene.counts,
     artifact_status: artifactStatus,
@@ -661,6 +688,13 @@ function finalizeTask(ctx: TaskContext, state: ExecutionState, evidence: Artifac
     heartbeatAt: finishedAt,
     note: state.finalError || `Task finished with status ${state.finalStatus}.`,
   });
+  syncSubgoalOnTaskStatus(
+    ctx.taskId,
+    readTaskGoalMeta(ctx.taskDir),
+    state.finalStatus,
+    state.finalError,
+    ctx.config.workspaceRoot,
+  );
 
   return { task_id: ctx.taskId, status: state.finalStatus, error: state.finalError };
 }
@@ -695,6 +729,7 @@ function buildResultJson(input: {
       ? "timeout"
       : state.finalStatus === "canceled" ? "canceled" : null,
     agent_failure_category: state.agentFailureCategory,
+    agent_runtime: state.agentRuntime,
     changed_files: changes.changed_files,
     changed_file_groups: {
       source_changes: changedFileGroups.source_changes.length,
@@ -1309,6 +1344,7 @@ function failBeforeExecution(taskId: string, taskDir: string, message: string, c
     out_of_scope_changes: [],
   });
   writeTaskProgress(taskDir, "failed", { note: message });
+  syncSubgoalOnTaskStatus(taskId, readTaskGoalMeta(taskDir), "failed", message, getConfig().workspaceRoot);
   return { task_id: taskId, status: "failed", error: message };
 }
 
@@ -1377,16 +1413,41 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function classifyAgentFailure(stderr: string): string | null {
+export type AgentFailureCategory =
+  | "invalid_arguments"
+  | "authentication"
+  | "rate_limit"
+  | "insufficient_balance"
+  | "model_not_found"
+  | "network"
+  | "cli_startup"
+  | "unknown";
+
+export function classifyAgentFailure(stderr: string): AgentFailureCategory {
   const normalized = stderr.toLowerCase();
-  if (normalized.includes("insufficient balance") || normalized.includes("insufficient credits")) {
-    return "provider_insufficient_balance";
+  if (/unknown (?:option|argument)|invalid (?:option|argument)|usage:|unexpected argument/.test(normalized)) {
+    return "invalid_arguments";
   }
-  if (normalized.includes("unauthorized") || normalized.includes("authentication failed") || normalized.includes("invalid api key")) {
-    return "provider_authentication_failed";
+  if (/err_unknown_file_extension|cannot find module|module_not_found|failed to launch|startup/.test(normalized)) {
+    return "cli_startup";
   }
-  if (normalized.includes("model not found") || normalized.includes("model access") || normalized.includes("permission denied")) {
-    return "provider_model_unavailable";
+  if (normalized.includes("insufficient balance") || normalized.includes("insufficient credits") || normalized.includes("credit balance is too low")) {
+    return "insufficient_balance";
   }
-  return null;
+  if (/unauthorized|authentication failed|invalid api key|not logged in|login required|missing api key/.test(normalized)) {
+    return "authentication";
+  }
+  if (/rate.?limit|too many requests|\b429\b/.test(normalized)) {
+    return "rate_limit";
+  }
+  if (
+    /model not found|unknown model|invalid model|model access|does not have access to (?:the )?model/.test(normalized)
+    || (normalized.includes("selected model") && (normalized.includes("may not exist") || normalized.includes("may not have access")))
+  ) {
+    return "model_not_found";
+  }
+  if (/econnreset|econnrefused|enotfound|etimedout|network|socket hang up|fetch failed|dns/.test(normalized)) {
+    return "network";
+  }
+  return "unknown";
 }

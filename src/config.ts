@@ -1,6 +1,8 @@
 import { readFileSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import { validateWorkspaceRoot } from "./security/workspaceRootGuard.js";
+import { stableJsonStringify } from "./utils/stableJson.js";
 
 // ── Type definitions ──────────────────────────────────────────────
 
@@ -104,6 +106,61 @@ const DEFAULT_CONFIG: PatchWardenConfig = {
 
 let _config: PatchWardenConfig | null = null;
 
+export interface AgentRuntimeMetadata {
+  adapter: string | null;
+  provider: string | null;
+  requested_agent: string;
+  selected_agent: string;
+  effective_model: string | null;
+  agent_config_revision: string;
+  model_argument_present: boolean;
+  fallback_used: boolean;
+  exit_code: number | null;
+}
+
+export interface AgentRuntimeContext {
+  requested_agent?: string | null;
+  selected_agent?: string;
+  fallback_used?: boolean;
+  exit_code?: number | null;
+}
+
+export function sanitizeAgentRuntimeMetadata(value: unknown): AgentRuntimeMetadata | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const revision = typeof record.agent_config_revision === "string"
+    ? record.agent_config_revision.slice(0, 64)
+    : "";
+  if (!/^[a-f0-9]{64}$/i.test(revision)) return null;
+  return {
+    adapter: typeof record.adapter === "string" ? record.adapter.slice(0, 80) : null,
+    provider: typeof record.provider === "string" ? record.provider.slice(0, 80) : null,
+    requested_agent: typeof record.requested_agent === "string" ? record.requested_agent.slice(0, 120) : "",
+    selected_agent: typeof record.selected_agent === "string" ? record.selected_agent.slice(0, 120) : "",
+    effective_model: typeof record.effective_model === "string" ? record.effective_model.slice(0, 200) : null,
+    agent_config_revision: revision,
+    model_argument_present: record.model_argument_present === true,
+    fallback_used: record.fallback_used === true,
+    exit_code: typeof record.exit_code === "number" && Number.isInteger(record.exit_code)
+      ? record.exit_code
+      : null,
+  };
+}
+
+const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$/;
+const KNOWN_AGENT_ADAPTERS = new Set([
+  "codex", "claude", "gemini", "copilot", "qwen", "opencode", "kimi", "aider",
+]);
+const ADAPTER_PROVIDERS: Readonly<Record<string, string>> = Object.freeze({
+  codex: "openai",
+  claude: "anthropic",
+  gemini: "google",
+  copilot: "github",
+  qwen: "qwen",
+  kimi: "moonshot",
+  aider: "aider",
+});
+
 export function loadConfig(configPath?: string): PatchWardenConfig {
   if (_config) return _config;
   return loadConfigInternal(configPath);
@@ -150,6 +207,91 @@ export function getConfig(): PatchWardenConfig {
   return _config;
 }
 
+/**
+ * Reload only trusted Agent registrations for long-running processes.
+ * Runtime paths and policy fields must remain byte-for-byte equivalent after
+ * normalization; those changes still require a full process restart.
+ */
+export function refreshAgentConfig(): PatchWardenConfig {
+  const current = getConfig();
+  const configPath = findActiveConfigPath();
+  if (!configPath) return current;
+
+  let candidate: PatchWardenConfig;
+  try {
+    const rawText = stripBom(readFileSync(configPath, "utf-8"));
+    const raw = JSON.parse(rawText);
+    candidate = normalizeConfig({ ...DEFAULT_CONFIG, ...raw } as PatchWardenConfig);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to refresh Agent config "${configPath}": ${message}`);
+  }
+
+  if (staticConfigFingerprint(candidate) !== staticConfigFingerprint(current)) {
+    throw new Error("Agent config hot reload rejected because non-Agent runtime settings changed; restart PatchWarden Core.");
+  }
+  validateManagedAgentModels(candidate.agents);
+  _config = { ...current, agents: candidate.agents };
+  return _config;
+}
+
+/** Refresh only when the caller holds the currently cached runtime config. */
+export function refreshAgentConfigIfActive(config: PatchWardenConfig): PatchWardenConfig {
+  return config === _config ? refreshAgentConfig() : config;
+}
+
+export function getAgentConfigRevision(config: PatchWardenConfig): string {
+  return createHash("sha256").update(stableJsonStringify(config.agents)).digest("hex");
+}
+
+export function getAgentRuntimeMetadata(
+  agentName: string,
+  config: PatchWardenConfig,
+  context: AgentRuntimeContext = {},
+): AgentRuntimeMetadata {
+  const agent = config.agents[agentName];
+  if (!agent) throw new Error(`Agent "${agentName}" is not configured.`);
+  const adapter = typeof agent.adapter === "string"
+    ? agent.adapter
+    : KNOWN_AGENT_ADAPTERS.has(agentName) ? agentName : null;
+  const modelArgs = agent.args.flatMap((arg, index) =>
+    arg === "--model" || arg === "-m" ? [agent.args[index + 1]] : []
+  ).filter((value): value is string => typeof value === "string" && value.length > 0);
+  const uniqueModelArgs = [...new Set(modelArgs)];
+  const configuredModel = typeof agent.model === "string" && agent.model.trim() ? agent.model.trim() : null;
+
+  if (adapter && uniqueModelArgs.length > 1) {
+    throw new Error(`Managed Agent "${agentName}" has conflicting model arguments.`);
+  }
+  const argumentModel = uniqueModelArgs[0] || null;
+  if (adapter && configuredModel && argumentModel !== configuredModel) {
+    throw new Error(`Managed Agent "${agentName}" model metadata does not match its CLI argument.`);
+  }
+  const effectiveModel = configuredModel || argumentModel;
+  if (effectiveModel && !MODEL_PATTERN.test(effectiveModel)) {
+    throw new Error(`Managed Agent "${agentName}" has an invalid model identifier.`);
+  }
+  return {
+    adapter,
+    provider: resolveAgentProvider(adapter, effectiveModel),
+    requested_agent: String(context.requested_agent ?? agentName).slice(0, 120),
+    selected_agent: String(context.selected_agent || agentName).slice(0, 120),
+    effective_model: effectiveModel,
+    agent_config_revision: getAgentConfigRevision(config),
+    model_argument_present: argumentModel !== null,
+    fallback_used: context.fallback_used === true,
+    exit_code: typeof context.exit_code === "number" && Number.isInteger(context.exit_code)
+      ? context.exit_code
+      : null,
+  };
+}
+
+function resolveAgentProvider(adapter: string | null, model: string | null): string | null {
+  if (model?.includes("/")) return model.split("/", 1)[0].slice(0, 80) || null;
+  if (!adapter) return null;
+  return ADAPTER_PROVIDERS[adapter] || adapter;
+}
+
 /** Resolve workspaceRoot: expand relative paths */
 export function resolveWorkspaceRoot(config: PatchWardenConfig): string {
   return resolve(config.workspaceRoot);
@@ -170,6 +312,26 @@ export function getAssessmentsDir(config: PatchWardenConfig): string {
 
 function stripBom(value: string): string {
   return value.charCodeAt(0) === 0xfeff ? value.slice(1) : value;
+}
+
+function findActiveConfigPath(): string | null {
+  const explicitPath = process.env.PATCHWARDEN_CONFIG;
+  const candidates = explicitPath
+    ? [resolve(explicitPath)]
+    : [resolve(process.cwd(), "patchwarden.config.json"), resolve(process.cwd(), ".patchwarden.json")];
+  return candidates.find((candidate) => existsSync(candidate)) || null;
+}
+
+function staticConfigFingerprint(config: PatchWardenConfig): string {
+  const { agents: _agents, ...staticConfig } = config;
+  return createHash("sha256").update(stableJsonStringify(staticConfig)).digest("hex");
+}
+
+function validateManagedAgentModels(agents: Record<string, AgentConfig>): void {
+  const validationConfig = { agents } as PatchWardenConfig;
+  for (const name of Object.keys(agents)) {
+    getAgentRuntimeMetadata(name, validationConfig);
+  }
 }
 
 function normalizeConfig(config: PatchWardenConfig): PatchWardenConfig {

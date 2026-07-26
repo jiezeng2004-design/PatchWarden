@@ -1,6 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, win32 } from "node:path";
-import { PatchWardenConfig } from "../config.js";
+import {
+  getAgentRuntimeMetadata,
+  refreshAgentConfigIfActive,
+  type AgentRuntimeContext,
+  type AgentRuntimeMetadata,
+  type PatchWardenConfig,
+} from "../config.js";
 import { guardAgentCommand, sanitizePromptArg, type AllowedCommand } from "../security/commandGuard.js";
 import { resolveTrustedExecutable, sanitizeTrustedPath } from "./processSecurity.js";
 
@@ -13,11 +19,17 @@ export interface AgentInvocation {
   promptFilePath?: string;
   environmentVariableNames: string[];
   blockedEnvironmentVariableNames: string[];
+  runtime: AgentRuntimeMetadata;
 }
 
 export interface ResolvedAgentLaunch {
   command: string;
   argsPrefix: string[];
+}
+
+export interface ResolvedConfiguredAgentLaunch {
+  command: string;
+  args: string[];
 }
 
 const KNOWN_AGENT_NPM_PACKAGES: Readonly<Record<string, string>> = Object.freeze({
@@ -73,6 +85,10 @@ export function resolveAgentLaunch(
     pathValue,
     fileExists,
   });
+  if (/\.(?:js|mjs|cjs)$/i.test(resolved)) {
+    const node = resolveTrustedExecutable("node", cwd, { platform, pathValue, fileExists });
+    return { command: node, argsPrefix: [resolved] };
+  }
   if (!/\.(?:cmd|bat|ps1)$/i.test(resolved)) return { command: resolved, argsPrefix: [] };
 
   const packageName = KNOWN_AGENT_NPM_PACKAGES[adapterName] || KNOWN_AGENT_NPM_PACKAGES[agentName];
@@ -102,6 +118,10 @@ export function resolveAgentLaunch(
   if (!relativeCli || relativeCli === ".." || relativeCli.startsWith(`..${win32.sep}`) || win32.isAbsolute(relativeCli) || !fileExists(cliPath)) {
     throw new Error(`npm CLI entry escapes or is missing for Agent "${agentName}"`);
   }
+  if (/\.exe$/i.test(cliPath)) return { command: cliPath, argsPrefix: [] };
+  if (!/\.(?:js|mjs|cjs)$/i.test(cliPath)) {
+    throw new Error(`Unsupported npm CLI entry extension for Agent "${agentName}": ${win32.extname(cliPath) || "none"}`);
+  }
   const node = resolveTrustedExecutable("node", cwd, { platform, pathValue, fileExists });
   return { command: node, argsPrefix: [cliPath] };
 }
@@ -117,6 +137,40 @@ function resolvePackageBin(bin: unknown, names: readonly string[]): string | nul
   return values.length === 1 ? values[0] : null;
 }
 
+export function resolveConfiguredNativeAgentLaunch(
+  agentName: string,
+  adapterName: string,
+  command: string,
+  args: readonly string[],
+  platform = process.platform,
+  fileExists: (path: string) => boolean = existsSync,
+  readText: (path: string) => string = (path) => readFileSync(path, "utf-8"),
+): ResolvedConfiguredAgentLaunch | null {
+  if (platform !== "win32" || !/^node(?:\.exe)?$/i.test(win32.basename(command))) return null;
+  const native = args[0];
+  const packageName = KNOWN_AGENT_NPM_PACKAGES[adapterName] || KNOWN_AGENT_NPM_PACKAGES[agentName];
+  if (!packageName || typeof native !== "string" || !win32.isAbsolute(native) || !/\.exe$/i.test(native)) return null;
+  const marker = `${win32.sep}node_modules${win32.sep}`;
+  const markerIndex = native.toLowerCase().indexOf(marker.toLowerCase());
+  if (markerIndex < 0) return null;
+  const modulesRoot = native.slice(0, markerIndex + marker.length - 1);
+  const packageRoot = win32.resolve(modulesRoot, ...packageName.split("/"));
+  const relativeNative = win32.relative(packageRoot, native);
+  if (!relativeNative || relativeNative === ".." || relativeNative.startsWith(`..${win32.sep}`) || !fileExists(native)) return null;
+  const manifestPath = win32.join(packageRoot, "package.json");
+  if (!fileExists(manifestPath)) return null;
+  let manifest: { name?: unknown; bin?: unknown };
+  try {
+    manifest = JSON.parse(readText(manifestPath)) as { name?: unknown; bin?: unknown };
+  } catch {
+    return null;
+  }
+  const declaredBin = resolvePackageBin(manifest.bin, [agentName, adapterName]);
+  if (manifest.name !== packageName || !declaredBin) return null;
+  if (win32.resolve(packageRoot, declaredBin).toLowerCase() !== win32.resolve(native).toLowerCase()) return null;
+  return { command: native, args: [...args.slice(1)] };
+}
+
 /**
  * Build agent invocation parameters from config.
  * Replaces {repo}, {prompt}, and {prompt_file} placeholders.
@@ -127,29 +181,43 @@ export function buildAgentInvocation(
   repoPath: string,
   prompt: string,
   config: PatchWardenConfig,
-  promptFilePath?: string
+  promptFilePath?: string,
+  runtimeContext: AgentRuntimeContext = {},
 ): AgentInvocation {
-  const agentCmd = guardAgentCommand(agentName, config);
-  const launch = resolveAgentLaunch(
+  const runtimeConfig = refreshAgentConfigIfActive(config);
+  const agentCmd = guardAgentCommand(agentName, runtimeConfig);
+  const runtime = getAgentRuntimeMetadata(agentName, runtimeConfig, runtimeContext);
+  if (runtime.effective_model && !runtime.model_argument_present) {
+    throw new Error(`Agent "${agentName}" model override is not present in the configured CLI arguments.`);
+  }
+  const configuredNative = resolveConfiguredNativeAgentLaunch(
+    agentName,
+    runtimeConfig.agents[agentName]?.adapter || agentName,
+    agentCmd.command,
+    agentCmd.args,
+  );
+  assertConfiguredNodeLaunch(agentName, agentCmd.command, agentCmd.args, configuredNative);
+  const launch = configuredNative ? { command: configuredNative.command, argsPrefix: [] } : resolveAgentLaunch(
     agentName,
     agentCmd.command,
     process.platform,
     process.env.PATH || "",
     existsSync,
     repoPath,
-    config.agents[agentName]?.adapter || agentName,
+    runtimeConfig.agents[agentName]?.adapter || agentName,
   );
-  const environmentVariableNames = [...(config.agents[agentName]?.envAllowlist ?? [])];
+  const configuredArgs = configuredNative ? configuredNative.args : agentCmd.args;
+  const environmentVariableNames = [...(runtimeConfig.agents[agentName]?.envAllowlist ?? [])];
   const blockedEnvironmentVariableNames = [
     "CONTROL_PLANE_API_KEY",
-    config.http?.ownerTokenEnv || "PATCHWARDEN_OWNER_TOKEN",
+    runtimeConfig.http?.ownerTokenEnv || "PATCHWARDEN_OWNER_TOKEN",
   ];
   const sanitizedPrompt = sanitizePromptArg(prompt);
 
-  const hasPromptFilePlaceholder = agentCmd.args.includes("{prompt_file}");
+  const hasPromptFilePlaceholder = configuredArgs.includes("{prompt_file}");
   const promptMode: "inline" | "file" = hasPromptFilePlaceholder && promptFilePath ? "file" : "inline";
 
-  const resolvedArgs = agentCmd.args.map((arg) => {
+  const resolvedArgs = configuredArgs.map((arg) => {
     if (arg === "{repo}") return repoPath;
     if (arg === "{prompt}") return sanitizedPrompt;
     if (arg === "{prompt_file}" && promptMode === "file" && promptFilePath) return promptFilePath;
@@ -164,8 +232,27 @@ export function buildAgentInvocation(
     promptMode,
     environmentVariableNames,
     blockedEnvironmentVariableNames,
+    runtime,
     ...(promptMode === "file" && promptFilePath ? { promptFilePath } : {}),
   };
+}
+
+export function assertConfiguredNodeLaunch(
+  agentName: string,
+  command: string,
+  args: readonly string[],
+  configuredNative: ResolvedConfiguredAgentLaunch | null,
+  platform = process.platform,
+): void {
+  if (platform !== "win32" || !/^node(?:\.exe)?$/i.test(win32.basename(command))) return;
+  const entry = args[0];
+  if (typeof entry !== "string") return;
+  if (/\.(?:exe|cmd|bat)$/i.test(entry) && !configuredNative) {
+    throw new Error(`Agent "${agentName}" is configured to load ${win32.extname(entry)} through Node; use the verified native executable directly.`);
+  }
+  if (/\.[a-z0-9]+$/i.test(entry) && !/\.(?:js|mjs|cjs)$/i.test(entry) && !configuredNative) {
+    throw new Error(`Agent "${agentName}" has an unsupported Node entry extension: ${win32.extname(entry)}`);
+  }
 }
 
 /**

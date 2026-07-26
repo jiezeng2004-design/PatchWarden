@@ -52,6 +52,15 @@ for (const requiredPath of [
   }
 }
 
+const stagedPackage = JSON.parse(readFileSync(join(coreStage, "package.json"), "utf8"));
+const stagedVersionSource = readFileSync(join(coreStage, "dist", "version.js"), "utf8");
+const stagedRuntimeVersion = stagedVersionSource.match(/PATCHWARDEN_VERSION\s*=\s*["']([^"']+)["']/)?.[1] || null;
+if (stagedPackage.version !== rootPackage.version || stagedRuntimeVersion !== rootPackage.version) {
+  throw new Error(
+    `Staged Core version mismatch: package=${stagedPackage.version || "missing"}, runtime=${stagedRuntimeVersion || "missing"}, expected=${rootPackage.version}`,
+  );
+}
+
 const png = createIconPng();
 writeFileSync(join(stageRoot, "icon.png"), png);
 writeFileSync(join(stageRoot, "icon.ico"), wrapPngAsIco(png));
