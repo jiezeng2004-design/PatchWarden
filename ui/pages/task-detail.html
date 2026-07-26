@@ -401,6 +401,7 @@ html.dark {
               </div>
               <dl class="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
                 <div class="flex flex-col gap-0.5 min-w-0"><dt style="color: var(--pw-text-tertiary);">terminal</dt><dd id="srTerminal" class="truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">—</dd></div>
+                <div class="flex flex-col gap-0.5 min-w-0"><dt style="color: var(--pw-text-tertiary);">history_state</dt><dd id="srHistory" class="truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">active</dd></div>
                 <div class="flex flex-col gap-0.5 min-w-0"><dt style="color: var(--pw-text-tertiary);">acceptance_status</dt><dd id="srAcceptance" class="truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">—</dd></div>
                 <div class="flex flex-col gap-0.5 min-w-0"><dt style="color: var(--pw-text-tertiary);">changed_files_total</dt><dd id="srChangedTotal" class="truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">—</dd></div>
                 <div class="flex flex-col gap-0.5 min-w-0"><dt style="color: var(--pw-text-tertiary);">out_of_scope_changes_total</dt><dd id="srOosTotal" class="truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">—</dd></div>
@@ -424,6 +425,10 @@ html.dark {
               <div id="srWarningsBlock" class="hidden flex flex-col gap-1 min-w-0">
                 <span class="text-xs font-medium" style="color: var(--pw-state-warning);">warnings</span>
                 <pre id="srWarnings" class="rounded-md p-2 text-xs leading-relaxed whitespace-pre-wrap break-all" style="background-color: var(--pw-state-warning-bg); color: var(--pw-state-warning); font-family: var(--pw-font-mono); max-height: 160px; overflow-y: auto;"></pre>
+              </div>
+              <div id="srInformationBlock" class="hidden flex flex-col gap-1 min-w-0">
+                <span class="text-xs font-medium" style="color: var(--pw-state-info);">information</span>
+                <pre id="srInformation" class="rounded-md p-2 text-xs leading-relaxed whitespace-pre-wrap break-all" style="background-color: var(--pw-state-info-bg); color: var(--pw-state-info); font-family: var(--pw-font-mono); max-height: 160px; overflow-y: auto;"></pre>
               </div>
             </div>
 
@@ -774,6 +779,7 @@ html.dark {
         applyBadgeColors($('srStatusBadge'), getStatusMeta(sr.status).color);
 
         text($('srTerminal'), sr.terminal ? 'true' : 'false');
+        text($('srHistory'), sr.history_state || 'active');
         text($('srAcceptance'), sr.acceptance_status || '—');
         text($('srChangedTotal'), sr.changed_files_total != null ? String(sr.changed_files_total) : '—');
         text($('srOosTotal'), sr.out_of_scope_changes_total != null ? String(sr.out_of_scope_changes_total) : '—');
@@ -803,6 +809,12 @@ html.dark {
           show($('srWarningsBlock'));
         } else {
           hide($('srWarningsBlock'));
+        }
+        if (Array.isArray(sr.information) && sr.information.length > 0) {
+          $('srInformation').textContent = sr.information.join('\n');
+          show($('srInformationBlock'));
+        } else {
+          hide($('srInformationBlock'));
         }
       }
 

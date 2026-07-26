@@ -55,6 +55,7 @@ if (leaked.length > 0) {
 }
 
 const required = [
+  "CONTRIBUTORS.md",
   "dist/index.js",
   "dist/index.d.ts",
   "PatchWarden.cmd",

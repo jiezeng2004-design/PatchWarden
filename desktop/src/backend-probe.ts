@@ -6,6 +6,7 @@ export type ProbeResult =
   | { readonly kind: "patchwarden"; readonly version: string }
   | { readonly kind: "foreign"; readonly version: null }
   | { readonly kind: "absent"; readonly version: null }
+  | { readonly kind: "outdated_patchwarden"; readonly version: string }
   | { readonly kind: "mismatched_patchwarden"; readonly version: string };
 
 /** Minimal fetch-like implementation used by probeControlCenter. */
@@ -22,6 +23,7 @@ export async function probeControlCenter(
   fetchImpl: ProbeFetchImpl,
   baseUrl: string = "http://127.0.0.1:8090",
   expectedConfigPath: string | null = null,
+  expectedVersion: string | null = null,
 ): Promise<ProbeResult> {
   try {
     const response = await fetchImpl(`${baseUrl}/api/diagnostics`);
@@ -31,6 +33,9 @@ export async function probeControlCenter(
     if (body && typeof body.server_version === "string" && body.server_version.length > 0) {
       if (expectedConfigPath && body.config_identity_sha256 !== configIdentity(expectedConfigPath)) {
         return { kind: "mismatched_patchwarden", version: body.server_version };
+      }
+      if (expectedVersion && body.server_version !== expectedVersion) {
+        return { kind: "outdated_patchwarden", version: body.server_version };
       }
       return { kind: "patchwarden", version: body.server_version };
     }

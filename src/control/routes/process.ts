@@ -64,7 +64,7 @@ function runManageAction(action: string, mode: string): Promise<ManageResult> {
       const command = resolveTrustedExecutable("powershell.exe", projectRoot, { pathValue: env.PATH });
       child = spawn(
         command,
-        ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", manageScriptPath, action, mode, "-Background"],
+        buildManageArguments(action, mode),
         { cwd: projectRoot, windowsHide: true, env }
       );
     } catch (err) {
@@ -103,6 +103,22 @@ function runManageAction(action: string, mode: string): Promise<ManageResult> {
       });
     });
   });
+}
+
+export function buildManageArguments(action: string, mode: string): string[] {
+  return [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    manageScriptPath,
+    action,
+    mode,
+    "-Background",
+    // Control Center manages an already-built runtime. Rebuilding during a
+    // restart fails in packaged Desktop because devDependencies are absent.
+    "-SkipBuild",
+  ];
 }
 
 export function resolveManageProfiles(mode: string, action: string, directEnabled: boolean): { selected: ControlMode[]; skipped: ControlMode[] } {

@@ -84,8 +84,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   // All POST routes in the table declare `requiresToken: true`; the body is
   // drained up-front so HTTP keep-alive connections stay clean even when the
   // route is unknown (preserving the original handleRequest behavior).
+  let requestBody: unknown | null = null;
   if (method === "POST") {
-    await readBody(req);
+    requestBody = await readBody(req);
     if (!checkControlToken(req)) {
       sendJson(res, 403, { error: "Missing or invalid control token" });
       return;
@@ -95,7 +96,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   // ── Declarative route table dispatch ──
   // Filter by method → match pattern (in declaration order, so specific
   // patterns win over generic `:id`) → call handler with capture-group slice.
-  const routes = buildRoutes(parsedUrl);
+  const routes = buildRoutes(parsedUrl, requestBody);
   for (const route of routes) {
     if (route.method !== method) continue;
     const match = pathname.match(route.pattern);

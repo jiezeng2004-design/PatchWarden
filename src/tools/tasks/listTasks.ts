@@ -12,6 +12,7 @@ import {
   type WatcherStatusSnapshot,
 } from "../../watcherStatus.js";
 import { isActiveTaskStatus } from "./taskStates.js";
+import { readTaskHistoryState, type TaskHistoryState } from "./taskHistory.js";
 
 export interface TaskEntry {
   task_id: string;
@@ -34,6 +35,7 @@ export interface TaskEntry {
   timeout_seconds: number;
   pending_reason: PendingReason;
   watcher_status: WatcherState;
+  history_state: TaskHistoryState;
 }
 
 export interface ListTasksInput {
@@ -42,6 +44,7 @@ export interface ListTasksInput {
   active_only?: boolean;
   acceptance_status?: string;
   limit?: number;
+  history_state?: TaskHistoryState | "all";
 }
 
 export interface ListTasksOutput {
@@ -60,6 +63,7 @@ export function listTasks(input?: ListTasksInput): ListTasksOutput {
   const filterAcceptance = input?.acceptance_status || null;
   const filterRepo = input?.repo_path?.trim().replace(/\\/g, "/") || null;
   const watcher = readWatcherStatus(config);
+  const historyState = input?.history_state || "active";
 
   if (!existsSync(tasksDir)) {
     return { tasks: [], total: 0, returned: 0, watcher };
@@ -91,6 +95,8 @@ export function listTasks(input?: ListTasksInput): ListTasksOutput {
     try {
       const data = JSON.parse(readFileSync(statusFile, "utf-8"));
       const runtime = readTaskRuntime(taskDir);
+      const taskHistoryState = readTaskHistoryState(data);
+      if (historyState !== "all" && taskHistoryState !== historyState) continue;
       if (filterStatus && data.status !== filterStatus) continue;
       if (filterAcceptance) {
         const taskAcceptance = data.status === "done_by_agent"
@@ -144,6 +150,7 @@ export function listTasks(input?: ListTasksInput): ListTasksOutput {
         timeout_seconds: data.timeout_seconds || config.defaultTaskTimeoutSeconds,
         pending_reason: derivePendingReason({ status: data.status, phase }, watcher),
         watcher_status: watcher.status,
+        history_state: taskHistoryState,
       });
     } catch {
       // skip corrupted entries

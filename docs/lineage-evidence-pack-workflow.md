@@ -32,8 +32,12 @@ Lineage 记录整条循环的因果链，Evidence Pack 把通过验收的 lineag
 - `agent="auto"` — 让 PatchWarden 自动路由到合适的 agent
 - `scope_files` — 路由提示
 - `isolation_mode="worktree"` — 可选的 git worktree 隔离
+- `request_id` — 8–128 位幂等键；重试时保持参数不变并复用该值
 
-循环结束后会生成一条 lineage 记录。
+默认调用在主任务创建后立即返回 `request_id`、`lineage_id` 和主 `task_id`，
+Core 在后台继续循环。先用 `wait_for_task(task_id)` 等待主任务，再用
+`get_task_lineage(lineage_id)` 读取最新循环状态。仅在本地 transport 超时足够长时设置
+`wait_for_completion=true` 同步等待。循环状态持续写入同一条 lineage 记录。
 
 ### 2. 在 Dashboard 查看 Lineage 状态
 

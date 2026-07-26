@@ -170,4 +170,43 @@ describe("getTaskSummary", () => {
     assert.equal(result.phase, "executing_agent");
     assert.equal(result.acceptance_status, "pending");
   });
+
+  it("separates informational evidence and bounds Agent runtime metadata", () => {
+    const taskDir = writeTaskStatus("task-bounded-runtime", baseStatus("task-bounded-runtime", {
+      status: "done_by_agent",
+      phase: "done_by_agent",
+      agent_runtime: {
+        adapter: "opencode",
+        provider: "provider",
+        requested_agent: "auto",
+        selected_agent: "opencode",
+        effective_model: "provider/model",
+        agent_config_revision: "a".repeat(64),
+        model_argument_present: true,
+        fallback_used: true,
+        exit_code: 1,
+        args: ["--model", "secret-value"],
+      },
+    }));
+    writeFileSync(join(taskDir, "result.json"), JSON.stringify({
+      warnings: [
+        "repository is not a Git worktree; diff will contain file-change evidence only",
+        "Pre-existing external dirty files (not caused by this task): 2 file(s)",
+        "actionable warning",
+      ],
+    }), "utf-8");
+
+    const result = getTaskSummary("task-bounded-runtime");
+    assert.deepEqual(result.information, [
+      "repository is not a Git worktree; diff will contain file-change evidence only",
+      "Pre-existing external dirty files (not caused by this task): 2 file(s)",
+    ]);
+    assert.ok(result.warnings.includes("actionable warning"));
+    assert.equal("args" in (result.agent_runtime || {}), false);
+    assert.equal(result.agent_runtime?.effective_model, "provider/model");
+    assert.equal(result.agent_runtime?.requested_agent, "auto");
+    assert.equal(result.agent_runtime?.selected_agent, "opencode");
+    assert.equal(result.agent_runtime?.fallback_used, true);
+    assert.equal(result.agent_runtime?.exit_code, 1);
+  });
 });

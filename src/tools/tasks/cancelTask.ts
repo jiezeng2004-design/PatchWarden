@@ -6,6 +6,7 @@ import { writeTaskProgress } from "../../runner/taskProgress.js";
 import { mutateTaskStatus } from "../../runner/taskStatusStore.js";
 import type { TaskStatus } from "./createTask.js";
 import { isTerminalTaskStatus } from "./taskStates.js";
+import { readTaskGoalMeta, syncSubgoalOnTaskStatus } from "../../goal/subgoalSync.js";
 
 export interface TaskTerminationResponse {
   task_id: string;
@@ -105,6 +106,15 @@ export function requestTaskTermination(taskId: string, force: boolean) {
       note: outcome.progress.note,
       heartbeatAt: now,
     });
+  }
+  if (outcome.response.new_status === "canceled") {
+    syncSubgoalOnTaskStatus(
+      taskId,
+      readTaskGoalMeta(taskDir),
+      "canceled",
+      outcome.progress?.note || outcome.response.message,
+      config.workspaceRoot,
+    );
   }
   return outcome.response;
 }

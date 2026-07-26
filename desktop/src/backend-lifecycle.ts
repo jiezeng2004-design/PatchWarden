@@ -4,6 +4,27 @@ export interface BackendChild {
   off?(event: "exit", listener: () => void): unknown;
 }
 
+export interface QuitCleanupCoordinator {
+  isComplete(): boolean;
+  run(): Promise<void>;
+}
+
+export function createQuitCleanupCoordinator(
+  cleanup: () => Promise<void>,
+): QuitCleanupCoordinator {
+  let cleanupPromise: Promise<void> | null = null;
+  let complete = false;
+  return {
+    isComplete: () => complete,
+    run: () => {
+      if (!cleanupPromise) {
+        cleanupPromise = cleanup().finally(() => { complete = true; });
+      }
+      return cleanupPromise;
+    },
+  };
+}
+
 export async function stopBackendChild(
   child: BackendChild,
   timeoutMs: number = 5000,

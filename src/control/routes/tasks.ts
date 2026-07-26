@@ -25,6 +25,7 @@ import {
   TERMINAL_TASK_STATUSES,
 } from "../runtime.js";
 import { config, errorMessage, guardControlPath, readJsonFileSafe, readTextFileSafe, sendJson } from "../shared.js";
+import type { TaskHistoryState } from "../../tools/tasks/taskHistory.js";
 
 export interface TaskFilters {
   repo_path?: string;
@@ -36,11 +37,15 @@ export interface TaskFilters {
   date_to?: string;
   limit?: number;
   cursor?: string;
+  history_state?: string;
 }
 
 export function handleTasks(res: ServerResponse, filters?: TaskFilters): void {
   try {
-    const result = listTasks({ limit: 100 });
+    const historyState: TaskHistoryState | "all" = filters?.history_state === "archived" || filters?.history_state === "all"
+      ? filters.history_state
+      : "active";
+    const result = listTasks({ limit: 100, history_state: historyState });
     const watcher = result.watcher;
     const now = Date.now();
     let augmented = result.tasks.map((t) => augmentTaskWithStale(t, watcher, now));
@@ -119,6 +124,7 @@ export function handleTasks(res: ServerResponse, filters?: TaskFilters): void {
           warning_type: filters?.warning_type || null,
           date_from: filters?.date_from || null,
           date_to: filters?.date_to || null,
+          history_state: historyState,
         },
         options: facets,
       },

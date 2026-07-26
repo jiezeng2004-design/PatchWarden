@@ -92,11 +92,16 @@ safety boundaries and complete evidence.
 7. Changes remain uncommitted for review; commit, push, and publish are outside
    the ordinary task scope.
 
-For routine guarded work, `run_task_loop` can perform the assess-only preflight,
-task creation, waiting, safe summary review, audit, and bounded `fix_tests`
-follow-up cycle in one tool call. It still uses the existing Watcher and
-allow-listed verification commands, stops at local confirmation boundaries, and
-returns a `lineage_id` for `get_task_lineage` instead of full logs or diffs.
+For routine guarded work, `run_task_loop` starts the assess-only preflight,
+task creation, safe summary review, audit, and bounded `fix_tests` follow-up
+cycle. By default it returns `request_id`, `lineage_id`, and the main `task_id`
+as soon as the task is created while Core continues the loop. Call
+`wait_for_task(task_id)` and then `get_task_lineage(lineage_id)` instead of
+holding the transport open. Reuse the same `request_id` with identical inputs
+on retry; PatchWarden returns the existing lineage instead of creating a
+duplicate. `wait_for_completion=true` is a local/debug compatibility option.
+The loop still uses the existing Watcher and allow-listed verification commands,
+stops at local confirmation boundaries, and never returns full logs or diffs.
 
 For v1.4 Direct-assisted verification, set `direct_verify=true` only when the
 local Direct profile is enabled and the desired Direct verification commands are

@@ -148,6 +148,9 @@ function resolveNpmEntry(
     const entry = resolve(packageRoot, binField);
     const rel = relative(packageRoot, entry);
     if (!rel || rel.startsWith("..") || isAbsolute(rel) || !isFile(entry, fileExists)) return null;
+    if (extname(entry).toLowerCase() === ".exe") {
+      return { command: entry, prefixArgs: [], source: "npm-native" };
+    }
     return { command: nodePath, prefixArgs: [entry], source: "npm-package" };
   } catch {
     return null;

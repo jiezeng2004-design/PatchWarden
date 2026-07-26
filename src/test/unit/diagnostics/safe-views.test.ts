@@ -55,6 +55,18 @@ describe("safeViews", () => {
       repo_path: "repo",
       resolved_repo_path: join(tempDir, "repo"),
       verify_status: "passed",
+      agent_runtime: {
+        adapter: "opencode",
+        provider: "agnes",
+        requested_agent: "auto",
+        selected_agent: "opencode",
+        effective_model: "agnes/agnes-2.0-flash",
+        agent_config_revision: "a".repeat(64),
+        model_argument_present: true,
+        fallback_used: true,
+        exit_code: 0,
+        args: ["--model", "must-not-leak"],
+      },
     }), "utf-8");
     writeFileSync(join(taskDir, "result.json"), JSON.stringify({
       task_id: taskId,
@@ -80,8 +92,9 @@ describe("safeViews", () => {
     writeFileSync(join(taskDir, "git.diff"), "SECRET_DIFF", "utf-8");
     writeFileSync(join(taskDir, "test.log"), "SECRET_TEST_LOG", "utf-8");
 
+    const result = safeResult(taskId);
     const payload = JSON.stringify({
-      result: safeResult(taskId),
+      result,
       tests: safeTestSummary(taskId),
       diff: safeDiffSummary(taskId),
     });
@@ -89,7 +102,19 @@ describe("safeViews", () => {
     assert.ok(!payload.includes("SECRET_STDERR"));
     assert.ok(!payload.includes("SECRET_DIFF"));
     assert.ok(!payload.includes("SECRET_TEST_LOG"));
+    assert.ok(!payload.includes("must-not-leak"));
     assert.ok(payload.includes("src/index.ts"));
+    assert.deepEqual(result.agent_runtime, {
+      adapter: "opencode",
+      provider: "agnes",
+      requested_agent: "auto",
+      selected_agent: "opencode",
+      effective_model: "agnes/agnes-2.0-flash",
+      agent_config_revision: "a".repeat(64),
+      model_argument_present: true,
+      fallback_used: true,
+      exit_code: 0,
+    });
   });
 
   it("treats corrupted safe-view JSON artifacts as empty summaries", () => {

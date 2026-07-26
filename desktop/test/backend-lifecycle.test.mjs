@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, it } from "node:test";
 import {
+  createQuitCleanupCoordinator,
   createSerializedRestartScheduler,
   stopBackendChild,
 } from "../dist/backend-lifecycle.js";
@@ -44,5 +45,24 @@ describe("desktop backend lifecycle", () => {
     releaseFirst();
     await Promise.all([first, second]);
     assert.equal(restarts, 2);
+  });
+
+  it("runs quit cleanup once and marks it complete before the second quit", async () => {
+    let cleanups = 0;
+    let releaseCleanup;
+    const cleanupGate = new Promise((resolveGate) => { releaseCleanup = resolveGate; });
+    const coordinator = createQuitCleanupCoordinator(async () => {
+      cleanups += 1;
+      await cleanupGate;
+    });
+
+    const first = coordinator.run();
+    const second = coordinator.run();
+    assert.equal(coordinator.isComplete(), false);
+    assert.equal(cleanups, 1);
+    releaseCleanup();
+    await Promise.all([first, second]);
+    assert.equal(coordinator.isComplete(), true);
+    assert.equal(cleanups, 1);
   });
 });

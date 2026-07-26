@@ -14,6 +14,10 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import { reloadConfig } from "../../../config.js";
 import { classifyAgentFailure, runTask } from "../../../runner/runTask.js";
 import { cancelTask } from "../../../tools/tasks/cancelTask.js";
+import { auditTask } from "../../../tools/diagnostics/auditTask.js";
+import { acceptSubgoal } from "../../../goal/goalProgress.js";
+import { createGoal, readGoalStatus, writeGoalStatus } from "../../../goal/goalStore.js";
+import { addSubgoal, linkTaskToSubgoal, updateSubgoalStatus } from "../../../goal/goalStatus.js";
 
 describe("runTask claim", () => {
   let root: string;
@@ -91,7 +95,7 @@ describe("runTask claim", () => {
     const second = runTask("task-claim-race");
     const results = await Promise.all([first, second]);
 
-    assert.equal(results.filter((result) => result.status === "done_by_agent").length, 1);
+    assert.equal(results.filter((result) => result.status === "done_by_agent").length, 1, JSON.stringify(results));
     assert.equal(results.filter((result) => result.error?.includes("only pending tasks")).length, 1);
     assert.equal(readFileSync(marker, "utf-8"), "run\n");
     assert.equal(JSON.parse(readFileSync(join(taskDir, "status.json"), "utf-8")).status, "done_by_agent");
@@ -114,6 +118,27 @@ describe("runTask claim", () => {
     assert.equal(existsSync(join(taskDir, "result.json")), false);
   });
 
+  it("moves a queued subgoal to needs_fix when its pending task is canceled", () => {
+    const { goal_id: goalId } = createGoal("repo", "Canceled queued task", "fixture", root);
+    const initial = readGoalStatus(goalId, root);
+    const added = addSubgoal(initial, "Queued work");
+    const queued = updateSubgoalStatus(
+      linkTaskToSubgoal(added.goalStatus, added.subgoalId, "task-canceled-subgoal"),
+      added.subgoalId,
+      "queued",
+    );
+    writeGoalStatus(goalId, queued, root);
+    writeGoalTask("task-canceled-subgoal", "fixture", goalId, added.subgoalId);
+
+    const canceled = cancelTask("task-canceled-subgoal");
+
+    assert.equal(canceled.new_status, "canceled");
+    const subgoal = readGoalStatus(goalId, root).subgoals[0];
+    assert.equal(subgoal.status, "needs_fix");
+    assert.equal(subgoal.last_task_status, "canceled");
+    assert.equal(subgoal.last_task_id, "task-canceled-subgoal");
+  });
+
   it("converges a running agent to the timeout terminal state", { timeout: 20_000 }, async () => {
     const hangScript = `require("node:fs").appendFileSync(${JSON.stringify(marker)}, "run\\n"); setInterval(() => {}, 1000);`;
     writeAgentConfig(hangScript);
@@ -123,7 +148,7 @@ describe("runTask claim", () => {
     const startedAt = Date.now();
     const result = await runTask("task-agent-timeout");
 
-    assert.equal(result.status, "timeout");
+    assert.equal(result.status, "timeout", result.error || "missing error");
     assert.ok(Date.now() - startedAt < 18_000, "timeout cleanup must remain bounded");
     const status = JSON.parse(readFileSync(join(taskDir, "status.json"), "utf-8"));
     assert.equal(status.status, "timeout");
@@ -154,8 +179,96 @@ describe("runTask claim", () => {
   });
 
   it("classifies provider readiness failures without exposing provider details", () => {
-    assert.equal(classifyAgentFailure("Error: Insufficient balance. Manage billing."), "provider_insufficient_balance");
-    assert.equal(classifyAgentFailure("Authentication failed: invalid API key"), "provider_authentication_failed");
-    assert.equal(classifyAgentFailure("ordinary non-zero exit"), null);
+    assert.equal(classifyAgentFailure("Error: Insufficient balance. Manage billing."), "insufficient_balance");
+    assert.equal(classifyAgentFailure("Authentication failed: invalid API key"), "authentication");
+    assert.equal(classifyAgentFailure("429 rate limit exceeded"), "rate_limit");
+    assert.equal(classifyAgentFailure("Unknown option --bad"), "invalid_arguments");
+    assert.equal(classifyAgentFailure("ERR_UNKNOWN_FILE_EXTENSION .exe"), "cli_startup");
+    assert.equal(classifyAgentFailure("model not found"), "model_not_found");
+    assert.equal(classifyAgentFailure("There's an issue with the selected model. It may not exist or you may not have access to it."), "model_not_found");
+    assert.equal(classifyAgentFailure("fetch failed ECONNRESET"), "network");
+    assert.equal(classifyAgentFailure("ordinary non-zero exit"), "unknown");
   });
+
+  it("classifies provider failures written only to Agent stdout", async () => {
+    writeAgentConfig(`process.stdout.write("There's an issue with the selected model. It may not exist or you may not have access to it."); process.exit(1);`);
+    reloadConfig(configPath);
+    const taskDir = writePendingTask("task-provider-stdout");
+
+    const result = await runTask("task-provider-stdout");
+    const status = JSON.parse(readFileSync(join(taskDir, "status.json"), "utf-8"));
+
+    assert.equal(result.status, "failed");
+    assert.equal(status.agent_failure_category, "model_not_found");
+    assert.match(result.error || "", /model_not_found/);
+  });
+
+  it("completes two queued subgoals with two deterministic Agents in serial", { timeout: 30_000 }, async () => {
+    writeFileSync(join(repo, "main.js"), "export const ready = true;\n", "utf-8");
+    const agentScript = "process.exit(0)";
+    writeFileSync(configPath, JSON.stringify({
+      workspaceRoot: root,
+      plansDir: ".patchwarden/plans",
+      tasksDir: ".patchwarden/tasks",
+      agents: {
+        alpha: { command: process.execPath, args: ["-e", agentScript, "{prompt}"] },
+        beta: { command: process.execPath, args: ["-e", agentScript, "{prompt}"] },
+      },
+      allowedTestCommands: ["node --check main.js"],
+      defaultTaskTimeoutSeconds: 10,
+      maxTaskTimeoutSeconds: 30,
+    }), "utf-8");
+    reloadConfig(configPath);
+
+    const { goal_id: goalId } = createGoal("repo", "Two Agent Goal", "serial fixture", root);
+    let goal = readGoalStatus(goalId, root);
+    const first = addSubgoal(goal, "Alpha work");
+    goal = updateSubgoalStatus(linkTaskToSubgoal(first.goalStatus, first.subgoalId, "task-agent-alpha"), first.subgoalId, "queued");
+    const second = addSubgoal(goal, "Beta work", [first.subgoalId]);
+    goal = updateSubgoalStatus(linkTaskToSubgoal(second.goalStatus, second.subgoalId, "task-agent-beta"), second.subgoalId, "queued");
+    writeGoalStatus(goalId, goal, root);
+
+    writeGoalTask("task-agent-alpha", "alpha", goalId, first.subgoalId);
+    writeGoalTask("task-agent-beta", "beta", goalId, second.subgoalId);
+
+    const firstResult = await runTask("task-agent-alpha");
+    assert.equal(firstResult.status, "done_by_agent", firstResult.error || "missing error");
+    assert.equal(readGoalStatus(goalId, root).subgoals[0].status, "done_by_agent");
+    assert.equal(auditTask("task-agent-alpha").acceptance.status, "accepted");
+    acceptSubgoal(goalId, first.subgoalId, root);
+
+    const secondResult = await runTask("task-agent-beta");
+    assert.equal(secondResult.status, "done_by_agent");
+    assert.equal(auditTask("task-agent-beta").acceptance.status, "accepted");
+    acceptSubgoal(goalId, second.subgoalId, root);
+
+    const completed = readGoalStatus(goalId, root);
+    assert.equal(completed.status, "completed");
+    assert.deepEqual(completed.subgoals.map((subgoal) => subgoal.status), ["accepted", "accepted"]);
+    assert.deepEqual(completed.subgoals.map((subgoal) => subgoal.last_task_status), ["done_by_agent", "done_by_agent"]);
+  });
+
+  function writeGoalTask(taskId: string, agent: string, goalId: string, subgoalId: string): void {
+    const taskDir = join(root, ".patchwarden", "tasks", taskId);
+    mkdirSync(taskDir, { recursive: true });
+    const now = new Date().toISOString();
+    writeFileSync(join(taskDir, "status.json"), JSON.stringify({
+      task_id: taskId,
+      plan_id: "plan-claim",
+      agent,
+      repo_path: "repo",
+      resolved_repo_path: repo,
+      workspace_root: root,
+      status: "pending",
+      phase: "queued",
+      timeout_seconds: 10,
+      test_command: "node --check main.js",
+      verify_commands: ["node --check main.js"],
+      change_policy: "repo_scoped_changes",
+      goal_id: goalId,
+      subgoal_id: subgoalId,
+      created_at: now,
+      updated_at: now,
+    }), "utf-8");
+  }
 });

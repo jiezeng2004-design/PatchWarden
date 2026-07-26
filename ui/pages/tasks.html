@@ -262,6 +262,13 @@ html.dark {
       <!-- ===== Filter Bar ===== -->
       <div class="rounded-lg mb-5 p-4" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
         <div class="flex flex-wrap items-end gap-3">
+          <div class="flex flex-col gap-1">
+            <label class="text-xs font-medium" style="color: var(--pw-text-tertiary);">历史视图</label>
+            <div class="inline-flex rounded-md overflow-hidden" style="border: 1px solid var(--pw-border-subtle);">
+              <button id="historyActiveBtn" type="button" class="px-3 py-1.5 text-xs font-semibold" style="background-color: var(--pw-accent-muted); color: var(--pw-accent);">当前</button>
+              <button id="historyArchivedBtn" type="button" class="px-3 py-1.5 text-xs font-semibold" style="background-color: var(--pw-bg-elevated); color: var(--pw-text-secondary);">已归档</button>
+            </div>
+          </div>
           <!-- Repo Path Filter -->
           <div class="flex flex-col gap-1">
             <label class="text-xs font-medium" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="仓库" data-en="Repo">仓库</label>
@@ -386,6 +393,10 @@ html.dark {
         </div>
         <div class="flex items-center justify-between mt-3 pt-3" style="border-top: 1px solid var(--pw-border-subtle);">
           <div id="filterStatusText" class="text-xs" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);">—</div>
+          <div class="flex items-center gap-2">
+            <button id="archiveSelectedBtn" type="button" class="px-3 py-1.5 rounded-md text-xs font-semibold" style="background-color: var(--pw-state-warning-bg); color: var(--pw-state-warning); border: 1px solid var(--pw-state-warning);">归档所选</button>
+            <button id="restoreSelectedBtn" type="button" class="hidden px-3 py-1.5 rounded-md text-xs font-semibold" style="background-color: var(--pw-state-info-bg); color: var(--pw-state-info); border: 1px solid var(--pw-state-info);">恢复所选</button>
+          </div>
           <div id="countSummary" class="text-xs" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);">--</div>
         </div>
       </div>
@@ -435,6 +446,7 @@ html.dark {
           <table class="w-full text-left" style="min-width: 1200px;">
             <thead>
               <tr style="border-bottom: 1px solid var(--pw-border);">
+                <th class="px-3 py-3"><input id="selectAllTasks" type="checkbox" aria-label="选择全部可操作任务" /></th>
                 <th class="px-4 py-3 text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="任务ID" data-en="Task ID">任务ID</th>
                 <th class="px-4 py-3 text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="标题" data-en="Title">标题</th>
                 <th class="px-4 py-3 text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);">Agent</th>
@@ -584,8 +596,8 @@ html.dark {
       #taskTableBody, #taskTableBody tr { display: block; }
       #taskTableBody tr { margin-bottom: 10px; padding: 12px; border: 1px solid var(--pw-border-subtle); border-radius: 6px; }
       #taskTableBody td { display: block; padding: 4px 0 !important; text-align: left !important; max-width: none !important; }
-      #taskTableBody td:nth-child(5), #taskTableBody td:nth-child(6), #taskTableBody td:nth-child(7), #taskTableBody td:nth-child(9) { display: none; }
-      #taskTableBody td:nth-child(10) > div { display: flex; justify-content: flex-start; flex-wrap: wrap; }
+      #taskTableBody td:nth-child(6), #taskTableBody td:nth-child(7), #taskTableBody td:nth-child(8), #taskTableBody td:nth-child(10) { display: none; }
+      #taskTableBody td:nth-child(11) > div { display: flex; justify-content: flex-start; flex-wrap: wrap; }
     }
   </style>
 
@@ -624,6 +636,13 @@ html.dark {
       var allTasks = [];
       var nextCursor = null;
       var totalTasks = 0;
+      var historyState = 'active';
+      var selectedTaskIds = new Set();
+      var TERMINAL_STATUSES = new Set([
+        'done', 'done_by_agent', 'accepted', 'rejected', 'needs_fix', 'blocked',
+        'failed', 'failed_verification', 'failed_scope_violation', 'failed_policy_violation',
+        'failed_stale', 'orphaned', 'timeout', 'canceled'
+      ]);
       // currentFilters holds the active filter values for all dimensions.
       // repo_path / status / acceptance_status / agent are sent to the backend.
       // warning_type / date_from / date_to are applied client-side.
@@ -686,6 +705,24 @@ html.dark {
         var res = await fetch(url);
         if (!res.ok) throw new Error('HTTP ' + res.status + ' · ' + url);
         return res.json();
+      }
+
+      async function controlPost(url, body) {
+        var tokenResponse = await fetch('/control-token.json', { cache: 'no-store' });
+        if (!tokenResponse.ok) throw new Error('Unable to load control token');
+        var token = (await tokenResponse.json()).token;
+        var response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'X-PatchWarden-Control-Token': token
+          },
+          body: body === undefined ? null : JSON.stringify(body)
+        });
+        var data = await response.json();
+        if (!response.ok) throw new Error(data.error || ('HTTP ' + response.status));
+        return data;
       }
 
       function showToast(kind, title, msg) {
@@ -857,6 +894,9 @@ html.dark {
         var phaseLabel = getPhaseLabel(task.phase);
         var altBg = (idx % 2 === 1) ? ' background-color: var(--pw-bg-hover);' : '';
         var detailHref = '/pages/task-detail.html?id=' + encodeURIComponent(taskId);
+        var canSelect = historyState === 'archived' || TERMINAL_STATUSES.has(task.status);
+        var checked = selectedTaskIds.has(taskId) ? ' checked' : '';
+        var disabled = canSelect ? '' : ' disabled';
 
         // Skip status badge if redundant with acceptance (done + done_by_agent)
         var skipStatusBadge = (task.status === 'done' && task.acceptance_status === 'done_by_agent');
@@ -910,6 +950,7 @@ html.dark {
 
         return ''
           + '<tr class="transition-colors" style="border-bottom: 1px solid var(--pw-border-subtle);' + altBg + '">'
+          +   '<td class="px-3 py-3"><input type="checkbox" data-select-task="' + escapeAttr(taskId) + '"' + checked + disabled + ' aria-label="选择任务 ' + escapeAttr(taskId) + '" /></td>'
           +   '<td class="px-4 py-3 whitespace-nowrap">'
           +     '<div class="flex items-center gap-1">'
           +       '<span class="text-xs" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);" title="' + escapeAttr(taskId) + '">' + escapeHtml(truncatedId) + '</span>'
@@ -1050,10 +1091,55 @@ html.dark {
         el.innerHTML = '<span class="shrink-0 w-1.5 h-1.5 rounded-full" style="background-color: ' + dotColor + ';"></span><span>Watcher: ' + escapeHtml(status) + '</span>';
       }
 
+      function updateHistoryControls() {
+        var active = $('historyActiveBtn');
+        var archived = $('historyArchivedBtn');
+        if (active) active.style.cssText = historyState === 'active'
+          ? 'background-color: var(--pw-accent-muted); color: var(--pw-accent);'
+          : 'background-color: var(--pw-bg-elevated); color: var(--pw-text-secondary);';
+        if (archived) archived.style.cssText = historyState === 'archived'
+          ? 'background-color: var(--pw-accent-muted); color: var(--pw-accent);'
+          : 'background-color: var(--pw-bg-elevated); color: var(--pw-text-secondary);';
+        if ($('archiveSelectedBtn')) historyState === 'active' ? show($('archiveSelectedBtn')) : hide($('archiveSelectedBtn'));
+        if ($('restoreSelectedBtn')) historyState === 'archived' ? show($('restoreSelectedBtn')) : hide($('restoreSelectedBtn'));
+        if ($('selectAllTasks')) $('selectAllTasks').checked = false;
+      }
+
+      async function archiveSelectedTasks() {
+        var ids = Array.from(selectedTaskIds).slice(0, 100);
+        if (ids.length === 0) return showToast('warning', '未选择任务', '请选择要归档的终态任务');
+        if (!confirm('归档所选 ' + ids.length + ' 条任务？任务目录和审计证据会保留。')) return;
+        try {
+          var result = await controlPost('/api/tasks/archive', { task_ids: ids });
+          showToast(result.rejected && result.rejected.length ? 'warning' : 'success', '归档完成', '已归档 ' + (result.archived || []).length + ' 条');
+          fetchTasks();
+        } catch (err) {
+          showToast('error', '归档失败', err.message || String(err));
+        }
+      }
+
+      async function restoreSelectedTasks() {
+        var ids = Array.from(selectedTaskIds).slice(0, 100);
+        if (ids.length === 0) return showToast('warning', '未选择任务', '请选择要恢复的任务');
+        if (!confirm('恢复所选 ' + ids.length + ' 条任务到当前视图？')) return;
+        try {
+          var restored = 0;
+          for (var i = 0; i < ids.length; i++) {
+            var result = await controlPost('/api/tasks/' + encodeURIComponent(ids[i]) + '/restore');
+            restored += (result.restored || []).length;
+          }
+          showToast('success', '恢复完成', '已恢复 ' + restored + ' 条');
+          fetchTasks();
+        } catch (err) {
+          showToast('error', '恢复失败', err.message || String(err));
+        }
+      }
+
       // ---- Filter query building ----
       // Builds a query string from the backend-supported filter dimensions.
       function buildFilterQueryString() {
         var params = [];
+        params.push('history_state=' + encodeURIComponent(historyState));
         if (currentFilters.repo_path) {
           params.push('repo_path=' + encodeURIComponent(currentFilters.repo_path));
         }
@@ -1125,6 +1211,7 @@ html.dark {
 
       function fetchTasks(cursor, append) {
         if (!append) showLoading();
+        if (!append) selectedTaskIds.clear();
         setRefreshing(true);
         var query = buildFilterQueryString();
         var url = API_URL + query + (query ? '&' : '?') + (cursor ? 'cursor=' + encodeURIComponent(cursor) : '');
@@ -1268,11 +1355,41 @@ html.dark {
             copyToClipboard(btn.getAttribute('data-copy-id'), 'task_id');
           });
         });
+        tbody.querySelectorAll('[data-select-task]').forEach(function (input) {
+          input.addEventListener('change', function () {
+            var taskId = input.getAttribute('data-select-task');
+            if (input.checked) selectedTaskIds.add(taskId);
+            else selectedTaskIds.delete(taskId);
+          });
+        });
       }
+
+      $('historyActiveBtn').addEventListener('click', function () {
+        historyState = 'active';
+        updateHistoryControls();
+        fetchTasks();
+      });
+      $('historyArchivedBtn').addEventListener('click', function () {
+        historyState = 'archived';
+        updateHistoryControls();
+        fetchTasks();
+      });
+      $('archiveSelectedBtn').addEventListener('click', archiveSelectedTasks);
+      $('restoreSelectedBtn').addEventListener('click', restoreSelectedTasks);
+      $('selectAllTasks').addEventListener('change', function (event) {
+        var checked = event.target.checked;
+        document.querySelectorAll('[data-select-task]:not(:disabled)').forEach(function (input) {
+          input.checked = checked;
+          var taskId = input.getAttribute('data-select-task');
+          if (checked) selectedTaskIds.add(taskId);
+          else selectedTaskIds.delete(taskId);
+        });
+      });
 
       // Initial load: populate filter dropdowns, then fetch tasks
       // Dropdowns load in parallel (best-effort); tasks fetch runs regardless.
       Promise.allSettled([loadRepos(), loadAgents()]).finally(function () {
+        updateHistoryControls();
         fetchTasks();
       });
     })();

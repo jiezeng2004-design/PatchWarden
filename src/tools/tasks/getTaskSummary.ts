@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { getConfig, getTasksDir } from "../../config.js";
+import { getConfig, getTasksDir, sanitizeAgentRuntimeMetadata } from "../../config.js";
 import { guardReadPath } from "../../security/pathGuard.js";
 import { getTaskStatus } from "./getTaskStatus.js";
 import { redactSensitiveValue } from "../../security/contentRedaction.js";
@@ -14,11 +14,13 @@ export interface TaskSummaryOutput {
   task_id: string;
   status: string;
   terminal: boolean;
+  history_state: "active" | "archived";
   acceptance_status: "pending" | "ready_for_review" | "needs_review" | "failed";
   acceptance_reviewed_at: string | null;
   acceptance_reviewer: string | null;
   phase: string;
   agent: string;
+  agent_runtime: Record<string, unknown> | null;
   workspace_root: string;
   repo_path: string;
   resolved_repo_path: string;
@@ -40,6 +42,7 @@ export interface TaskSummaryOutput {
   verify_available: boolean;
   test_log_available: boolean;
   warnings: string[];
+  information: string[];
   errors: string[];
   artifacts: Record<string, boolean>;
   plan_source: string;
@@ -82,9 +85,11 @@ export interface CompactTaskSummaryOutput {
   task_id: string;
   status: string;
   terminal: boolean;
+  history_state: "active" | "archived";
   acceptance_status: TaskSummaryOutput["acceptance_status"];
   phase: string;
   repo_path: string;
+  agent_runtime: Record<string, unknown> | null;
   changed_files_total: number;
   out_of_scope_changes_total: number;
   artifact_hygiene: {
@@ -103,6 +108,7 @@ export interface CompactTaskSummaryOutput {
   verification_summary: TaskSummaryOutput["verification_summary"];
   summary: string;
   warnings: string[];
+  information: string[];
   errors: string[];
   failure_reason: string | null;
   failed_command: string | null;
@@ -147,7 +153,9 @@ export function getTaskSummary(taskId: string, options: GetTaskSummaryOptions = 
   const verifyStatus = String(verify.status ?? result.verify_status ?? resultVerify.status ?? status.verify_status ?? "not_available");
   const errors = [status.error, ...asArray(result.errors), ...asArray(result.known_issues)]
     .filter((value): value is string => typeof value === "string" && value.trim() !== "");
-  const warnings = asArray(result.warnings).filter((value): value is string => typeof value === "string");
+  const resultWarnings = asArray(result.warnings).filter((value): value is string => typeof value === "string");
+  const information = resultWarnings.filter(isInformationalEvidence);
+  const warnings = resultWarnings.filter((warning) => !isInformationalEvidence(warning));
   const artifacts = Object.fromEntries([
     "result.md",
     "result.json",
@@ -239,11 +247,13 @@ export function getTaskSummary(taskId: string, options: GetTaskSummaryOptions = 
     task_id: taskId,
     status: String(status.status || "unknown"),
     terminal,
+    history_state: status.history_state,
     acceptance_status: acceptanceStatus,
     acceptance_reviewed_at: acceptanceReviewedAt,
     acceptance_reviewer: acceptanceReviewer,
     phase: String(status.phase || "unknown"),
     agent: String(status.agent || result.agent || ""),
+    agent_runtime: sanitizeAgentRuntimeMetadata(status.agent_runtime ?? result.agent_runtime),
     workspace_root: String(status.workspace_root || result.workspace_root || config.workspaceRoot),
     repo_path: String(status.repo_path || result.repo_path || ""),
     resolved_repo_path: String(status.resolved_repo_path || result.resolved_repo_path || ""),
@@ -270,6 +280,7 @@ export function getTaskSummary(taskId: string, options: GetTaskSummaryOptions = 
     verify_available: artifacts["verify.json"],
     test_log_available: artifacts["test.log"],
     warnings: [...new Set(warnings)],
+    information: [...new Set(information)],
     errors: [...new Set(errors)],
     artifacts,
     plan_source: String(status.plan_source || result.plan_source || "saved"),
@@ -324,9 +335,11 @@ function buildCompactSummary(output: Record<string, unknown>, maxItems: number):
     task_id: String(output.task_id),
     status: String(output.status),
     terminal: Boolean(output.terminal),
+    history_state: output.history_state === "archived" ? "archived" as const : "active" as const,
     acceptance_status: output.acceptance_status,
     phase: String(output.phase),
     repo_path: String(output.repo_path),
+    agent_runtime: Object.keys(asRecord(output.agent_runtime)).length > 0 ? asRecord(output.agent_runtime) : null,
     changed_files_total: asArray(output.changed_files).length,
     out_of_scope_changes_total: asArray(output.out_of_scope_changes).length,
     artifact_hygiene: {
@@ -341,6 +354,7 @@ function buildCompactSummary(output: Record<string, unknown>, maxItems: number):
     verification_summary: output.verification_summary,
     summary: String(output.summary).slice(0, 1000),
     warnings: asArray(output.warnings).slice(0, maxItems),
+    information: asArray(output.information).slice(0, maxItems),
     errors: asArray(output.errors).slice(0, maxItems),
     failure_reason: output.failure_reason || null,
     failed_command: output.failed_command || null,
@@ -362,6 +376,12 @@ function normalizeMaxItems(value: number | undefined): number {
     throw new Error("max_items must be an integer from 1 to 50.");
   }
   return value;
+}
+
+function isInformationalEvidence(warning: string): boolean {
+  return warning.startsWith("repository is not a Git worktree")
+    || warning.startsWith("Repository is not a Git worktree")
+    || warning.startsWith("Pre-existing external dirty files (not caused by this task)");
 }
 
 function tryReadJson(path: string): { data: Record<string, unknown>; error?: string } {

@@ -1,6 +1,6 @@
 {
   "name": "patchwarden",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "description": "Secure local MCP bridge for ChatGPT and local agents, with workspace-scoped task loops, safe summaries, audits, and Direct editing.",
   "type": "module",
   "main": "dist/index.js",
@@ -27,6 +27,7 @@
     "PatchWarden.cmd",
     "README.md",
     "README.en.md",
+    "CONTRIBUTORS.md",
     "LICENSE",
     "tsconfig.json"
   ],

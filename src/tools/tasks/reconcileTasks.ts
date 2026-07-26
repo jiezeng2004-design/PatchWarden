@@ -9,13 +9,16 @@ import {
 import { join, resolve, dirname } from "node:path";
 import { getTasksDir, getConfig, type PatchWardenConfig } from "../../config.js";
 import { diagnoseTask, type DiagnosisType, type DiagnosisConfidence, type SafeAction } from "./diagnoseTask.js";
-import { syncSubgoalOnTaskDone, readTaskGoalMeta } from "../../goal/subgoalSync.js";
+import { syncSubgoalOnTaskStatus, readTaskGoalMeta } from "../../goal/subgoalSync.js";
 import { mutateTaskStatus } from "../../runner/taskStatusStore.js";
 import { writeTaskRuntime } from "../../runner/taskRuntime.js";
 import type { TaskPhase } from "./createTask.js";
 import { atomicWriteFileSync, atomicWriteJsonFileSync } from "../../utils/atomicFile.js";
 import { appendBoundedTextFileSync } from "../../utils/boundedFile.js";
 import { isActiveTaskStatus } from "./taskStates.js";
+import { isTerminalTaskStatus } from "./taskStates.js";
+import { isWatcherOwningTask } from "../../watcherStatus.js";
+import { isValidTaskIdSegment } from "./taskHistory.js";
 
 // ── v0.7.0: reconcile_tasks types ──────────────────────────────────
 
@@ -37,7 +40,7 @@ export interface ReconcileTaskReport {
   reasons: string[];
   safe_actions: SafeAction[];
   age_seconds: number | null;
-  action_taken: "left_unchanged" | "marked_failed_stale" | "marked_orphaned" | "marked_done_by_agent" | "marked_canceled" | "marked_timed_out";
+  action_taken: "left_unchanged" | "marked_failed_stale" | "marked_orphaned" | "marked_done_by_agent" | "marked_canceled" | "marked_timed_out" | "repaired_partial_evidence";
   previous_status: string | null;
   new_status: string | null;
   applied_at: string | null;
@@ -48,6 +51,7 @@ export interface ReconcileTaskReport {
     child_pid: number | null;
     child_pid_alive: boolean | null;
     watcher_owns_task: boolean;
+    missing_artifacts?: string[];
   };
 }
 
@@ -80,7 +84,7 @@ export function reconcileTasks(
       : DEFAULT_MAX_AGE_MINUTES;
   const includeDoneCandidates = input.include_done_candidates !== false; // default true
   const requestedTaskIds = input.task_ids?.length
-    ? new Set(input.task_ids.filter((taskId) => /^task[-_][a-zA-Z0-9_-]+$/.test(taskId)))
+    ? new Set(input.task_ids.filter((taskId) => /^task[-_]/u.test(taskId) && isValidTaskIdSegment(taskId)))
     : null;
   const maxAgeSeconds = maxAgeMinutes * 60;
 
@@ -140,6 +144,58 @@ export function reconcileTasks(
     }
 
     const statusStr = typeof statusData.status === "string" ? statusData.status : "unknown";
+    const missingArtifacts = missingRecoveryArtifacts(taskDir);
+    if (isTerminalTaskStatus(statusStr) && missingArtifacts.length > 0) {
+      candidates += 1;
+      const ageSeconds = taskAgeSeconds(taskDir, statusData, nowMs);
+      const ownership = isWatcherOwningTask(taskDir, config);
+      const report: ReconcileTaskReport = {
+        task_id: taskId,
+        status: statusStr,
+        phase: typeof statusData.phase === "string" ? statusData.phase : null,
+        diagnosis: "terminal",
+        confidence: "high",
+        reasons: [`terminal task is missing recovery evidence: ${missingArtifacts.join(", ")}`],
+        safe_actions: ["leave_unchanged"],
+        age_seconds: ageSeconds,
+        action_taken: "left_unchanged",
+        previous_status: null,
+        new_status: null,
+        applied_at: null,
+        applied_by: null,
+        evidence_summary: {
+          heartbeat_age_seconds: null,
+          stdout_age_seconds: null,
+          child_pid: null,
+          child_pid_alive: null,
+          watcher_owns_task: ownership.owned,
+          missing_artifacts: missingArtifacts,
+        },
+      };
+      if (mode === "safe_fix") {
+        if (ownership.owned) {
+          skippedActiveWatcher += 1;
+          report.reasons.push("safe_fix skipped: task is still owned by an active watcher instance");
+        } else {
+          const recoveredAt = new Date().toISOString();
+          try {
+            repairTerminalEvidence(taskDir, taskId, statusData, missingArtifacts, recoveredAt);
+            report.action_taken = "repaired_partial_evidence";
+            report.previous_status = statusStr;
+            report.new_status = statusStr;
+            report.applied_at = recoveredAt;
+            report.applied_by = "reconcile_tasks";
+            reconciled += 1;
+          } catch (error) {
+            report.reasons.push(`safe_fix skipped: ${error instanceof Error ? error.message : "evidence repair failed"}`);
+            skippedLowConfidence += 1;
+          }
+        }
+      }
+      if (reports.length < 200) reports.push(report);
+      if (reports.length >= 200) break;
+      continue;
+    }
 
     // Scan every persisted non-terminal lifecycle spelling, including legacy
     // phase-as-status records left by older Watchers.
@@ -451,11 +507,15 @@ function applySafeFix(
   });
 
   // v0.8.0: 当状态变为 done_by_agent 时，同步关联 subgoal 状态（running → done_by_agent）
-  if (newStatus === "done_by_agent") {
-    const goalMeta = readTaskGoalMeta(taskDir);
-    if (goalMeta.subgoal_id) {
-      syncSubgoalOnTaskDone(taskId, goalMeta, config.workspaceRoot);
-    }
+  const goalMeta = readTaskGoalMeta(taskDir);
+  if (goalMeta.subgoal_id) {
+    syncSubgoalOnTaskStatus(
+      taskId,
+      goalMeta,
+      newStatus,
+      typeof currentStatus.error === "string" ? currentStatus.error : null,
+      config.workspaceRoot,
+    );
   }
 
   return {
@@ -523,6 +583,26 @@ function writeRecoveryArtifacts(
       recovered_at: recoveredAt,
       warnings: ["The original runner stopped before complete change and verification evidence could be collected."],
     },
+    "file-stats.json": {
+      task_id: taskId,
+      evidence_status: "unavailable",
+      files: [],
+      recovered_at: recoveredAt,
+    },
+    "changed-files.json": {
+      task_id: taskId,
+      evidence_status: "unavailable",
+      changed_files: [],
+      diff_available: false,
+      recovered_at: recoveredAt,
+    },
+    "artifact_manifest.json": {
+      task_id: taskId,
+      status: "partial",
+      evidence_status: "unavailable",
+      artifacts: [],
+      recovered_at: recoveredAt,
+    },
   };
   for (const [name, value] of Object.entries(artifacts)) {
     const path = join(taskDir, name);
@@ -533,6 +613,117 @@ function writeRecoveryArtifacts(
     "test.log": `(not run)\nExit code: not run\n${summary}\n`,
     "git.diff": `(unavailable: ${summary})\n`,
     "diff.patch": `(unavailable: ${summary})\n`,
+  };
+  for (const [name, content] of Object.entries(textArtifacts)) {
+    const path = join(taskDir, name);
+    if (!existsSync(path)) atomicWriteFileSync(path, content);
+  }
+}
+
+const RECOVERY_ARTIFACT_NAMES = [
+  "result.json",
+  "verify.json",
+] as const;
+
+function missingRecoveryArtifacts(taskDir: string): string[] {
+  return RECOVERY_ARTIFACT_NAMES.filter((name) => !existsSync(join(taskDir, name)));
+}
+
+function repairTerminalEvidence(
+  taskDir: string,
+  taskId: string,
+  expectedStatus: Record<string, unknown>,
+  missingArtifacts: string[],
+  recoveredAt: string,
+): void {
+  const statusFile = join(taskDir, "status.json");
+  const backupFile = join(taskDir, "status.json.bak");
+  mutateTaskStatus(statusFile, (current) => {
+    if (JSON.stringify(current) !== JSON.stringify(expectedStatus)) {
+      throw new Error("task status changed while terminal evidence was being repaired");
+    }
+    if (!isTerminalTaskStatus(String(current.status || ""))) {
+      throw new Error("task is no longer terminal");
+    }
+    if (!existsSync(backupFile)) atomicWriteFileSync(backupFile, readFileSync(statusFile, "utf-8"));
+    writePartialEvidenceFiles(taskDir, taskId, current, recoveredAt);
+    const next = {
+      ...current,
+      evidence_recovery: {
+        status: "partial",
+        availability: "unavailable",
+        recovered_at: recoveredAt,
+        recovered_by: "reconcile_tasks",
+        missing_before: missingArtifacts.slice(0, RECOVERY_ARTIFACT_NAMES.length),
+      },
+      updated_at: recoveredAt,
+    };
+    return { next, result: next };
+  });
+}
+
+function writePartialEvidenceFiles(
+  taskDir: string,
+  taskId: string,
+  status: Record<string, unknown>,
+  recoveredAt: string,
+): void {
+  const taskStatus = String(status.status || "unknown");
+  const summary = "Historical task evidence was unavailable; PatchWarden preserved the original terminal status and added partial recovery records.";
+  const requestedCommands = Array.isArray(status.verify_commands) ? status.verify_commands.map(String) : [];
+  const jsonArtifacts: Record<string, unknown> = {
+    "result.json": {
+      task_id: taskId,
+      status: taskStatus,
+      agent: status.agent || "",
+      repo_path: status.repo_path || "",
+      resolved_repo_path: status.resolved_repo_path || "",
+      summary,
+      artifact_status: "partial",
+      evidence_status: "unavailable",
+      changed_files: [],
+      diff_available: false,
+      verify_status: "unavailable",
+      recovered_at: recoveredAt,
+      recovered_by: "reconcile_tasks",
+      warnings: [summary],
+    },
+    "verify.json": {
+      status: "unavailable",
+      requested_commands: requestedCommands,
+      commands: [],
+      evidence_status: "partial",
+      recovered_at: recoveredAt,
+    },
+    "file-stats.json": {
+      task_id: taskId,
+      evidence_status: "unavailable",
+      files: [],
+      recovered_at: recoveredAt,
+    },
+    "changed-files.json": {
+      task_id: taskId,
+      evidence_status: "unavailable",
+      changed_files: [],
+      diff_available: false,
+      recovered_at: recoveredAt,
+    },
+    "artifact_manifest.json": {
+      task_id: taskId,
+      status: "partial",
+      evidence_status: "unavailable",
+      artifacts: [],
+      recovered_at: recoveredAt,
+    },
+  };
+  for (const [name, value] of Object.entries(jsonArtifacts)) {
+    const path = join(taskDir, name);
+    if (!existsSync(path)) atomicWriteJsonFileSync(path, value);
+  }
+  const textArtifacts: Record<string, string> = {
+    "result.md": `# PatchWarden Task Result\n\n## Status\n${taskStatus}\n\n## Evidence\npartial/unavailable\n\n${summary}\n`,
+    "test.log": `(unavailable)\n${summary}\n`,
+    "diff.patch": `(unavailable)\n${summary}\n`,
   };
   for (const [name, content] of Object.entries(textArtifacts)) {
     const path = join(taskDir, name);

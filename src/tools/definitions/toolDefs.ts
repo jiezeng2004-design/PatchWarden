@@ -150,7 +150,7 @@ export function getToolDefs(): ToolDef[] {
     {
       name: "run_task_loop",
       description:
-        "Run a guarded PatchWarden task loop by composing create_task, wait_for_task, safe summaries, and audit_task. It does not bypass the watcher, command allow-list, workspace confinement, or confirmation boundaries. Returns only bounded structured lineage and final status.",
+        "Start a guarded PatchWarden task loop by composing create_task, wait_for_task, safe summaries, and audit_task. By default it returns request_id, lineage_id, and the created main task immediately while Core continues the loop in the background; follow with wait_for_task and get_task_lineage. It does not bypass the watcher, command allow-list, workspace confinement, or confirmation boundaries.",
       inputSchema: {
         type: "object",
         properties: {
@@ -252,6 +252,18 @@ export function getToolDefs(): ToolDef[] {
             enum: ["keep", "archive", "delete_ignored_only"],
             default: "keep",
             description: "Cleanup intent recorded in lineage. v1.5 keeps worktrees by default and does not auto-delete them.",
+          },
+          request_id: {
+            type: "string",
+            minLength: 8,
+            maxLength: 128,
+            pattern: "^[A-Za-z0-9_-]+$",
+            description: "Optional idempotency key. Retrying the same arguments with the same request_id returns the existing lineage and never creates a duplicate task.",
+          },
+          wait_for_completion: {
+            type: "boolean",
+            default: false,
+            description: "Local/debug compatibility mode. When false (default), return after the main task is created. Set true only when the transport timeout is known to exceed the full loop duration.",
           },
         },
         required: ["repo_path", "goal", "verify_commands"],
@@ -410,7 +422,7 @@ export function getToolDefs(): ToolDef[] {
     {
       name: "list_tasks",
       description:
-        "List recent tasks with status/repo/active filters plus watcher state and computed pending reasons.",
+        "List recent tasks with status/repo/active/history filters plus watcher state and computed pending reasons. Archived history is excluded by default.",
       inputSchema: {
         type: "object",
         properties: {
@@ -429,6 +441,11 @@ export function getToolDefs(): ToolDef[] {
           active_only: {
             type: "boolean",
             description: "When true, return only pending and running tasks.",
+          },
+          history_state: {
+            type: "string",
+            enum: ["active", "archived", "all"],
+            description: "History view. Defaults to active; archived tasks retain all task artifacts.",
           },
         },
       },
@@ -826,7 +843,7 @@ export function getToolDefs(): ToolDef[] {
     {
       name: "accept_subgoal",
       description:
-        "v0.8.0: Accept a subgoal after all its associated tasks are accepted (via audit_task). Validates every task in subgoal.task_ids has status 'accepted'. Throws subgoal_not_ready if any task is not yet accepted.",
+        "Accept a subgoal after all associated tasks are accepted by audit_task. Supports both legacy status=accepted and done_by_agent with acceptance_status=accepted.",
       inputSchema: {
         type: "object",
         properties: {
@@ -839,7 +856,7 @@ export function getToolDefs(): ToolDef[] {
     {
       name: "reject_subgoal",
       description:
-        "v0.8.0: Reject a subgoal with a reason. Allowed from any non-terminal status (ready/running/done_by_agent/needs_fix). Records rejected_reason in goal_status.json.",
+        "Reject a subgoal with a reason. Allowed from any non-terminal status (ready/queued/running/done_by_agent/needs_fix). Records rejected_reason in goal_status.json.",
       inputSchema: {
         type: "object",
         properties: {
@@ -865,7 +882,7 @@ export function getToolDefs(): ToolDef[] {
     {
       name: "summarize_goal_progress",
       description:
-        "v0.8.0: Summarize goal completion: counts by status (accepted/rejected/running/ready/needs_fix/done_by_agent), completion_rate percentage, blocked_subgoals, and risks (needs_fix or running subgoals).",
+        "Summarize goal completion: counts by status (accepted/rejected/queued/running/ready/needs_fix/done_by_agent), completion_rate, blocked_subgoals, and actionable risks.",
       inputSchema: {
         type: "object",
         properties: {

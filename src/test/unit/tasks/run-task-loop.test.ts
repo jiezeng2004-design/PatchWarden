@@ -4,7 +4,10 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { join, normalize } from "node:path";
 import { tmpdir } from "node:os";
 import { reloadConfig } from "../../../config.js";
-import { runTaskLoopWithDeps } from "../../../tools/tasks/runTaskLoop.js";
+import {
+  runTaskLoopCoordinatedWithDeps,
+  runTaskLoopWithDeps,
+} from "../../../tools/tasks/runTaskLoop.js";
 import { createLineageId, getTaskLineage, writeTaskLineage } from "../../../tools/tasks/taskLineage.js";
 
 let tempDir: string;
@@ -191,6 +194,89 @@ describe("runTaskLoop", () => {
     assert.ok(!payload.includes("stdout"));
     assert.ok(!payload.includes("stderr"));
     assert.ok(!payload.includes("diff.patch"));
+  });
+
+  it("emits lineage and main task evidence before waiting for completion", async () => {
+    const { deps } = depsFor({});
+    let resolveQueued!: (value: any) => void;
+    const queuedResult = new Promise<any>((resolvePromise) => { resolveQueued = resolvePromise; });
+    const completion = runTaskLoopWithDeps({
+      repo_path: ".",
+      goal: "Return the queued task quickly",
+      agent: "fake",
+      verify_commands: ["npm test"],
+      request_id: "request-fast-001",
+    }, deps, {
+      lineageId: "lineage_fast_001",
+      requestId: "request-fast-001",
+      onMainTaskCreated: resolveQueued,
+    });
+
+    const queued = await queuedResult;
+    assert.equal(queued.request_id, "request-fast-001");
+    assert.equal(queued.lineage_id, "lineage_fast_001");
+    assert.equal(queued.tasks.main, "task-main");
+    assert.equal(queued.final_status, "running");
+    assert.equal(queued.stop_reason, "task_queued");
+    assert.equal(queued.continuation_required, true);
+
+    const completed = await completion;
+    assert.equal(completed.final_status, "accepted");
+    assert.equal(completed.continuation_required, false);
+  });
+
+  it("reuses one task for concurrent async and synchronous retries", async () => {
+    const { deps, calls } = depsFor({});
+    let releaseWait!: () => void;
+    const waitGate = new Promise<void>((resolvePromise) => { releaseWait = resolvePromise; });
+    deps.waitForTask = (async (taskId: string) => {
+      await waitGate;
+      return {
+        task_id: taskId,
+        status: "done_by_agent",
+        phase: "done_by_agent",
+        terminal: true,
+        continuation_required: false,
+        next_action: "safe_audit",
+      };
+    }) as any;
+    const input = {
+      repo_path: ".",
+      goal: "Reuse one guarded task",
+      agent: "fake",
+      verify_commands: ["npm test"],
+      request_id: "request-idempotent-001",
+    };
+
+    const first = await runTaskLoopCoordinatedWithDeps(input, deps);
+    const retry = await runTaskLoopCoordinatedWithDeps(input, deps);
+    const completion = runTaskLoopCoordinatedWithDeps({
+      ...input,
+      wait_for_completion: true,
+    }, deps);
+
+    assert.equal(first.tasks.main, "task-main");
+    assert.equal(first.reused_request, false);
+    assert.equal(retry.tasks.main, "task-main");
+    assert.equal(retry.reused_request, true);
+    assert.equal(calls.filter((entry) => entry === "execute").length, 1);
+
+    releaseWait();
+    const completed = await completion;
+    assert.equal(completed.final_status, "accepted");
+    assert.equal(completed.reused_request, true);
+    assert.equal(calls.filter((entry) => entry === "execute").length, 1);
+
+    await new Promise((resolvePromise) => setImmediate(resolvePromise));
+    const persistedRetry = await runTaskLoopCoordinatedWithDeps(input, deps);
+    assert.equal(persistedRetry.final_status, "accepted");
+    assert.equal(persistedRetry.reused_request, true);
+    assert.equal(calls.filter((entry) => entry === "execute").length, 1);
+
+    await assert.rejects(
+      runTaskLoopCoordinatedWithDeps({ ...input, goal: "Different arguments" }, deps),
+      /different run_task_loop arguments/,
+    );
   });
 
   it("keeps v1.3 behavior when direct_verify is false", async () => {

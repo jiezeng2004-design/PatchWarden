@@ -146,6 +146,8 @@ export const coreHandlers: ToolHandlerMap = {
           args?.worktree_cleanup === "archive" || args?.worktree_cleanup === "delete_ignored_only"
             ? args.worktree_cleanup
             : "keep",
+        request_id: args?.request_id ? String(args.request_id) : undefined,
+        wait_for_completion: args?.wait_for_completion === true,
       }),
     );
   },
@@ -225,6 +227,9 @@ export const coreHandlers: ToolHandlerMap = {
         status: args?.status ? String(args.status) : undefined,
         repo_path: args?.repo_path ? String(args.repo_path) : undefined,
         active_only: args?.active_only !== undefined ? Boolean(args.active_only) : undefined,
+        history_state: args?.history_state === "archived" || args?.history_state === "all"
+          ? args.history_state
+          : args?.history_state === "active" ? "active" : undefined,
         limit: args?.limit ? Number(args.limit) : undefined,
       }),
     );

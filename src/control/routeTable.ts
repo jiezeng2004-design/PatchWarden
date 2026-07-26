@@ -31,6 +31,8 @@ import {
   handleTaskAudit,
   handleOpenTaskFolder,
   handleHideStale,
+  handleArchiveTasks,
+  handleRestoreTask,
 } from "./routes/taskActions.js";
 import {
   handleDirectSessions,
@@ -74,7 +76,7 @@ const KNOWN_LOG_CATEGORIES: ReadonlySet<LogCategory> = new Set([
  * so handlers that need query parameters can read `searchParams` without any
  * module-scoped state.
  */
-export function buildRoutes(parsedUrl: URL): Route[] {
+export function buildRoutes(parsedUrl: URL, requestBody: unknown | null = null): Route[] {
   const query = parsedUrl.searchParams;
 
   // ── GET routes (no token required) ──────────────────────────────
@@ -92,6 +94,7 @@ export function buildRoutes(parsedUrl: URL): Route[] {
           warning_type: query.get("warning_type") || undefined,
           date_from: query.get("date_from") || undefined,
           date_to: query.get("date_to") || undefined,
+          history_state: query.get("history_state") || undefined,
           limit: query.get("limit") ? Number(query.get("limit")) : undefined,
           cursor: query.get("cursor") || undefined,
         }),
@@ -264,6 +267,18 @@ export function buildRoutes(parsedUrl: URL): Route[] {
       pattern: /^\/api\/direct-sessions\/([^/]+)\/hide$/,
       requiresToken: true,
       handler: (res, p) => handleDirectSessionHide(res, decodeParam(p, 0)),
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/tasks\/archive$/,
+      requiresToken: true,
+      handler: (res) => handleArchiveTasks(res, requestBody),
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/tasks\/([^/]+)\/restore$/,
+      requiresToken: true,
+      handler: (res, p) => handleRestoreTask(res, decodeParam(p, 0)),
     },
     {
       method: "POST",

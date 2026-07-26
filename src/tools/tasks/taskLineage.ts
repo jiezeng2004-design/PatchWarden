@@ -9,6 +9,7 @@ import { atomicWriteFileSync, atomicWriteJsonFileSync } from "../../utils/atomic
 
 export type TaskLoopStopReason =
   | "success"
+  | "task_queued"
   | "max_iterations_reached"
   | "verification_failed"
   | "high_risk_blocked"
@@ -65,11 +66,12 @@ export interface TaskLineageRound {
 
 export interface TaskLineageRecord {
   lineage_id: string;
+  request_id?: string;
   goal: string;
   repo_path: string;
   created_at: string;
   updated_at: string;
-  final_status: "accepted" | "needs_fix" | "blocked" | "failed";
+  final_status: "running" | "accepted" | "needs_fix" | "blocked" | "failed";
   stop_reason: TaskLoopStopReason;
   next_action: string;
   main_task: string | null;
@@ -85,6 +87,7 @@ export interface TaskLineageRecord {
 
 export interface SafeTaskLineage {
   lineage_id: string;
+  request_id: string;
   goal: string;
   repo_path: string;
   created_at: string;
@@ -107,6 +110,7 @@ export interface SafeTaskLineage {
   rounds: TaskLineageRound[];
   warnings: string[];
   errors: string[];
+  continuation_required: boolean;
   truncated: boolean;
 }
 
@@ -159,6 +163,7 @@ export function toSafeTaskLineage(record: TaskLineageRecord, maxItems = 8): Safe
   const directSessions = normalizeDirectSessions(record.direct_sessions);
   return {
     lineage_id: record.lineage_id,
+    request_id: truncate(String(record.request_id || record.lineage_id), 128),
     goal: record.goal,
     repo_path: record.repo_path,
     created_at: record.created_at,
@@ -186,6 +191,7 @@ export function toSafeTaskLineage(record: TaskLineageRecord, maxItems = 8): Safe
     rounds,
     warnings: record.warnings.slice(0, maxItems).map((value) => truncate(value, 240)),
     errors: record.errors.slice(0, maxItems).map((value) => truncate(value, 240)),
+    continuation_required: record.final_status === "running",
     truncated:
       record.rounds.length > maxItems ||
       record.fix_tasks.length > maxItems ||
@@ -204,6 +210,7 @@ function buildSummaryMarkdown(record: TaskLineageRecord): string {
     "# PatchWarden Task Lineage",
     "",
     `- Lineage: ${record.lineage_id}`,
+    `- Request: ${record.request_id || record.lineage_id}`,
     `- Goal: ${record.goal}`,
     `- Repo: ${record.repo_path}`,
     `- Final status: ${record.final_status}`,
