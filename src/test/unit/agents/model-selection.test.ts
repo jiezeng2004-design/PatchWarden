@@ -67,6 +67,58 @@ describe("task Agent model selection", () => {
     assert.deepEqual(isolated, ["-p", "--setting-sources", "", "--model", "claude/model-v1", "{prompt}"]);
   });
 
+  it("keeps prompt options adjacent to their prompt values", () => {
+    const templates = {
+      gemini: ["--prompt", "{prompt}", "--approval-mode", "auto_edit"],
+      copilot: ["-p", "{prompt}", "--allow-tool", "write"],
+      qwen: ["--prompt", "{prompt}", "--approval-mode", "auto-edit"],
+      kimi: ["--prompt", "{prompt}", "--work-dir", "{repo}"],
+      aider: ["--message", "{prompt}"],
+    } as const;
+    for (const [adapter, args] of Object.entries(templates)) {
+      const invocation = applyAdapterInvocationArgs(adapter, {
+        command: adapter,
+        adapter,
+        args: [...args, "--model", "old/model"],
+      }, "new/model");
+      const promptIndex = invocation.indexOf("{prompt}");
+      assert.equal(invocation[promptIndex - 1], args[0], adapter);
+      assert.equal(invocation.filter((value) => value === "--model").length, 1, adapter);
+      assert.equal(invocation[invocation.indexOf("--model") + 1], "new/model", adapter);
+    }
+  });
+
+  it("preserves static model arguments for unsupported custom adapters", () => {
+    const agent = {
+      command: "custom-agent",
+      adapter: "custom",
+      args: ["run", "--model", "custom/static", "{prompt}"],
+      default_model: "custom/static",
+    };
+    assert.deepEqual(
+      applyAdapterInvocationArgs("custom", agent, "custom/static", null),
+      agent.args,
+    );
+  });
+
+  it("uses the source repository for defaults when execution runs in a worktree", () => {
+    const config = makeConfig({
+      default_model: "global/model-v1",
+      repoAgentDefaults: { repo: { opencode: "repo/model-v2" } },
+    });
+    const selection = resolveTaskModelSelection({
+      agentName: "opencode",
+      requestedAgent: "opencode",
+      selectedAgent: "opencode",
+      repoPath: `${config.workspaceRoot}/_workspacetrees/generated`,
+      repoDefaultsPath: `${config.workspaceRoot}/repo`,
+      config,
+      agentConfigRevision: revision,
+    });
+    assert.equal(selection.effective_model, "repo/model-v2");
+    assert.equal(selection.configured_default_model, "repo/model-v2");
+  });
+
   it("accepts safe model ids and rejects whitespace, controls, and shell metacharacters", () => {
     assert.equal(validateRequestedModel("  agnes/agnes-2.0-flash  "), "agnes/agnes-2.0-flash");
     for (const value of ["", "two models", "model\nnext", "model;next", "model&next", "model$HOME", `model\"quoted`]) {

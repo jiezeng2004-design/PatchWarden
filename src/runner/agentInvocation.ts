@@ -190,7 +190,12 @@ export function buildAgentInvocation(
   const agentCmd = guardAgentCommand(agentName, runtimeConfig);
   const runtime = getAgentRuntimeMetadata(agentName, runtimeConfig, { repo_path: repoPath, ...runtimeContext });
   const agentConfig = runtimeConfig.agents[agentName];
-  const invocationArgs = applyAdapterInvocationArgs(agentName, agentConfig, runtime.effective_model);
+  const invocationArgs = applyAdapterInvocationArgs(
+    agentName,
+    agentConfig,
+    runtime.effective_model,
+    runtime.requested_model,
+  );
   const configuredNative = resolveConfiguredNativeAgentLaunch(
     agentName,
     agentConfig?.adapter || agentName,

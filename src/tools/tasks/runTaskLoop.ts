@@ -6,7 +6,7 @@ import { getConfig } from "../../config.js";
 import { createWorktree } from "../../goal/worktreeManager.js";
 import { guardWorkspacePath } from "../../security/pathGuard.js";
 import { createDirectSession } from "../direct/createDirectSession.js";
-import { createTask, type CreateTaskInput } from "./createTask.js";
+import { createTask, MODEL_SELECTION_REPO_PATH, type CreateTaskInput } from "./createTask.js";
 import { recommendAgentForTask } from "../workspace/recommendAgentForTask.js";
 import { runDirectVerificationBundle } from "../direct/runDirectVerificationBundle.js";
 import { waitForTask } from "./waitForTask.js";
@@ -277,6 +277,7 @@ export async function runTaskLoopWithDeps(
 
   for (let iteration = 1; iteration <= normalized.max_iterations; iteration++) {
     const assessmentInput: CreateTaskInput = {
+      [MODEL_SELECTION_REPO_PATH]: resolvedRepoPath,
       template: role === "main" ? normalized.template : "fix_tests",
       goal: role === "main" ? normalized.goal : latestFailurePrompt,
       repo_path: taskRepoPath,
@@ -300,6 +301,7 @@ export async function runTaskLoopWithDeps(
     }
 
     const created = asRecord(await deps.createTask({
+      [MODEL_SELECTION_REPO_PATH]: resolvedRepoPath,
       execution_mode: "execute",
       assessment_id: String(assessment.assessment_id || ""),
       agent_routing_metadata: {

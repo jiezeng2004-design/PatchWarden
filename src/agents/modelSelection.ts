@@ -31,6 +31,7 @@ export interface AdapterDescriptor {
   id: string;
   supports_model_override: boolean;
   model_flags: readonly string[];
+  prompt_value_flags: readonly string[];
   settings_isolation?: "claude_empty_sources";
   template_revision: string;
 }
@@ -39,22 +40,24 @@ const ADAPTERS: Readonly<Record<string, AdapterDescriptor>> = Object.freeze({
   codex: descriptor("codex", "codex-model-v1"),
   claude: descriptor("claude", "claude-model-settings-v2", "claude_empty_sources"),
   opencode: descriptor("opencode", "opencode-model-v1"),
-  gemini: descriptor("gemini", "gemini-model-v1"),
-  copilot: descriptor("copilot", "copilot-model-v1"),
-  qwen: descriptor("qwen", "qwen-model-v1"),
-  kimi: descriptor("kimi", "kimi-model-v1"),
-  aider: descriptor("aider", "aider-model-v1"),
+  gemini: descriptor("gemini", "gemini-model-v2", undefined, ["--prompt"]),
+  copilot: descriptor("copilot", "copilot-model-v2", undefined, ["-p"]),
+  qwen: descriptor("qwen", "qwen-model-v2", undefined, ["--prompt"]),
+  kimi: descriptor("kimi", "kimi-model-v2", undefined, ["--prompt"]),
+  aider: descriptor("aider", "aider-model-v2", undefined, ["--message"]),
 });
 
 function descriptor(
   id: string,
   templateRevision: string,
   settingsIsolation?: "claude_empty_sources",
+  promptValueFlags: readonly string[] = [],
 ): AdapterDescriptor {
   return {
     id,
     supports_model_override: true,
     model_flags: ["--model", "-m"],
+    prompt_value_flags: [...promptValueFlags],
     ...(settingsIsolation ? { settings_isolation: settingsIsolation } : {}),
     template_revision: templateRevision,
   };
@@ -74,6 +77,7 @@ export function getAdapterRevisionPayload(config: PatchWardenConfig): Record<str
       id: adapter.id,
       supports_model_override: adapter.supports_model_override,
       model_flags: [...adapter.model_flags],
+      prompt_value_flags: [...adapter.prompt_value_flags],
       settings_isolation: adapter.settings_isolation ?? null,
       template_revision: adapter.template_revision,
     } : null];
@@ -129,6 +133,7 @@ export function resolveTaskModelSelection(input: {
   selectedAgent?: string;
   requestedModel?: unknown;
   repoPath: string;
+  repoDefaultsPath?: string;
   config: PatchWardenConfig;
   agentConfigRevision: string;
   agentFallbackUsed?: boolean;
@@ -153,7 +158,11 @@ export function resolveTaskModelSelection(input: {
     throw modelInputError("model_not_allowed", `Model "${requestedModel}" is not allowed for Agent "${input.agentName}".`);
   }
 
-  const projectDefault = getRepoAgentDefault(input.config, input.repoPath, input.agentName);
+  const projectDefault = getRepoAgentDefault(
+    input.config,
+    input.repoDefaultsPath ?? input.repoPath,
+    input.agentName,
+  );
   const metadataDefault = agent.default_model
     ?? optionalModel(agent.model, `agents["${input.agentName}"].model`);
   const argumentDefault = extractConfiguredModelArgument(agent);
@@ -191,10 +200,11 @@ export function applyAdapterInvocationArgs(
   agentName: string,
   agent: AgentConfig,
   effectiveModel: string | null,
+  requestedModel: string | null = null,
 ): string[] {
   const descriptor = getAdapterDescriptor(agentName, agent);
   if (!descriptor) {
-    if (effectiveModel) {
+    if (requestedModel) {
       throw modelInputError("model_override_not_supported", `Agent "${agentName}" does not support model overrides.`);
     }
     return [...agent.args];
@@ -228,7 +238,10 @@ export function applyAdapterInvocationArgs(
   if (effectiveModel) additions.push("--model", effectiveModel);
   const promptIndex = output.indexOf("{prompt}");
   if (promptIndex < 0) return [...output, ...additions];
-  return [...output.slice(0, promptIndex), ...additions, ...output.slice(promptIndex)];
+  const insertionIndex = promptIndex > 0 && descriptor.prompt_value_flags.includes(output[promptIndex - 1])
+    ? promptIndex - 1
+    : promptIndex;
+  return [...output.slice(0, insertionIndex), ...additions, ...output.slice(insertionIndex)];
 }
 
 export function sanitizeModelSelectionEvidence(value: unknown): ModelSelectionEvidence | null {

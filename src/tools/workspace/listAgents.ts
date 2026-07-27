@@ -46,7 +46,7 @@ export function listAgents(): { agents: AgentAvailability[]; total: number; conf
       const available = commandExists(agent.command, config.workspaceRoot);
       const runtime = getAgentRuntimeMetadata(name, config);
       const modelArgumentPresent = runtime.model_argument_present;
-      const invocationArgs = applyAdapterInvocationArgs(name, agent, runtime.effective_model);
+      const invocationArgs = applyAdapterInvocationArgs(name, agent, runtime.effective_model, runtime.requested_model);
       const launch = validateInvocationLaunch(name, agent.command, invocationArgs, agent.adapter || name, config.workspaceRoot);
       const modelReady = runtime.effective_model === null || modelArgumentPresent;
       const invocationReady = available && modelReady && launch.ready;

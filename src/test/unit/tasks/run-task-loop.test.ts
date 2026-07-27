@@ -8,6 +8,7 @@ import {
   runTaskLoopCoordinatedWithDeps,
   runTaskLoopWithDeps,
 } from "../../../tools/tasks/runTaskLoop.js";
+import { MODEL_SELECTION_REPO_PATH } from "../../../tools/tasks/createTask.js";
 import { createLineageId, getTaskLineage, writeTaskLineage } from "../../../tools/tasks/taskLineage.js";
 import { PatchWardenError } from "../../../errors.js";
 
@@ -436,7 +437,7 @@ describe("runTaskLoop", () => {
   });
 
   it("uses worktree isolation for task execution and records worktree evidence", async () => {
-    const { deps, calls } = depsFor({});
+    const { deps, calls, inputs } = depsFor({});
     const result = await runTaskLoopWithDeps({
       repo_path: "child-repo",
       goal: "Run in a worktree",
@@ -451,7 +452,10 @@ describe("runTaskLoop", () => {
     assert.equal(result.worktree.worktree_id, "wt-test");
     assert.equal(result.worktree.branch, "pw-test");
     assert.equal(result.worktree.status, "active");
-    assert.ok(calls.includes(`worktree:${normalize(join(tempDir, "child-repo"))}`));
+    const sourceRepo = normalize(join(tempDir, "child-repo"));
+    assert.ok(calls.includes(`worktree:${sourceRepo}`));
+    assert.equal(inputs[0][MODEL_SELECTION_REPO_PATH], sourceRepo);
+    assert.equal(inputs[1][MODEL_SELECTION_REPO_PATH], sourceRepo);
   });
 
   it("records Direct verification evidence when direct_verify succeeds", async () => {

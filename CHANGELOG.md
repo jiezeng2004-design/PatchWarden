@@ -10,6 +10,9 @@
 - Added model allowlists, adapter-specific argument normalization, request
   idempotency, and compatibility projections across summaries, lineage,
   audits, safe views, and evidence packs.
+- Preserved prompt option/value adjacency for supported CLIs, retained static
+  model arguments for custom adapters, and applied source-repository defaults
+  consistently inside generated worktrees.
 - Preserved Claude relay configuration by default with optional settings
   isolation, and restored inherited OpenCode configuration when the Watcher
   owns a private XDG override.

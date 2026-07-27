@@ -101,7 +101,11 @@ export type TaskPhase =
   | "blocked"              // v0.7.2
   | "canceled";
 
+/** Internal-only source repository used for trusted repository Agent defaults. */
+export const MODEL_SELECTION_REPO_PATH = Symbol("patchwarden.model_selection_repo_path");
+
 export interface CreateTaskInput {
+  [MODEL_SELECTION_REPO_PATH]?: string;
   plan_id?: string;
   inline_plan?: string;
   plan_title?: string;
@@ -385,12 +389,23 @@ async function createTaskInternal(input: CreateTaskInput): Promise<CreateTaskRes
     ?? (agentSelectionReason ? "auto" : originallyRequestedAgent ?? effectiveInput.agent);
   const selectedAgent = effectiveInput.agent_routing_metadata?.selected_agent ?? effectiveInput.agent;
   const agentFallbackUsed = effectiveInput.agent_routing_metadata?.fallback_used ?? agentSelectionReason?.fallback ?? false;
+  const modelSelectionRepoPath = effectiveInput[MODEL_SELECTION_REPO_PATH] === undefined
+    ? safeRepoPath
+    : guardWorkspacePath(effectiveInput[MODEL_SELECTION_REPO_PATH]!, config.workspaceRoot);
+  if (!existsSync(modelSelectionRepoPath) || !statSync(modelSelectionRepoPath).isDirectory()) {
+    throw new PatchWardenError(
+      "model_selection_repo_path_invalid",
+      "Internal model selection repository path is unavailable.",
+      "Recreate the isolated worktree task from its source repository.",
+    );
+  }
   const modelSelection = resolveTaskModelSelection({
     agentName: effectiveInput.agent,
     requestedAgent,
     selectedAgent,
     requestedModel: effectiveInput.requested_model,
     repoPath: safeRepoPath,
+    repoDefaultsPath: modelSelectionRepoPath,
     config,
     agentConfigRevision: getAgentConfigRevision(config),
     agentFallbackUsed,
