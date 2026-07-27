@@ -21,6 +21,7 @@ export interface SimpleProcessOptions {
   stderrPath?: string;
   environmentVariableNames?: string[];
   blockedEnvironmentVariableNames?: string[];
+  environmentOverrides?: Readonly<Record<string, string | null>>;
   maxLogBytes?: number;
 }
 
@@ -52,6 +53,7 @@ export function runSimpleProcessSync(options: SimpleProcessOptions): SimpleProce
       cwd: options.cwd,
       allowedNames: options.environmentVariableNames,
       blockedNames: options.blockedEnvironmentVariableNames,
+      overrides: options.environmentOverrides,
     });
     const prepared = prepareShellFreeCommand(options.command, options.args, options.cwd, { pathValue: env.PATH });
     const command = resolveTrustedExecutable(prepared.command, options.cwd, { pathValue: env.PATH });
@@ -117,6 +119,7 @@ export async function runSimpleProcess(options: SimpleProcessOptions): Promise<S
       cwd: options.cwd,
       allowedNames: options.environmentVariableNames,
       blockedNames: options.blockedEnvironmentVariableNames,
+      overrides: options.environmentOverrides,
     });
     const prepared = prepareShellFreeCommand(options.command, options.args, options.cwd, { pathValue: env.PATH });
     const command = resolveTrustedExecutable(prepared.command, options.cwd, { pathValue: env.PATH });

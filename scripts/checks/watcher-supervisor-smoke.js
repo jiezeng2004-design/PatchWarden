@@ -89,6 +89,9 @@ async function runExternalScenario() {
   const env = fixtureEnv(fixture, "healthy", 7_000);
   delete env.CONTROL_PLANE_API_KEY;
   delete env.PATCHWARDEN_OWNER_TOKEN;
+  delete env.PATCHWARDEN_EXPECT_OWNED_XDG;
+  delete env.PATCHWARDEN_AGENT_XDG_CONFIG_HOME;
+  delete env.PATCHWARDEN_WATCHER_XDG_CONFIG_HOME_OWNED;
   const external = spawn(process.execPath, [fixture.watcherPath], {
     cwd: fixture.project,
     env: {
@@ -201,6 +204,8 @@ function fixtureEnv(fixture, mode, lifetimeMs) {
     PATCHWARDEN_OWNER_TOKEN: "test-owner-token",
     PATCHWARDEN_AGENT_ENV_ALLOWLIST: "PATCHWARDEN_TEST_PROVIDER_KEY",
     PATCHWARDEN_TEST_PROVIDER_KEY: "provider-key-canary",
+    PATCHWARDEN_EXPECT_OWNED_XDG: "1",
+    XDG_CONFIG_HOME: undefined,
     WATCHER_FIXTURE_MODE: mode,
     TUNNEL_FIXTURE_LIFETIME_MS: String(lifetimeMs),
   };
@@ -210,6 +215,10 @@ function watcherFixtureSource(attemptPath) {
   return `
 const fs=require('fs');const path=require('path');
 if(!process.env.XDG_CONFIG_HOME){console.error('watcher did not receive XDG_CONFIG_HOME');process.exit(12)}
+if(process.env.PATCHWARDEN_EXPECT_OWNED_XDG==='1'){
+  if(process.env.PATCHWARDEN_WATCHER_XDG_CONFIG_HOME_OWNED!=='1'){console.error('watcher XDG ownership marker missing');process.exit(16)}
+  if(process.env.PATCHWARDEN_AGENT_XDG_CONFIG_HOME){console.error('missing original Agent XDG should stay unset');process.exit(17)}
+}
 if(process.env.CONTROL_PLANE_API_KEY){console.error('watcher received tunnel owner credential');process.exit(13)}
 if(process.env.PATCHWARDEN_OWNER_TOKEN){console.error('watcher received HTTP owner credential');process.exit(14)}
 if(process.env.PATCHWARDEN_TEST_PROVIDER_KEY!=='provider-key-canary'){console.error('watcher did not receive allow-listed provider credential');process.exit(15)}

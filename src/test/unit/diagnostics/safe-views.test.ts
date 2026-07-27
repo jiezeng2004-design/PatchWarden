@@ -109,10 +109,15 @@ describe("safeViews", () => {
       provider: "agnes",
       requested_agent: "auto",
       selected_agent: "opencode",
+      requested_model: null,
+      configured_default_model: null,
       effective_model: "agnes/agnes-2.0-flash",
+      model_source: "agent_default_unobserved",
       agent_config_revision: "a".repeat(64),
       model_argument_present: true,
       fallback_used: true,
+      agent_fallback_used: true,
+      model_fallback_used: false,
       exit_code: 0,
     });
   });

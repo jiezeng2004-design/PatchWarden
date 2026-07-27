@@ -9,7 +9,7 @@ import type { ProjectPolicy } from "../policy/projectPolicy.js";
  * Version the security snapshot independently from the server/schema version.
  * Changing the fields or their canonicalization should invalidate old records.
  */
-export const ASSESSMENT_SECURITY_SNAPSHOT_VERSION = "assessment-security-v2";
+export const ASSESSMENT_SECURITY_SNAPSHOT_VERSION = "assessment-security-v3";
 
 export type SecuritySnapshotCategory =
   | "schema_epoch"
@@ -39,6 +39,7 @@ export interface AssessmentSecuritySnapshotInput {
   toolProfile: string;
   toolManifestSha256: string;
   agent: string;
+  requestedModel?: string | null;
   repoPath: string;
   changePolicy?: string | null;
   template?: string | null;
@@ -97,6 +98,11 @@ function sortedAgentConfig(config: PatchWardenConfig): Record<string, unknown> {
       args: [...agent.args],
       adapter: agent.adapter || null,
       model: agent.model || null,
+      provider: agent.provider || null,
+      default_model: agent.default_model || null,
+      available_models: sortedUnique(agent.available_models),
+      allow_unlisted_model_override: agent.allow_unlisted_model_override !== false,
+      settings_policy: agent.settings_policy || "inherit",
       envAllowlist: sortedUnique(agent.envAllowlist),
     }]));
 }
@@ -120,6 +126,7 @@ export function buildAssessmentSecuritySnapshot(input: AssessmentSecuritySnapsho
     agent_launch: {
       selected_agent: input.agent,
       configured_agents: sortedAgentConfig(config),
+      repo_agent_defaults: config.repoAgentDefaults || {},
     },
     allowed_commands: {
       configured: sortedUnique(config.allowedTestCommands),
@@ -148,6 +155,7 @@ export function buildAssessmentSecuritySnapshot(input: AssessmentSecuritySnapsho
       template: input.template || null,
     },
     task_parameters: {
+      requested_model: input.requestedModel || null,
       test_command: input.testCommand || null,
       verify_commands: sortedUnique(input.verifyCommands),
       timeout_seconds: input.taskTimeoutSeconds ?? config.defaultTaskTimeoutSeconds,

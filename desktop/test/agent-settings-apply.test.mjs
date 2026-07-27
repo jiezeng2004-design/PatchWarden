@@ -54,4 +54,25 @@ describe("desktop Agent settings application", () => {
       opencode: { ...agents.opencode, envAllowlist: [] },
     }));
   });
+
+  it("tracks repository defaults and adapter settings but ignores unrelated top-level config", () => {
+    const config = {
+      agents: {
+        ...agents,
+        claude: { command: "claude", args: ["-p", "{prompt}"], adapter: "claude", settings_policy: "inherit" },
+      },
+      repoAgentDefaults: { repo: { opencode: "agnes/agnes-2.0-flash" } },
+      httpPort: 7331,
+    };
+    const baseline = computeAgentConfigRevision(config);
+    assert.equal(computeAgentConfigRevision({ ...config, httpPort: 9000 }), baseline);
+    assert.notEqual(computeAgentConfigRevision({
+      ...config,
+      repoAgentDefaults: { repo: { opencode: "agnes/agnes-2.0-pro" } },
+    }), baseline);
+    assert.notEqual(computeAgentConfigRevision({
+      ...config,
+      agents: { ...config.agents, claude: { ...config.agents.claude, settings_policy: "isolated" } },
+    }), baseline);
+  });
 });

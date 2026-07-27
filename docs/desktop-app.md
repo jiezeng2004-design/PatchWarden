@@ -67,6 +67,8 @@ automatically; the user must select the refresh control for an agent that
 supports a bounded model-list command. Choosing **Follow agent default** omits
 the model argument so the agent retains its own precedence rules.
 
+Claude registrations default to `settings_policy: "inherit"`. This deliberately preserves existing Claude user/project settings and relay-provider configurations. `settings_policy: "isolated"` is opt-in and makes Core launch Claude without user/project/local setting sources. Desktop preserves `provider`, model allow-list, override policy, and settings policy when it refreshes an existing managed registration; it never copies provider credentials into PatchWarden configuration.
+
 ## Local state
 
 - Desktop config: `%LOCALAPPDATA%\PatchWarden\patchwarden.config.json`
@@ -137,6 +139,11 @@ npm.cmd run desktop:package
 Artifacts are written below `release\desktop`. Desktop dependencies remain in
 the private `desktop` package and are not included in the `patchwarden` npm
 package.
+
+On Windows, a successful `npm.cmd run desktop:package` also creates or updates
+the current user's `PatchWarden.lnk` desktop shortcut. The shortcut points to
+`release\desktop\win-unpacked\PatchWarden.exe`. Run
+`npm.cmd run desktop:shortcut` to refresh it without rebuilding the packages.
 
 Desktop staging must include `scripts/checks/mcp-manifest-check.js` and the
 root package-lock production dependency closure below `resources/core/node_modules`.

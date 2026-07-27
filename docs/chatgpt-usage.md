@@ -109,6 +109,10 @@ already allow-listed. The loop creates a Direct session after the normal task
 and audit have succeeded, runs verification, safe-finalizes, safe-audits, and
 stores bounded Direct evidence in lineage. It does not call Direct patching
 tools, publish, push, tag, create releases, or restart live services.
+These verification-only Direct sessions set `expected_changes=false`, so an
+empty diff is expected and does not produce an `empty_diff` audit warning.
+Clients creating their own read-only Direct session should pass the same flag;
+editing sessions keep the default `expected_changes=true` behavior.
 
 For v1.5 isolated loop work, set `agent="auto"` when you want PatchWarden to
 pick from configured local agents using bounded routing, and set
@@ -135,3 +139,14 @@ MCP tool. A `blocked` assessment cannot be confirmed.
 In `audit_task`, evidence-backed failures appear in `confirmed_failures`,
 heuristic warnings in `possible_false_positives`, and unresolved checks in
 `manual_verification_items`. A warning is not automatically a confirmed error.
+
+## Task model and idempotency parameters
+
+Pass `requested_model` only with an explicit Agent, for example `{"agent":"opencode","requested_model":"agnes/agnes-2.0-flash"}`. Do not combine it with an omitted Agent or `agent="auto"`. The assess-only snapshot locks the model, and every repair/retry round inherits it unchanged. No model fallback is performed.
+
+OpenCode inherit-mode tasks use the user's normal XDG configuration source.
+The private `XDG_CONFIG_HOME` used to supervise the Watcher is removed or
+replaced before OpenCode starts, so custom providers such as relay-backed
+models remain available without copying provider credentials into PatchWarden.
+
+Use a stable `request_id` when a connector may retry `create_task` or `run_task_loop`. Identical parameters reuse the existing result. If any locked parameter changes, the call fails with `request_id_parameter_mismatch`; `changed_fields` identifies names such as `requested_model` without exposing values.

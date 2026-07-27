@@ -22,7 +22,12 @@ export interface GetTaskStatusOutput {
   template?: string | null;
   change_policy?: "repo_scoped_changes" | "no_changes";
   agent: string;
+  requested_model?: string | null;
   agent_runtime?: AgentRuntimeMetadata | null;
+  model_selection?: AgentRuntimeMetadata | null;
+  failure_category?: string | null;
+  agent_failure_category?: string | null;
+  provider_error_reference?: string | null;
   workspace_root: string;
   repo_path: string;
   resolved_repo_path: string;
@@ -39,7 +44,7 @@ export interface GetTaskStatusOutput {
   out_of_scope_changes?: Array<{ path: string; change: string }>;
   new_out_of_scope_changes?: Array<{ path: string; change: string }>;
   artifact_hygiene_counts?: Record<string, unknown>;
-  verify_status?: "passed" | "failed" | "skipped";
+  verify_status?: "passed" | "failed" | "skipped" | "not_run";
   verify_commands?: string[];
   diff_available?: boolean;
   diff_truncated?: boolean;
@@ -92,6 +97,13 @@ export function getTaskStatus(taskId: string): GetTaskStatusOutput {
     pending_reason: pendingReason,
     execution_blocked: status.status === "pending" && !watcher.available,
     history_state: readTaskHistoryState(status as unknown as Record<string, unknown>),
-    agent_runtime: sanitizeAgentRuntimeMetadata(status.agent_runtime),
+    agent_runtime: sanitizeAgentRuntimeMetadata(status.agent_runtime ?? status.model_selection),
+    model_selection: sanitizeAgentRuntimeMetadata(status.model_selection ?? status.agent_runtime),
+    failure_category: status.failure_category ?? status.agent_failure_category ?? null,
+    agent_failure_category: status.agent_failure_category ?? status.failure_category ?? null,
+    provider_error_reference: typeof status.provider_error_reference === "string"
+      && /^err_[A-Za-z0-9_-]{4,120}$/.test(status.provider_error_reference)
+      ? status.provider_error_reference
+      : null,
   };
 }

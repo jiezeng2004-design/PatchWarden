@@ -1,6 +1,6 @@
 {
   "name": "patchwarden",
-  "version": "1.6.3",
+  "version": "1.6.4",
   "description": "Secure local MCP bridge for ChatGPT and local agents, with workspace-scoped task loops, safe summaries, audits, and Direct editing.",
   "type": "module",
   "main": "dist/index.js",
@@ -67,7 +67,8 @@
     "desktop:stage": "npm run build && npm.cmd --prefix desktop run stage",
     "desktop:dev": "npm run build && npm.cmd --prefix desktop run dev",
     "desktop:package:dir": "npm run build && npm.cmd --prefix desktop run build:dir",
-    "desktop:package": "npm run build && npm.cmd --prefix desktop run build",
+    "desktop:package": "npm run build && npm.cmd --prefix desktop run build && npm run desktop:shortcut",
+    "desktop:shortcut": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/release/update-desktop-shortcut.ps1",
     "desktop:preflight": "node scripts/release/desktop-preflight.js",
     "desktop:preflight:release": "node scripts/release/desktop-preflight.js --require-clean"
   },

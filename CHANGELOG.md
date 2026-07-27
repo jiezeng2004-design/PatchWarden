@@ -1,5 +1,38 @@
 # PatchWarden CHANGELOG
 
+## v1.6.4 (2026-07-27)
+
+### Per-task Agent model selection
+
+- Added guarded `requested_model` support across task creation, task loops,
+  retries, repair rounds, and Assessment execution, with repository defaults,
+  deterministic configuration revisions, and immutable model evidence.
+- Added model allowlists, adapter-specific argument normalization, request
+  idempotency, and compatibility projections across summaries, lineage,
+  audits, safe views, and evidence packs.
+- Preserved Claude relay configuration by default with optional settings
+  isolation, and restored inherited OpenCode configuration when the Watcher
+  owns a private XDG override.
+
+### Failure and verification evidence
+
+- Expanded provider and Agent failure categories, safely retained bounded
+  provider error references, and kept configured verification commands visible
+  when an Agent fails before verification starts.
+- Refreshed Agent configuration once before task model selection and reused the
+  same instance through Assessment creation while preserving fail-closed stale
+  checks for genuine later configuration changes.
+- Restricted command auditing to structured command-bearing evidence and made
+  zero-diff Direct verification explicit through `expected_changes`.
+
+### Windows packaging
+
+- Added an idempotent Desktop shortcut refresh after successful packaging.
+- Regenerated the unsigned Windows installer and portable ZIP, with isolated
+  packaged-runtime and three-viewport Desktop smoke validation.
+- Acknowledged ChatGPT (OpenAI Codex) engineering collaboration in the project
+  contributor record and release notes.
+
 ## v1.6.3 (2026-07-26)
 
 ### Agent model enforcement and evidence

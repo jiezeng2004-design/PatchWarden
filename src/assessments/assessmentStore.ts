@@ -20,6 +20,7 @@ import { getToolDefs } from "../tools/definitions/toolDefs.js";
 import { captureRepoSnapshot, type RepoSnapshot } from "../runner/changeCapture.js";
 import type { RiskAssessmentResult } from "../security/riskEngine.js";
 import type { TaskTemplateName, ChangePolicy } from "../tools/taskTemplates.js";
+import type { ModelSelectionEvidence } from "../agents/modelSelection.js";
 import { getProjectPolicySummary, type ProjectPolicy } from "../policy/projectPolicy.js";
 import {
   ASSESSMENT_SECURITY_SNAPSHOT_VERSION,
@@ -99,6 +100,8 @@ export interface AssessmentRecord {
   test_command?: string | null;
   verify_commands?: string[];
   agent: string;
+  requested_model?: string | null;
+  model_selection?: ModelSelectionEvidence;
   timeout_seconds?: number;
   change_policy?: ChangePolicy;
   scope?: string[];
@@ -128,6 +131,8 @@ export interface AssessmentCreateInput {
   test_command?: string | null;
   verify_commands?: string[];
   agent: string;
+  requested_model?: string | null;
+  model_selection?: ModelSelectionEvidence;
   timeout_seconds?: number;
   change_policy?: ChangePolicy;
   scope?: string[];
@@ -182,8 +187,10 @@ export function createAssessmentDir(assessmentId: string): string {
   return dir;
 }
 
-export function createAssessment(input: AssessmentCreateInput): AssessmentRecord {
-  const config = getConfig();
+export function createAssessment(
+  input: AssessmentCreateInput,
+  config: PatchWardenConfig = getConfig(),
+): AssessmentRecord {
 
   const assessmentId = input.assessment_id || generateAssessmentId();
   const randomHex = assessmentId.split("_").pop() || "";
@@ -210,6 +217,7 @@ export function createAssessment(input: AssessmentCreateInput): AssessmentRecord
   });
   const executionConfig = computeExecutionConfigFingerprint(config, {
     agent: input.agent,
+    requested_model: input.requested_model,
     tool_manifest_sha256: toolManifest,
     tool_profile: resolveToolProfile(config.toolProfile),
     repo_path: input.resolved_repo_path,
@@ -261,6 +269,8 @@ export function createAssessment(input: AssessmentCreateInput): AssessmentRecord
     test_command: input.test_command || null,
     verify_commands: input.verify_commands || [],
     agent: input.agent,
+    requested_model: input.requested_model ?? null,
+    model_selection: input.model_selection,
     timeout_seconds: input.timeout_seconds,
     change_policy: input.change_policy || "repo_scoped_changes",
     scope: input.scope || [],
@@ -405,6 +415,7 @@ export function validateAssessmentFreshness(
   if (assessment.execution_config_hash) {
     const currentExecutionConfig = computeExecutionConfigFingerprint(config, {
       agent: assessment.agent,
+      requested_model: assessment.requested_model ?? null,
       tool_manifest_sha256: currentManifest,
       tool_profile: resolveToolProfile(config.toolProfile),
       repo_path: assessment.resolved_repo_path,
@@ -593,6 +604,7 @@ function getCurrentToolManifest(config: PatchWardenConfig): string {
 
 interface ExecutionConfigHashInput {
   agent: string;
+  requested_model?: string | null;
   tool_manifest_sha256: string;
   tool_profile: string;
   repo_path: string;
@@ -636,6 +648,7 @@ function computeExecutionConfigFingerprint(
     toolProfile: input.tool_profile,
     toolManifestSha256: input.tool_manifest_sha256,
     agent: input.agent,
+    requestedModel: input.requested_model,
     repoPath: input.repo_path,
     changePolicy: input.change_policy,
     template: input.template,

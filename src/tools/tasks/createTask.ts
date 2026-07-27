@@ -1,8 +1,9 @@
-import { mkdirSync, writeFileSync, existsSync, statSync, readFileSync } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { mkdirSync, writeFileSync, existsSync, statSync, readFileSync, rmSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
 import { resolve, join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getTasksDir, getPlansDir, getConfig } from "../../config.js";
+import { getTasksDir, getPlansDir, getConfig, refreshAgentConfig, getAgentConfigRevision } from "../../config.js";
+import { resolveTaskModelSelection, type ModelSelectionEvidence } from "../../agents/modelSelection.js";
 import { guardPath, guardWorkspacePath, guardReadPath } from "../../security/pathGuard.js";
 import { guardTestCommand } from "../../security/commandGuard.js";
 import { guardRuntimeSelfModification } from "../../security/runtimeGuard.js";
@@ -42,6 +43,8 @@ import {
 import { routeAgent, type AgentRouteResult } from "../../agents/agentRouter.js";
 import { redactSensitiveValue } from "../../security/contentRedaction.js";
 import { atomicWriteJsonFileSync } from "../../utils/atomicFile.js";
+import { withFileLockSync } from "../../utils/lockedJsonFile.js";
+import { stableJsonStringify } from "../../utils/stableJson.js";
 
 export type TaskStatus =
   | "pending"
@@ -106,6 +109,8 @@ export interface CreateTaskInput {
   goal?: string;
   source_task_id?: string;
   agent?: string;
+  requested_model?: string;
+  request_id?: string;
   repo_path?: string;
   test_command?: string;
   verify_commands?: string[];
@@ -184,6 +189,9 @@ export interface CreateTaskOutput {
   task_id: string;
   plan_id: string;
   agent: string;
+  request_id: string | null;
+  reused_request: boolean;
+  model_selection: ModelSelectionEvidence;
   status: TaskStatus;
   timeout_seconds: number;
   continuation_required: boolean;
@@ -205,10 +213,46 @@ export interface CreateTaskOutput {
   };
 }
 
+const activeCreateTaskRequests = new Map<string, Promise<CreateTaskResult>>();
 export function createTask(input: CreateTaskInput & { execution_mode: "assess_only" }): Promise<AssessOnlyOutput>;
 export function createTask(input: CreateTaskInput): Promise<CreateTaskOutput>;
 export async function createTask(input: CreateTaskInput): Promise<CreateTaskResult> {
-  const config = getConfig();
+  if (!input.request_id) return createTaskInternal(input);
+  const reservation = reserveCreateTaskRequest(input);
+  if (reservation.reused) return reservation.output;
+  if (reservation.in_progress) {
+    const active = activeCreateTaskRequests.get(reservation.request_id);
+    if (active) return markReused(await active);
+    throw new PatchWardenError(
+      "request_id_in_progress",
+      "An identical create_task request is already in progress.",
+      "Wait for the original request and retry with the same request_id.",
+      true,
+      { request_id: reservation.request_id },
+    );
+  }
+  const execution = (async () => {
+    try {
+      const output = await createTaskInternal({ ...input, request_id: reservation.request_id });
+      completeCreateTaskRequest(reservation.record_path, reservation.request_id, output);
+      return output;
+    } catch (error) {
+      clearCreateTaskRequest(reservation.record_path, reservation.request_id);
+      throw error;
+    }
+  })();
+  activeCreateTaskRequests.set(reservation.request_id, execution);
+  try {
+    return await execution;
+  } finally {
+    if (activeCreateTaskRequests.get(reservation.request_id) === execution) {
+      activeCreateTaskRequests.delete(reservation.request_id);
+    }
+  }
+}
+
+async function createTaskInternal(input: CreateTaskInput): Promise<CreateTaskResult> {
+  const config = refreshAgentConfig();
   const tasksDir = getTasksDir(config);
   const plansDir = getPlansDir(config);
 
@@ -240,7 +284,15 @@ export async function createTask(input: CreateTaskInput): Promise<CreateTaskResu
   // assess_only always requires them because the risk engine needs to check them.
   // v1.0.0: agent is now optional — if omitted, routeAgent recommends one based on scope/goal/plan.
   let agentSelectionReason: AgentRouteResult | undefined;
-  if (!effectiveInput.agent || effectiveInput.agent.trim() === "") {
+  const normalizedAgent = typeof effectiveInput.agent === "string" ? effectiveInput.agent.trim() : "";
+  if (!normalizedAgent || normalizedAgent === "auto") {
+    if (effectiveInput.requested_model !== undefined) {
+      throw new PatchWardenError(
+        "requested_model_requires_explicit_agent",
+        "requested_model requires an explicit configured agent.",
+        "Pass agent together with requested_model; do not combine a model override with automatic Agent routing.",
+      );
+    }
     const configuredAgents = Object.keys(config.agents);
     const routeResult = routeAgent({
       goal: effectiveInput.goal,
@@ -255,6 +307,8 @@ export async function createTask(input: CreateTaskInput): Promise<CreateTaskResu
       reason: routeResult.reason,
       fallback: routeResult.fallback,
     };
+  } else {
+    effectiveInput.agent = normalizedAgent;
   }
 
   const planSources = [
@@ -326,6 +380,21 @@ export async function createTask(input: CreateTaskInput): Promise<CreateTaskResu
       { operation: "create_task", path: resolvedRepoPath, resolved_repo_path: safeRepoPath, safe_alternative: "Pass the containing repository directory instead of a file." }
     );
   }
+
+  const requestedAgent = effectiveInput.agent_routing_metadata?.requested_agent
+    ?? (agentSelectionReason ? "auto" : originallyRequestedAgent ?? effectiveInput.agent);
+  const selectedAgent = effectiveInput.agent_routing_metadata?.selected_agent ?? effectiveInput.agent;
+  const agentFallbackUsed = effectiveInput.agent_routing_metadata?.fallback_used ?? agentSelectionReason?.fallback ?? false;
+  const modelSelection = resolveTaskModelSelection({
+    agentName: effectiveInput.agent,
+    requestedAgent,
+    selectedAgent,
+    requestedModel: effectiveInput.requested_model,
+    repoPath: safeRepoPath,
+    config,
+    agentConfigRevision: getAgentConfigRevision(config),
+    agentFallbackUsed,
+  });
 
   // Runtime self-modification protection: refuse to modify the active
   // PatchWarden runtime directory or its critical subdirectories.
@@ -514,6 +583,8 @@ export async function createTask(input: CreateTaskInput): Promise<CreateTaskResu
       test_command: testCmd || null,
       verify_commands: verifyCommands,
       agent: effectiveInput.agent,
+      requested_model: modelSelection.requested_model,
+      model_selection: modelSelection,
       timeout_seconds: timeoutSeconds,
       change_policy: changePolicy,
       scope: effectiveInput.scope,
@@ -524,7 +595,7 @@ export async function createTask(input: CreateTaskInput): Promise<CreateTaskResu
       ...(preGeneratedAssessmentId ? { assessment_id: preGeneratedAssessmentId } : {}),
       ...(preGeneratedAssessmentDir ? { assessment_dir: preGeneratedAssessmentDir } : {}),
       agent_assessment_summary: agentAssessmentSummary,
-    });
+    }, config);
 
     const nextAction = record.decision === "allow"
       ? "Call the returned next_tool_call exactly as provided; do not resend goal, plan, repository, agent, or verification arguments."
@@ -677,10 +748,19 @@ export async function createTask(input: CreateTaskInput): Promise<CreateTaskResu
       retry_count: retryMetadata.retry_count,
     } : {}),
     agent: effectiveInput.agent,
-    requested_agent: effectiveInput.agent_routing_metadata?.requested_agent
-      ?? (agentSelectionReason ? "auto" : originallyRequestedAgent ?? effectiveInput.agent),
-    selected_agent: effectiveInput.agent_routing_metadata?.selected_agent ?? effectiveInput.agent,
-    fallback_used: effectiveInput.agent_routing_metadata?.fallback_used ?? agentSelectionReason?.fallback ?? false,
+    requested_agent: requestedAgent,
+    selected_agent: selectedAgent,
+    requested_model: modelSelection.requested_model,
+    configured_default_model: modelSelection.configured_default_model,
+    effective_model: modelSelection.effective_model,
+    model_source: modelSelection.model_source,
+    provider: modelSelection.provider,
+    model_argument_present: modelSelection.model_argument_present,
+    agent_config_revision: modelSelection.agent_config_revision,
+    fallback_used: agentFallbackUsed,
+    agent_fallback_used: agentFallbackUsed,
+    model_fallback_used: false,
+    model_selection: modelSelection,
     workspace_root: resolve(config.workspaceRoot),
     repo_path: resolvedRepoPath,
     resolved_repo_path: safeRepoPath,
@@ -731,6 +811,9 @@ export async function createTask(input: CreateTaskInput): Promise<CreateTaskResu
     task_id: taskId,
     plan_id: planId,
     agent: effectiveInput.agent,
+    request_id: effectiveInput.request_id || null,
+    reused_request: false,
+    model_selection: modelSelection,
     status,
     timeout_seconds: timeoutSeconds,
     continuation_required: watcher.available && hasWaitForTask,
@@ -754,6 +837,113 @@ export async function createTask(input: CreateTaskInput): Promise<CreateTaskResu
   } as CreateTaskOutput;
 }
 
+interface CreateTaskRequestRecord {
+  schema_version: "patchwarden-task-request-v1";
+  request_id: string;
+  input_sha256: string;
+  field_sha256: Record<string, string>;
+  state: "pending" | "complete";
+  output?: CreateTaskResult;
+  created_at: string;
+  completed_at?: string;
+}
+
+function reserveCreateTaskRequest(input: CreateTaskInput): {
+  request_id: string;
+  record_path: string;
+  reused: boolean;
+  in_progress: boolean;
+  output: CreateTaskResult;
+} {
+  const requestId = String(input.request_id || "").trim();
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(requestId)) {
+    throw new PatchWardenError(
+      "invalid_request_id",
+      "request_id must contain 8-128 letters, numbers, underscores, or hyphens.",
+      "Use a stable request_id matching ^[A-Za-z0-9_-]{8,128}$.",
+    );
+  }
+  const config = getConfig();
+  const directory = resolve(config.workspaceRoot, ".patchwarden", "task-requests");
+  mkdirSync(directory, { recursive: true });
+  const recordPath = join(directory, `${requestId}.json`);
+  const canonical = canonicalRequestInput(input);
+  const inputSha256 = sha256(stableJsonStringify(canonical));
+  const fieldSha256 = Object.fromEntries(Object.entries(canonical).map(([field, value]) => [field, sha256(stableJsonStringify(value))]));
+  return withFileLockSync(recordPath, () => {
+    if (existsSync(recordPath)) {
+      const record = JSON.parse(readFileSync(recordPath, "utf-8")) as CreateTaskRequestRecord;
+      if (record.input_sha256 !== inputSha256) {
+        const changedFields = [...new Set([
+          ...Object.keys(fieldSha256),
+          ...Object.keys(record.field_sha256 || {}),
+        ])].filter((field) => fieldSha256[field] !== record.field_sha256?.[field]).sort();
+        throw new PatchWardenError(
+          "request_id_parameter_mismatch",
+          "request_id was already used with different create_task arguments.",
+          "Reuse the original arguments or choose a new request_id.",
+          true,
+          { changed_fields: changedFields },
+        );
+      }
+      if (record.state !== "complete" || !record.output) {
+        return { request_id: requestId, record_path: recordPath, reused: false, in_progress: true, output: {} as CreateTaskResult };
+      }
+      return { request_id: requestId, record_path: recordPath, reused: true, in_progress: false, output: markReused(record.output) };
+    }
+    atomicWriteJsonFileSync(recordPath, {
+      schema_version: "patchwarden-task-request-v1",
+      request_id: requestId,
+      input_sha256: inputSha256,
+      field_sha256: fieldSha256,
+      state: "pending",
+      created_at: new Date().toISOString(),
+    } satisfies CreateTaskRequestRecord);
+    return { request_id: requestId, record_path: recordPath, reused: false, in_progress: false, output: {} as CreateTaskResult };
+  });
+}
+
+function completeCreateTaskRequest(recordPath: string, requestId: string, output: CreateTaskResult): void {
+  withFileLockSync(recordPath, () => {
+    const record = JSON.parse(readFileSync(recordPath, "utf-8")) as CreateTaskRequestRecord;
+    if (record.request_id !== requestId) throw new Error("create_task request reservation identity changed");
+    atomicWriteJsonFileSync(recordPath, {
+      ...record,
+      state: "complete",
+      output,
+      completed_at: new Date().toISOString(),
+    } satisfies CreateTaskRequestRecord);
+  });
+}
+
+function clearCreateTaskRequest(recordPath: string, requestId: string): void {
+  try {
+    withFileLockSync(recordPath, () => {
+      if (!existsSync(recordPath)) return;
+      const record = JSON.parse(readFileSync(recordPath, "utf-8")) as CreateTaskRequestRecord;
+      if (record.request_id === requestId && record.state === "pending") rmSync(recordPath, { force: true });
+    });
+  } catch {
+    // A stale pending reservation is fail-closed and cannot create a duplicate task.
+  }
+}
+
+function canonicalRequestInput(input: CreateTaskInput): Record<string, unknown> {
+  const value = Object.fromEntries(Object.entries(input)
+    .filter(([key, entry]) => key !== "request_id" && entry !== undefined)
+    .map(([key, entry]) => [key, typeof entry === "string" ? entry.trim() : entry]));
+  if (typeof value.requested_model === "string") value.requested_model = value.requested_model.trim();
+  return value;
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function markReused(output: CreateTaskResult): CreateTaskResult {
+  return "task_id" in output ? { ...output, reused_request: true } : output;
+}
+
 function mergeAssessmentIntoInput(
   input: CreateTaskInput,
   record: AssessmentRecord
@@ -767,6 +957,7 @@ function mergeAssessmentIntoInput(
     inline_plan: undefined,
     goal: record.goal || undefined,
     agent: record.agent,
+    requested_model: record.requested_model ?? undefined,
     repo_path: record.repo_path,
     test_command: record.test_command || undefined,
     verify_commands: record.verify_commands || [],
@@ -811,6 +1002,15 @@ function mergeAssessmentIntoInput(
       "Do not override assessment-locked parameters. Use the same assessment_id as-is.",
       true,
       { field: "agent" },
+    );
+  }
+  if (input.requested_model !== undefined && input.requested_model.trim() !== (record.requested_model || "")) {
+    throw new PatchWardenError(
+      "assessment_parameter_mismatch",
+      "requested_model mismatch: caller passed a model different from the assessment.",
+      "Do not override assessment-locked parameters. Use the same assessment_id as-is.",
+      true,
+      { field: "requested_model" },
     );
   }
   if (

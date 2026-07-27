@@ -384,6 +384,8 @@ function buildLineageSummary(lineage: SafeTaskLineage): {
   verification: { latest_status: string; passed: boolean };
   worktree: { isolation_mode: string; status: string };
   agent_routing: { selected_agent: string } | null;
+  model_selection: SafeTaskLineage["model_selection"];
+  failures: Array<{ task_id: string; failure_category: string; provider_error_reference: string | null }>;
   warnings_count: number;
   errors_count: number;
   truncated: boolean;
@@ -406,6 +408,12 @@ function buildLineageSummary(lineage: SafeTaskLineage): {
       status: lineage.worktree.status,
     },
     agent_routing: lineage.agent_routing ? { selected_agent: lineage.agent_routing.selected_agent } : null,
+    model_selection: lineage.model_selection,
+    failures: lineage.rounds.filter((round) => Boolean(round.failure_category)).map((round) => ({
+      task_id: round.task_id,
+      failure_category: String(round.failure_category),
+      provider_error_reference: round.provider_error_reference ?? null,
+    })),
     warnings_count: lineage.warnings.length,
     errors_count: lineage.errors.length,
     truncated: lineage.truncated,

@@ -36,6 +36,7 @@ export interface CreateSubgoalTaskInput {
   template?: CreateTaskInput["template"];
   goal?: string;
   agent?: string;
+  requested_model?: string;
   repo_path: string;
   test_command?: string;
   verify_commands?: string[];
@@ -134,6 +135,7 @@ export async function createSubgoalTask(input: CreateSubgoalTaskInput): Promise<
       template: input.template,
       goal: input.goal,
       agent: input.agent,
+      requested_model: input.requested_model,
       repo_path: repoPathForTask,
       test_command: input.test_command,
       verify_commands: input.verify_commands,

@@ -12,12 +12,14 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { reloadConfig } from "../../../config.js";
-import { classifyAgentFailure, runTask } from "../../../runner/runTask.js";
+import { classifyAgentFailure, classifyAgentFailureDetails, runTask } from "../../../runner/runTask.js";
 import { cancelTask } from "../../../tools/tasks/cancelTask.js";
 import { auditTask } from "../../../tools/diagnostics/auditTask.js";
 import { acceptSubgoal } from "../../../goal/goalProgress.js";
 import { createGoal, readGoalStatus, writeGoalStatus } from "../../../goal/goalStore.js";
 import { addSubgoal, linkTaskToSubgoal, updateSubgoalStatus } from "../../../goal/goalStatus.js";
+import { safeResult, safeTestSummary } from "../../../tools/diagnostics/safeViews.js";
+import { getTaskSummary } from "../../../tools/tasks/getTaskSummary.js";
 
 describe("runTask claim", () => {
   let root: string;
@@ -53,7 +55,7 @@ describe("runTask claim", () => {
       agents: {
         fixture: { command: process.execPath, args: ["-e", script, "{prompt}"] },
       },
-      allowedTestCommands: [],
+      allowedTestCommands: ["node --check main.js"],
       defaultTaskTimeoutSeconds: 10,
       maxTaskTimeoutSeconds: 30,
     }), "utf-8");
@@ -179,15 +181,26 @@ describe("runTask claim", () => {
   });
 
   it("classifies provider readiness failures without exposing provider details", () => {
-    assert.equal(classifyAgentFailure("Error: Insufficient balance. Manage billing."), "insufficient_balance");
-    assert.equal(classifyAgentFailure("Authentication failed: invalid API key"), "authentication");
-    assert.equal(classifyAgentFailure("429 rate limit exceeded"), "rate_limit");
-    assert.equal(classifyAgentFailure("Unknown option --bad"), "invalid_arguments");
-    assert.equal(classifyAgentFailure("ERR_UNKNOWN_FILE_EXTENSION .exe"), "cli_startup");
+    assert.equal(classifyAgentFailure("Error: Insufficient balance. Manage billing."), "provider_insufficient_balance");
+    assert.equal(classifyAgentFailure("Authentication failed: invalid API key"), "provider_authentication_failed");
+    assert.equal(classifyAgentFailure("403 permission denied"), "provider_permission_denied");
+    assert.equal(classifyAgentFailure("429 rate limit exceeded"), "provider_rate_limited");
+    assert.equal(classifyAgentFailure("Unexpected server error (HTTP 500)"), "provider_server_error");
+    assert.equal(classifyAgentFailure("service overloaded"), "provider_unavailable");
+    assert.equal(classifyAgentFailure("upstream timeout"), "provider_timeout");
+    assert.equal(classifyAgentFailure("Unknown option --bad"), "cli_configuration_error");
+    assert.equal(classifyAgentFailure("ERR_UNKNOWN_FILE_EXTENSION .exe"), "cli_configuration_error");
     assert.equal(classifyAgentFailure("model not found"), "model_not_found");
+    assert.equal(classifyAgentFailure("invalid argument for --model: contains spaces"), "invalid_model_argument");
     assert.equal(classifyAgentFailure("There's an issue with the selected model. It may not exist or you may not have access to it."), "model_not_found");
-    assert.equal(classifyAgentFailure("fetch failed ECONNRESET"), "network");
+    assert.equal(classifyAgentFailure("fetch failed ECONNRESET"), "network_error");
+    assert.equal(classifyAgentFailure("failed to launch child process"), "agent_process_error");
     assert.equal(classifyAgentFailure("ordinary non-zero exit"), "unknown");
+    assert.deepEqual(classifyAgentFailureDetails("Unexpected server error err_agnes_ABC-123"), {
+      failure_category: "provider_server_error",
+      provider_error_reference: "err_agnes_ABC-123",
+    });
+    assert.equal(classifyAgentFailureDetails("Unexpected server error error-reference-secret").provider_error_reference, null);
   });
 
   it("classifies provider failures written only to Agent stdout", async () => {
@@ -201,6 +214,45 @@ describe("runTask claim", () => {
     assert.equal(result.status, "failed");
     assert.equal(status.agent_failure_category, "model_not_found");
     assert.match(result.error || "", /model_not_found/);
+  });
+
+  it("preserves configured verification evidence when the Agent fails before verification", async () => {
+    writeAgentConfig(`process.stderr.write("Unexpected server error HTTP 503 err_agnes_SAFE123"); process.exit(1);`);
+    reloadConfig(configPath);
+    const taskDir = writePendingTask("task-provider-before-verify");
+    const statusPath = join(taskDir, "status.json");
+    const pending = JSON.parse(readFileSync(statusPath, "utf-8"));
+    pending.verify_commands = ["node --check main.js"];
+    writeFileSync(statusPath, JSON.stringify(pending), "utf-8");
+
+    await runTask("task-provider-before-verify");
+    const status = JSON.parse(readFileSync(statusPath, "utf-8"));
+    const result = JSON.parse(readFileSync(join(taskDir, "result.json"), "utf-8"));
+    const verify = JSON.parse(readFileSync(join(taskDir, "verify.json"), "utf-8"));
+    const summary = getTaskSummary("task-provider-before-verify");
+    const safeTests = safeTestSummary("task-provider-before-verify");
+    const safe = safeResult("task-provider-before-verify");
+    const audit = auditTask("task-provider-before-verify");
+
+    assert.equal(status.failure_category, "provider_server_error");
+    assert.equal(status.agent_failure_category, "provider_server_error");
+    assert.equal(status.provider_error_reference, "err_agnes_SAFE123");
+    assert.equal(verify.status, "not_run");
+    assert.equal(verify.reason, "agent_failed_before_verification");
+    assert.deepEqual(verify.configured_commands, ["node --check main.js"]);
+    assert.deepEqual(verify.requested_commands, ["node --check main.js"]);
+    assert.deepEqual(verify.commands, []);
+    assert.deepEqual(result.verify_commands, ["node --check main.js"]);
+    assert.deepEqual(result.executed_verify_commands, []);
+    assert.deepEqual(summary.verify_commands, ["node --check main.js"]);
+    assert.deepEqual(summary.executed_verify_commands, []);
+    assert.deepEqual(safeTests.configured_commands, ["node --check main.js"]);
+    assert.deepEqual(safeTests.executed_verify_commands, []);
+    assert.equal(safe.verification.reason, "agent_failed_before_verification");
+    assert.equal(safe.failure_category, "provider_server_error");
+    assert.equal(safe.provider_error_reference, "err_agnes_SAFE123");
+    assert.equal(audit.failure_category, "provider_server_error");
+    assert.equal(audit.provider_error_reference, "err_agnes_SAFE123");
   });
 
   it("completes two queued subgoals with two deterministic Agents in serial", { timeout: 30_000 }, async () => {

@@ -15,9 +15,9 @@ ChatGPT、Codex、OpenCode 或其他 MCP 客户端负责规划与验收，
 PatchWarden 负责把计划保存成工作区内任务，再由预先配置的本地 Agent
 执行，并返回结果、代码差异和独立测试记录。
 
-[下载 Windows 安装版 v1.6.3](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Setup-1.6.3-x64.exe)
-· [免安装 ZIP](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Portable-1.6.3-x64.zip)
-· [校验文件](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Desktop-SHA256SUMS.txt)
+[下载 Windows 安装版 v1.6.4](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.4/PatchWarden-Setup-1.6.4-x64.exe)
+· [免安装 ZIP](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.4/PatchWarden-Portable-1.6.4-x64.zip)
+· [校验文件](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.4/PatchWarden-Desktop-SHA256SUMS.txt)
 · [三分钟快速开始](#三分钟快速开始)
 · [Discussions](https://github.com/jiezeng2004-design/PatchWarden/discussions)
 
@@ -25,7 +25,7 @@ PatchWarden 负责把计划保存成工作区内任务，再由预先配置的�
 
 <sub>PatchWarden Desktop 真实首启界面，来自隐私安全的桌面 smoke 验收；截图未使用真实工作区、账号或凭据。</sub>
 
-当前源码版本和 Windows Release：**v1.6.3**。npm `latest` 由维护者独立手动发布，
+当前源码版本和 Windows Release：**v1.6.4**。npm `latest` 由维护者独立手动发布，
 请以页面顶部的 npm 徽章和注册表查询结果为准。Windows 首次体验推荐上面的安装版；查看
 [CHANGELOG](CHANGELOG.md)、[贡献名单](CONTRIBUTORS.md)、[迁移指南](docs/migration-from-safe-bifrost.md)和
 [发布检查清单](docs/release-checklist.md)。
@@ -152,12 +152,12 @@ CLI，或者先把 OpenCode 配置为执行 Agent。
 
 ### 方案 A：Windows 安装版（首次体验推荐）
 
-1. 下载 [Windows 安装版 v1.6.3](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Setup-1.6.3-x64.exe)
-   和 [SHA256 校验文件](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Desktop-SHA256SUMS.txt)。
+1. 下载 [Windows 安装版 v1.6.4](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.4/PatchWarden-Setup-1.6.4-x64.exe)
+   和 [SHA256 校验文件](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.4/PatchWarden-Desktop-SHA256SUMS.txt)。
 2. 在 PowerShell 中校验安装包：
 
 ```powershell
-Get-FileHash .\PatchWarden-Setup-1.6.3-x64.exe -Algorithm SHA256
+Get-FileHash .\PatchWarden-Setup-1.6.4-x64.exe -Algorithm SHA256
 ```
 
 请以同一 Release 的校验文件为准。安装包尚未代码签名，Windows SmartScreen
@@ -969,10 +969,11 @@ PatchWarden v0.4.0 不自动读取旧 CLI、旧环境变量、旧 Header、旧�
 
 桌面 Agent 模型设置控制本地 Codex、OpenCode、Claude 等 CLI 的 `--model` 参数，
 不会改变当前 ChatGPT 会话自身选择的模型。运行时任务证据只记录 adapter、effective model、
-provider、requested/selected Agent、配置 revision、模型参数是否存在、fallback 与 exit code，
-不记录完整参数、提示词或环境变量值。CLI 失败会归类为 `invalid_arguments`、
-`authentication`、`rate_limit`、`insufficient_balance`、`model_not_found`、`network`、
-`cli_startup` 或 `unknown`。
+provider、requested/selected Agent、配置 revision、模型参数是否存在、Agent/model fallback 与 exit code，
+不记录完整参数、提示词或环境变量值。CLI 失败会归类为 `model_not_found`、
+`provider_authentication_failed`、`provider_permission_denied`、`provider_insufficient_balance`、
+`provider_rate_limited`、`provider_server_error`、`provider_unavailable`、`provider_timeout`、
+`network_error`、`cli_configuration_error`、`invalid_model_argument`、`agent_process_error` 或 `unknown`。
 
 `run_task_loop` 是 v1.2 的安全编排入口：它只组合现有 `create_task`、`wait_for_task`、safe summary 和
 `audit_task`，不会绕过 Watcher、命令白名单、workspace confinement 或确认边界。默认调用在主任务
@@ -1093,6 +1094,10 @@ Connector 后再新建对话。
 ```text
 health_check → create_direct_session → search_workspace / read_workspace_file → apply_patch → run_verification → finalize_direct_session → audit_session
 ```
+
+只读检查或纯验证会话应在 `create_direct_session` 中传入
+`expected_changes: false`。这时零 Diff 是预期结果，不产生 `empty_diff`
+告警；默认值仍为 `true`，普通编辑会话没有产生改动时继续告警。
 
 ### 安全边界
 
@@ -1252,6 +1257,14 @@ Release 和发布资产校验值。
 - [x] Worktree 隔离
 - [x] 多 Agent 路由
 - [x] 本地 Dashboard
+
+## 按任务选择 Agent 模型
+
+`create_task`、`run_task_loop` 和子目标任务支持可选的 `requested_model`。模型优先级固定为：任务覆盖 > `repoAgentDefaults` 项目默认 > Agent 的 `default_model`（兼容旧 `model` 和静态 `--model`）> CLI/settings 自身默认。使用 `requested_model` 时必须同时指定非 `auto` Agent；模型只会作为独立 argv 传入，不会经过 shell，也不会自动 fallback。
+
+Agent 可配置 `provider`、`default_model`、`available_models`、`allow_unlisted_model_override` 和 `settings_policy`。Claude 的 `settings_policy` 默认是 `inherit`，因此会继续复用现有用户/项目 settings，包括中转站配置；只有显式设置为 `isolated` 时，PatchWarden 才传入 `--setting-sources ""`。OpenCode 的 `inherit` 调用会恢复启动 Watcher 前的用户 `XDG_CONFIG_HOME`，不会误用 Watcher 专用的空配置目录。PatchWarden 不读取、迁移或记录 Claude/OpenCode token。完整示例见 [examples/config.example.json](examples/config.example.json)。
+
+`request_id` 为 `create_task` 和 `run_task_loop` 提供幂等保护。相同参数复用原任务或 lineage；参数变化会返回 `request_id_parameter_mismatch` 及 `changed_fields`。模型选择证据被冻结到任务、lineage、审计和 Evidence Pack 中。验证证据中 `verify_commands` 表示已配置命令，`executed_verify_commands` 表示实际执行命令；Agent 在验证前失败时状态为 `not_run/agent_failed_before_verification`。
 
 ## License
 

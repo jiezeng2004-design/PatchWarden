@@ -7,6 +7,7 @@ import { redactSensitiveValue } from "../../security/contentRedaction.js";
 import { PatchWardenError } from "../../errors.js";
 import { atomicWriteFileSync, atomicWriteJsonFileSync } from "../../utils/atomicFile.js";
 import { withFileLockSync } from "../../utils/lockedJsonFile.js";
+import { sanitizeModelSelectionEvidence, type ModelSelectionEvidence } from "../../agents/modelSelection.js";
 
 export type TaskLoopStopReason =
   | "success"
@@ -61,6 +62,8 @@ export interface TaskLineageRound {
   terminal: boolean;
   verification_status: string;
   audit_verdict: string;
+  failure_category?: string | null;
+  provider_error_reference?: string | null;
   fail_checks: string[];
   warn_checks: string[];
   next_action: string;
@@ -85,6 +88,7 @@ export interface TaskLineageRecord {
   errors: string[];
   worktree?: TaskLineageWorktree;
   agent_routing?: TaskLineageAgentRouting;
+  model_selection?: ModelSelectionEvidence;
 }
 
 export interface SafeTaskLineage {
@@ -105,6 +109,7 @@ export interface SafeTaskLineage {
   };
   worktree: TaskLineageWorktree;
   agent_routing: TaskLineageAgentRouting | null;
+  model_selection: ModelSelectionEvidence | null;
   verification: {
     latest_status: string;
     passed: boolean;
@@ -208,6 +213,7 @@ export function toSafeTaskLineage(record: TaskLineageRecord, maxItems = 8): Safe
       reason: truncate(String(record.agent_routing.reason), 240),
       fallback: Boolean(record.agent_routing.fallback),
     } : null,
+    model_selection: sanitizeModelSelectionEvidence(record.model_selection),
     verification: {
       latest_status: latest?.verification_status || "not_available",
       passed: latest?.verification_status === "passed",
@@ -228,7 +234,7 @@ export function toSafeTaskLineage(record: TaskLineageRecord, maxItems = 8): Safe
 
 function buildSummaryMarkdown(record: TaskLineageRecord): string {
   const rounds = record.rounds.map((round) =>
-    `- ${round.role} ${round.task_id}: ${round.status}, verification=${round.verification_status}, audit=${round.audit_verdict}`
+    `- ${round.role} ${round.task_id}: ${round.status}, verification=${round.verification_status}, audit=${round.audit_verdict}, failure=${round.failure_category || "none"}`
   );
   return [
     "# PatchWarden Task Lineage",

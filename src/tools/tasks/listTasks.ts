@@ -19,6 +19,10 @@ export interface TaskEntry {
   plan_id: string;
   title: string;
   agent: string;
+  requested_model: string | null;
+  model_selection: Record<string, unknown> | null;
+  failure_category: string | null;
+  provider_error_reference: string | null;
   status: TaskStatus;
   phase: TaskPhase;
   acceptance_status: AcceptanceStatus;
@@ -134,6 +138,13 @@ export function listTasks(input?: ListTasksInput): ListTasksOutput {
         plan_id: data.plan_id || "",
         title,
         agent: data.agent || "",
+        requested_model: typeof data.requested_model === "string" ? data.requested_model : null,
+        model_selection: data.model_selection && typeof data.model_selection === "object" ? data.model_selection : null,
+        failure_category: data.failure_category || data.agent_failure_category || null,
+        provider_error_reference: typeof data.provider_error_reference === "string"
+          && /^err_[A-Za-z0-9_-]{4,120}$/.test(data.provider_error_reference)
+          ? data.provider_error_reference
+          : null,
         status: data.status || "pending",
         phase,
         acceptance_status: acceptanceStatus,

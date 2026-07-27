@@ -28,12 +28,15 @@ import {
 import { stableJsonStringify } from "../../utils/stableJson.js";
 import { atomicWriteJsonFileSync } from "../../utils/atomicFile.js";
 import { withFileLock, withFileLockSync } from "../../utils/lockedJsonFile.js";
+import { PatchWardenError } from "../../errors.js";
+import { sanitizeModelSelectionEvidence, validateRequestedModel } from "../../agents/modelSelection.js";
 
 export interface RunTaskLoopInput {
   repo_path: string;
   goal: string;
   verify_commands: string[];
   agent?: string;
+  requested_model?: string;
   template?: TaskTemplateName;
   max_iterations?: number;
   task_timeout_seconds?: number;
@@ -221,6 +224,7 @@ export async function runTaskLoopWithDeps(
         : "none",
     },
     agent_routing: routing,
+    model_selection: undefined,
   };
 
   const finalize = (
@@ -277,6 +281,7 @@ export async function runTaskLoopWithDeps(
       goal: role === "main" ? normalized.goal : latestFailurePrompt,
       repo_path: taskRepoPath,
       agent: selectedAgent,
+      requested_model: normalized.requested_model,
       verify_commands: normalized.verify_commands,
       timeout_seconds: normalized.task_timeout_seconds,
       execution_mode: "assess_only",
@@ -309,6 +314,8 @@ export async function runTaskLoopWithDeps(
     }
     if (role === "main") lineage.main_task = taskId;
     else lineage.fix_tasks.push(taskId);
+    const createdModelSelection = sanitizeModelSelectionEvidence(created.model_selection);
+    if (createdModelSelection) lineage.model_selection = createdModelSelection;
     lineage.updated_at = deps.now().toISOString();
     const queued = buildLoopOutput(deps.writeTaskLineage(lineage), normalized, false);
     if (role === "main") options.onMainTaskCreated?.(queued);
@@ -400,11 +407,29 @@ function reserveLoopRequest(normalized: ReturnType<typeof normalizeInput>): {
     wait_for_completion: undefined,
   };
   const inputDigest = createHash("sha256").update(stableJsonStringify(digestInput)).digest("hex");
+  const fieldDigests = Object.fromEntries(Object.entries(digestInput).map(([field, value]) => [
+    field,
+    createHash("sha256").update(String(stableJsonStringify(value))).digest("hex"),
+  ]));
   return withFileLockSync(recordPath, () => {
     if (existsSync(recordPath)) {
       const current = JSON.parse(readFileSync(recordPath, "utf-8")) as Record<string, unknown>;
       if (current.input_sha256 !== inputDigest) {
-        throw new Error("request_id was already used with different run_task_loop arguments.");
+        const previousFields = current.field_sha256 && typeof current.field_sha256 === "object"
+          ? current.field_sha256 as Record<string, unknown>
+          : {};
+        const changedFields = Object.keys(previousFields).length > 0
+          ? [...new Set([...Object.keys(previousFields), ...Object.keys(fieldDigests)])]
+            .filter((field) => previousFields[field] !== fieldDigests[field])
+            .sort()
+          : ["legacy_request_parameters"];
+        throw new PatchWardenError(
+          "request_id_parameter_mismatch",
+          "request_id was already used with different run_task_loop arguments.",
+          "Reuse the original arguments or choose a new request_id.",
+          true,
+          { changed_fields: changedFields },
+        );
       }
       return {
         request_id: requestId,
@@ -419,6 +444,7 @@ function reserveLoopRequest(normalized: ReturnType<typeof normalizeInput>): {
       request_id: requestId,
       lineage_id: lineageId,
       input_sha256: inputDigest,
+      field_sha256: fieldDigests,
       created_at: new Date().toISOString(),
     });
     return { request_id: requestId, lineage_id: lineageId, reused: false, execution_lock_path: `${recordPath}.execution` };
@@ -482,10 +508,17 @@ function buildRound(
     terminal: Boolean(result.terminal),
     verification_status: String(tests.status || resultVerification.status || "not_available"),
     audit_verdict: String(audit.verdict || auditAcceptance.verdict || "unknown"),
+    failure_category: String(result.failure_category || "") || null,
+    provider_error_reference: safeProviderErrorReference(result.provider_error_reference),
     fail_checks: failChecks,
     warn_checks: warnChecks,
     next_action: String(result.next_action || recommendedActions[0] || "review_task"),
   };
+}
+
+function safeProviderErrorReference(value: unknown): string | null {
+  const reference = typeof value === "string" ? value : "";
+  return /^err_[A-Za-z0-9_-]{4,120}$/.test(reference) ? reference : null;
 }
 
 function isSuccessfulRound(round: TaskLineageRound): boolean {
@@ -588,6 +621,7 @@ async function runDirectVerification(
     const session = await deps.createDirectSession({
       repo_path: repoPath,
       title: `Direct verification for ${lineageId}`,
+      expected_changes: false,
     });
     sessionId = session.session_id;
     const bundle = await deps.runDirectVerificationBundle({
@@ -663,12 +697,23 @@ function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-function normalizeInput(input: RunTaskLoopInput): Required<Omit<RunTaskLoopInput, "agent" | "scope_files" | "worktree_base_branch" | "request_id">> & { agent?: string; scope_files?: string[]; worktree_base_branch?: string; request_id?: string } {
+function normalizeInput(input: RunTaskLoopInput): Required<Omit<RunTaskLoopInput, "agent" | "requested_model" | "scope_files" | "worktree_base_branch" | "request_id">> & { agent?: string; requested_model?: string; scope_files?: string[]; worktree_base_branch?: string; request_id?: string } {
   const config = getConfig();
   const repoPath = String(input.repo_path || "").trim();
   const goal = String(input.goal || "").trim();
+  const requestedAgent = typeof input.agent === "string" ? input.agent.trim() : "";
   if (!repoPath) throw new Error("repo_path is required.");
   if (!goal) throw new Error("goal is required.");
+  if (input.requested_model !== undefined && (!requestedAgent || requestedAgent === "auto")) {
+    throw new PatchWardenError(
+      "requested_model_requires_explicit_agent",
+      "requested_model requires an explicit configured agent.",
+      "Pass a configured agent together with requested_model.",
+    );
+  }
+  const requestedModel = input.requested_model === undefined
+    ? undefined
+    : validateRequestedModel(input.requested_model);
   if (!Array.isArray(input.verify_commands) || input.verify_commands.length === 0) {
     throw new Error("verify_commands must contain at least one command.");
   }
@@ -699,7 +744,8 @@ function normalizeInput(input: RunTaskLoopInput): Required<Omit<RunTaskLoopInput
     repo_path: repoPath,
     goal,
     verify_commands: input.verify_commands.map((command) => String(command).trim()),
-    agent: input.agent ? String(input.agent) : undefined,
+    agent: requestedAgent || undefined,
+    requested_model: requestedModel,
     template,
     max_iterations: maxIterations,
     task_timeout_seconds: timeoutSeconds,

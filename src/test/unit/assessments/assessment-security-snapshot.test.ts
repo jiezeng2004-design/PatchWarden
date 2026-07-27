@@ -49,7 +49,7 @@ function config(overrides: Partial<PatchWardenConfig> = {}): PatchWardenConfig {
 function snapshot(cfg = config(), projectPolicy = getDefaultProjectPolicy()) {
   return buildAssessmentSecuritySnapshot({
     config: cfg,
-    schemaEpoch: "2026-07-19-v15",
+    schemaEpoch: "2026-07-26-v16",
     toolProfile: "chatgpt_core",
     toolManifestSha256: "a".repeat(64),
     agent: "codex",
@@ -64,7 +64,7 @@ function snapshot(cfg = config(), projectPolicy = getDefaultProjectPolicy()) {
 function snapshotWith(overrides: Partial<Parameters<typeof buildAssessmentSecuritySnapshot>[0]>) {
   return buildAssessmentSecuritySnapshot({
     config: config(),
-    schemaEpoch: "2026-07-19-v15",
+    schemaEpoch: "2026-07-26-v16",
     toolProfile: "chatgpt_core",
     toolManifestSha256: "a".repeat(64),
     agent: "codex",
@@ -110,7 +110,7 @@ describe("assessment security snapshot", () => {
     ];
     const hashes = variants.map((workspaceRoot) => hashAssessmentSecuritySnapshot(buildAssessmentSecuritySnapshot({
       config: config({ workspaceRoot }),
-      schemaEpoch: "2026-07-19-v15",
+      schemaEpoch: "2026-07-26-v16",
       toolProfile: "chatgpt_core",
       toolManifestSha256: "a".repeat(64),
       agent: "codex",

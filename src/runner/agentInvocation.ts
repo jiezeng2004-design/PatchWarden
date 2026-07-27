@@ -7,6 +7,7 @@ import {
   type AgentRuntimeMetadata,
   type PatchWardenConfig,
 } from "../config.js";
+import { applyAdapterInvocationArgs } from "../agents/modelSelection.js";
 import { guardAgentCommand, sanitizePromptArg, type AllowedCommand } from "../security/commandGuard.js";
 import { resolveTrustedExecutable, sanitizeTrustedPath } from "./processSecurity.js";
 
@@ -19,6 +20,7 @@ export interface AgentInvocation {
   promptFilePath?: string;
   environmentVariableNames: string[];
   blockedEnvironmentVariableNames: string[];
+  environmentOverrides: Record<string, string | null>;
   runtime: AgentRuntimeMetadata;
 }
 
@@ -186,17 +188,16 @@ export function buildAgentInvocation(
 ): AgentInvocation {
   const runtimeConfig = refreshAgentConfigIfActive(config);
   const agentCmd = guardAgentCommand(agentName, runtimeConfig);
-  const runtime = getAgentRuntimeMetadata(agentName, runtimeConfig, runtimeContext);
-  if (runtime.effective_model && !runtime.model_argument_present) {
-    throw new Error(`Agent "${agentName}" model override is not present in the configured CLI arguments.`);
-  }
+  const runtime = getAgentRuntimeMetadata(agentName, runtimeConfig, { repo_path: repoPath, ...runtimeContext });
+  const agentConfig = runtimeConfig.agents[agentName];
+  const invocationArgs = applyAdapterInvocationArgs(agentName, agentConfig, runtime.effective_model);
   const configuredNative = resolveConfiguredNativeAgentLaunch(
     agentName,
-    runtimeConfig.agents[agentName]?.adapter || agentName,
+    agentConfig?.adapter || agentName,
     agentCmd.command,
-    agentCmd.args,
+    invocationArgs,
   );
-  assertConfiguredNodeLaunch(agentName, agentCmd.command, agentCmd.args, configuredNative);
+  assertConfiguredNodeLaunch(agentName, agentCmd.command, invocationArgs, configuredNative);
   const launch = configuredNative ? { command: configuredNative.command, argsPrefix: [] } : resolveAgentLaunch(
     agentName,
     agentCmd.command,
@@ -204,14 +205,15 @@ export function buildAgentInvocation(
     process.env.PATH || "",
     existsSync,
     repoPath,
-    runtimeConfig.agents[agentName]?.adapter || agentName,
+    agentConfig?.adapter || agentName,
   );
-  const configuredArgs = configuredNative ? configuredNative.args : agentCmd.args;
-  const environmentVariableNames = [...(runtimeConfig.agents[agentName]?.envAllowlist ?? [])];
+  const configuredArgs = configuredNative ? configuredNative.args : invocationArgs;
+  const environmentVariableNames = [...(agentConfig?.envAllowlist ?? [])];
   const blockedEnvironmentVariableNames = [
     "CONTROL_PLANE_API_KEY",
     runtimeConfig.http?.ownerTokenEnv || "PATCHWARDEN_OWNER_TOKEN",
   ];
+  const environmentOverrides = resolveAgentEnvironmentOverrides(agentName, agentConfig);
   const sanitizedPrompt = sanitizePromptArg(prompt);
 
   const hasPromptFilePlaceholder = configuredArgs.includes("{prompt_file}");
@@ -232,8 +234,30 @@ export function buildAgentInvocation(
     promptMode,
     environmentVariableNames,
     blockedEnvironmentVariableNames,
+    environmentOverrides,
     runtime,
     ...(promptMode === "file" && promptFilePath ? { promptFilePath } : {}),
+  };
+}
+
+function resolveAgentEnvironmentOverrides(
+  agentName: string,
+  agentConfig: PatchWardenConfig["agents"][string],
+): Record<string, string | null> {
+  const adapter = agentConfig?.adapter || agentName;
+  const inheritsSettings = (agentConfig?.settings_policy || "inherit") === "inherit";
+  if (
+    adapter !== "opencode"
+    || !inheritsSettings
+    || process.env.PATCHWARDEN_WATCHER_XDG_CONFIG_HOME_OWNED !== "1"
+  ) {
+    return {};
+  }
+  const originalXdgConfigHome = process.env.PATCHWARDEN_AGENT_XDG_CONFIG_HOME;
+  return {
+    XDG_CONFIG_HOME: originalXdgConfigHome && originalXdgConfigHome.trim()
+      ? originalXdgConfigHome
+      : null,
   };
 }
 

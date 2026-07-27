@@ -222,7 +222,7 @@ describe("artifact schema_version", () => {
   it("ARTIFACT_SCHEMA_VERSION equals TOOL_SCHEMA_EPOCH and is the expected string", () => {
     assert.equal(ARTIFACT_SCHEMA_VERSION, TOOL_SCHEMA_EPOCH);
     assert.equal(typeof ARTIFACT_SCHEMA_VERSION, "string");
-    assert.equal(ARTIFACT_SCHEMA_VERSION, "2026-07-19-v15");
+    assert.equal(ARTIFACT_SCHEMA_VERSION, "2026-07-26-v16");
   });
 
   // ── 2. createTask writes status.json with schema_version ───────

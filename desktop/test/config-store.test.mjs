@@ -123,4 +123,29 @@ describe("desktop config store", () => {
     updateAgentSettings(path, [{ id: "codex", available: true, command: "C:\\tools\\codex.exe", prefixArgs: [] }], [{ id: "codex", enabled: true, model: "gpt-codex" }]);
     assert.deepEqual(readJson(path).agents.codex.envAllowlist, ["OPENAI_API_KEY", "HTTPS_PROXY"]);
   });
+
+  it("preserves Claude relay policy fields while updating the selected model", () => {
+    const root = mkdtempSync(join(tmpdir(), "patchwarden-desktop-claude-policy-"));
+    const path = join(root, "patchwarden.config.json");
+    const config = buildConfig("C:\\workspace", [
+      { id: "claude", available: true, command: "C:\\tools\\claude.exe", prefixArgs: [] },
+    ]);
+    Object.assign(config.agents.claude, {
+      provider: "agnes",
+      settings_policy: "inherit",
+      available_models: ["agnes/model-a", "agnes/model-b"],
+      allow_unlisted_model_override: false,
+    });
+    atomicWriteJson(path, config, false);
+
+    updateAgentSettings(path, [{ id: "claude", available: true, command: "C:\\tools\\claude.exe", prefixArgs: [] }], [
+      { id: "claude", enabled: true, model: "agnes/model-b" },
+    ]);
+    const updated = readJson(path).agents.claude;
+    assert.equal(updated.default_model, "agnes/model-b");
+    assert.equal(updated.provider, "agnes");
+    assert.equal(updated.settings_policy, "inherit");
+    assert.deepEqual(updated.available_models, ["agnes/model-a", "agnes/model-b"]);
+    assert.equal(updated.allow_unlisted_model_override, false);
+  });
 });

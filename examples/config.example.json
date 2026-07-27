@@ -7,12 +7,36 @@
     "codex": {
       "command": "codex",
       "args": ["exec", "--cd", "{repo}", "{prompt}"],
+      "adapter": "codex",
+      "default_model": null,
+      "available_models": [],
+      "allow_unlisted_model_override": true,
       "envAllowlist": []
     },
     "opencode": {
       "command": "opencode",
       "args": ["run", "{prompt}"],
+      "adapter": "opencode",
+      "provider": "agnes",
+      "default_model": "agnes/agnes-2.0-flash",
+      "available_models": ["agnes/agnes-2.0-flash"],
+      "allow_unlisted_model_override": true,
       "envAllowlist": []
+    },
+    "claude": {
+      "command": "claude",
+      "args": ["-p", "{prompt}"],
+      "adapter": "claude",
+      "default_model": null,
+      "available_models": [],
+      "allow_unlisted_model_override": true,
+      "settings_policy": "inherit",
+      "envAllowlist": []
+    }
+  },
+  "repoAgentDefaults": {
+    "my-project": {
+      "opencode": "agnes/agnes-2.0-flash"
     }
   },
   "allowedTestCommands": [

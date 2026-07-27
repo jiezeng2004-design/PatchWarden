@@ -282,4 +282,135 @@ describe("createTask", () => {
     // Task is still created (queued) despite being blocked
     assert.ok(existsSync(join(out.path, "status.json")));
   });
+
+  it("refreshes Agent configuration before freezing an Assessment snapshot", async () => {
+    writeConfig(tempDir);
+    mkdirSync(join(tempDir, "my-repo"), { recursive: true });
+    const configPath = join(tempDir, "patchwarden.config.json");
+    const updated = JSON.parse(readFileSync(configPath, "utf-8"));
+    updated.agents.codex = {
+      command: "codex-updated",
+      args: ["exec", "{prompt}"],
+      adapter: "codex",
+      default_model: "openai/model-after-refresh",
+    };
+    writeFileSync(configPath, JSON.stringify(updated), "utf-8");
+
+    const assessed = await createTask({
+      inline_plan: "## Goal\nInspect the refreshed Agent configuration.",
+      agent: "codex",
+      repo_path: "my-repo",
+      execution_mode: "assess_only",
+    }) as AssessOnlyOutput;
+    const assessmentPath = join(
+      tempDir,
+      ".patchwarden",
+      "assessments",
+      assessed.assessment_id,
+      "assessment.json",
+    );
+    const assessment = JSON.parse(readFileSync(assessmentPath, "utf-8"));
+    assert.equal(assessment.model_selection.configured_default_model, "openai/model-after-refresh");
+    assert.equal(assessment.model_selection.effective_model, "openai/model-after-refresh");
+
+    const executed = await createTask({
+      execution_mode: "execute",
+      assessment_id: assessed.assessment_id,
+    }) as CreateTaskOutput;
+    assert.equal(executed.model_selection.effective_model, "openai/model-after-refresh");
+  });
+
+  it("reuses the original task for the same request_id and reports requested_model conflicts", async () => {
+    writeConfig(tempDir);
+    mkdirSync(join(tempDir, "my-repo"), { recursive: true });
+    const input = {
+      inline_plan: "## Goal\nCreate one idempotent task.",
+      agent: "codex",
+      requested_model: "openai/model-a",
+      repo_path: "my-repo",
+      request_id: "create_req_model_001",
+    } as const;
+
+    const first = await createTask(input);
+    const reused = await createTask(input);
+    assert.equal(reused.task_id, first.task_id);
+    assert.equal(reused.reused_request, true);
+    assert.equal(first.model_selection.requested_model, "openai/model-a");
+
+    await assert.rejects(
+      () => createTask({ ...input, requested_model: "openai/model-b" }),
+      (error: unknown) => {
+        assert.ok(error instanceof PatchWardenError);
+        assert.equal(error.reason, "request_id_parameter_mismatch");
+        assert.deepEqual(error.details.changed_fields, ["requested_model"]);
+        return true;
+      },
+    );
+    const taskEntries = readdirSync(join(tempDir, ".patchwarden", "tasks")).filter((name) => name.startsWith("task_"));
+    assert.deepEqual(taskEntries, [first.task_id]);
+  });
+
+  it("coalesces concurrent identical create_task requests without a duplicate task", async () => {
+    writeConfig(tempDir);
+    mkdirSync(join(tempDir, "my-repo"), { recursive: true });
+    const input = {
+      inline_plan: "## Goal\nCreate exactly one concurrent task.",
+      agent: "codex",
+      requested_model: "openai/model-a",
+      repo_path: "my-repo",
+      request_id: "create_req_concurrent_001",
+    } as const;
+
+    const [first, second] = await Promise.all([createTask(input), createTask(input)]);
+    assert.equal(first.task_id, second.task_id);
+    assert.equal([first.reused_request, second.reused_request].filter(Boolean).length, 1);
+    const taskEntries = readdirSync(join(tempDir, ".patchwarden", "tasks")).filter((name) => name.startsWith("task_"));
+    assert.deepEqual(taskEntries, [first.task_id]);
+  });
+
+  it("requires an explicit Agent when requested_model is present", async () => {
+    writeConfig(tempDir);
+    mkdirSync(join(tempDir, "my-repo"), { recursive: true });
+    for (const agent of [undefined, "auto"] as const) {
+      await assert.rejects(
+        () => createTask({
+          inline_plan: "## Goal\nDo not auto-route this model.",
+          ...(agent === undefined ? {} : { agent }),
+          requested_model: "openai/model-a",
+          repo_path: "my-repo",
+        }),
+        (error: unknown) => error instanceof PatchWardenError
+          && error.reason === "requested_model_requires_explicit_agent",
+      );
+    }
+  });
+
+  it("locks requested_model into the two-phase assessment snapshot", async () => {
+    writeConfig(tempDir);
+    mkdirSync(join(tempDir, "my-repo"), { recursive: true });
+    const assessment = await createTask({
+      inline_plan: "## Goal\nKeep one model across assessment and execution.",
+      agent: "codex",
+      requested_model: "openai/model-a",
+      repo_path: "my-repo",
+      execution_mode: "assess_only",
+    });
+
+    await assert.rejects(
+      () => createTask({
+        execution_mode: "execute",
+        assessment_id: assessment.assessment_id,
+        requested_model: "openai/model-b",
+      }),
+      (error: unknown) => error instanceof PatchWardenError
+        && error.reason === "assessment_parameter_mismatch"
+        && error.details.field === "requested_model",
+    );
+    const executed = await createTask({
+      execution_mode: "execute",
+      assessment_id: assessment.assessment_id,
+    });
+    assert.equal(executed.model_selection.requested_model, "openai/model-a");
+    assert.equal(executed.model_selection.effective_model, "openai/model-a");
+  });
 });

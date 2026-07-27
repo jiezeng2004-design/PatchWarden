@@ -23,6 +23,7 @@ export interface AuditCheck {
 
 export interface DirectSessionAuditOutput {
   session_id: string;
+  expected_changes: boolean;
   decision: "pass" | "warn" | "fail";
   reason_codes: string[];
   blocking_findings: string[];
@@ -64,14 +65,17 @@ export function auditDirectSession(sessionId: string): DirectSessionAuditOutput 
 
   // Check 2: diff empty
   const changedFilesTotal = artifacts?.changed_files?.length ?? 0;
+  const expectsChanges = session.expected_changes !== false;
   checks.push({
     name: "diff_empty",
-    result: changedFilesTotal === 0 ? "warn" : "pass",
+    result: changedFilesTotal === 0 && expectsChanges ? "warn" : "pass",
     detail:
       changedFilesTotal === 0
-        ? "No file changes detected in this session."
+        ? expectsChanges
+          ? "No file changes detected in this session."
+          : "No file changes were expected for this read-only or verification-only session."
         : `${changedFilesTotal} file(s) changed.`,
-    reason_code: changedFilesTotal === 0 ? "empty_diff" : undefined,
+    reason_code: changedFilesTotal === 0 && expectsChanges ? "empty_diff" : undefined,
   });
 
   if (artifacts) {
@@ -295,6 +299,7 @@ export function auditDirectSession(sessionId: string): DirectSessionAuditOutput 
 
   const output: DirectSessionAuditOutput = {
     session_id: sessionId,
+    expected_changes: expectsChanges,
     decision,
     reason_codes: reasonCodes,
     blocking_findings: blockingFindings,
@@ -362,6 +367,7 @@ function formatAuditMd(
     "# Direct Session Audit Report",
     "",
     `**Session ID:** ${output.session_id}`,
+    `**Expected changes:** ${output.expected_changes ? "yes" : "no"}`,
     `**Decision:** ${output.decision.toUpperCase()}`,
     `**Changed files:** ${output.evidence.changed_files_total}`,
     "",

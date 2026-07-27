@@ -2,6 +2,7 @@ import { existsSync, statSync } from "node:fs";
 import { basename, delimiter, extname, isAbsolute, join, resolve } from "node:path";
 import { getAgentRuntimeMetadata, refreshAgentConfig } from "../../config.js";
 import { sanitizeTrustedPath } from "../../runner/processSecurity.js";
+import { applyAdapterInvocationArgs } from "../../agents/modelSelection.js";
 import {
   assertConfiguredNodeLaunch,
   resolveAgentLaunch,
@@ -17,6 +18,14 @@ export interface AgentAvailability {
   checked_at: string;
   adapter: string | null;
   model: string | null;
+  default_model?: string | null;
+  available_models?: string[];
+  supports_model_override?: boolean;
+  configured_default_model?: string | null;
+  effective_model?: string | null;
+  model_source?: string;
+  provider?: string | null;
+  settings_policy?: "inherit" | "isolated";
   capabilities: { model_override: boolean };
   availability_scope: "executable_only";
   provider_status: "not_checked";
@@ -37,7 +46,8 @@ export function listAgents(): { agents: AgentAvailability[]; total: number; conf
       const available = commandExists(agent.command, config.workspaceRoot);
       const runtime = getAgentRuntimeMetadata(name, config);
       const modelArgumentPresent = runtime.model_argument_present;
-      const launch = validateInvocationLaunch(name, agent.command, agent.args, agent.adapter || name, config.workspaceRoot);
+      const invocationArgs = applyAdapterInvocationArgs(name, agent, runtime.effective_model);
+      const launch = validateInvocationLaunch(name, agent.command, invocationArgs, agent.adapter || name, config.workspaceRoot);
       const modelReady = runtime.effective_model === null || modelArgumentPresent;
       const invocationReady = available && modelReady && launch.ready;
       return {
@@ -51,6 +61,14 @@ export function listAgents(): { agents: AgentAvailability[]; total: number; conf
         checked_at: checkedAt,
         adapter: runtime.adapter,
         model: runtime.effective_model,
+        default_model: agent.default_model ?? runtime.configured_default_model,
+        available_models: [...(agent.available_models || [])],
+        supports_model_override: runtime.adapter !== null,
+        configured_default_model: runtime.configured_default_model,
+        effective_model: runtime.effective_model,
+        model_source: runtime.model_source,
+        provider: runtime.provider,
+        settings_policy: agent.settings_policy || "inherit",
         capabilities: { model_override: runtime.adapter !== null },
         availability_scope: "executable_only" as const,
         provider_status: "not_checked" as const,
