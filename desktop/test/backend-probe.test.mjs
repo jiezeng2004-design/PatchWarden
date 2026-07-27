@@ -27,7 +27,7 @@ describe("desktop backend ownership", () => {
       async () => ({ ok: true, json: async () => ({ server_version: "1.6.1", config_identity_sha256: configIdentity(expected, "win32") }) }),
       "http://127.0.0.1:8090",
       expected,
-      "1.6.3",
+      "1.6.4",
     );
     assert.deepEqual(result, { kind: "outdated_patchwarden", version: "1.6.1" });
   });

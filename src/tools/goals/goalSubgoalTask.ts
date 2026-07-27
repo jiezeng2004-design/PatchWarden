@@ -16,7 +16,7 @@
 
 import { mutateGoalStatusAsync } from "../../goal/goalStore.js";
 import { addSubgoal, linkTaskToSubgoal, updateSubgoalStatus, type Subgoal } from "../../goal/goalStatus.js";
-import { createTask, type CreateTaskInput } from "../tasks/createTask.js";
+import { createTask, MODEL_SELECTION_REPO_PATH, type CreateTaskInput } from "../tasks/createTask.js";
 import { createWorktree, discardWorktree } from "../../goal/worktreeManager.js";
 import { getConfig } from "../../config.js";
 import { PatchWardenError } from "../../errors.js";
@@ -36,6 +36,7 @@ export interface CreateSubgoalTaskInput {
   template?: CreateTaskInput["template"];
   goal?: string;
   agent?: string;
+  requested_model?: string;
   repo_path: string;
   test_command?: string;
   verify_commands?: string[];
@@ -128,12 +129,14 @@ export async function createSubgoalTask(input: CreateSubgoalTaskInput): Promise<
   let taskId: string;
   try {
     const taskResult = await createTask({
+      [MODEL_SELECTION_REPO_PATH]: goalRepoPath,
       plan_id: input.plan_id,
       inline_plan: input.inline_plan,
       plan_title: input.plan_title,
       template: input.template,
       goal: input.goal,
       agent: input.agent,
+      requested_model: input.requested_model,
       repo_path: repoPathForTask,
       test_command: input.test_command,
       verify_commands: input.verify_commands,

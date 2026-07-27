@@ -499,6 +499,17 @@ describe("auditTask new checks", () => {
       assert.ok(result!.detail.includes("deploy"));
     });
 
+    it("does not interpret narrative npm terminology as a command", () => {
+      const result = checkUnrecordedCommandExecution(
+        "$ npm test\nExit code: 0",
+        "This repository is a small private npm fixture used for demonstrations.",
+        [],
+        "npm test",
+      );
+      assert.equal(result!.result, "pass");
+      assert.doesNotMatch(result!.detail, /fixture/);
+    });
+
     it("handles npm.cmd variant", () => {
       const result = checkUnrecordedCommandExecution(
         "npm.cmd run build\nDone",

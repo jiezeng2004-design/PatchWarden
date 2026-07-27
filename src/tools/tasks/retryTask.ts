@@ -43,6 +43,7 @@ export async function retryTask(taskId: string) {
   const newTask = await createTask({
     plan_id: data.plan_id,
     agent: data.agent,
+    requested_model: typeof data.requested_model === "string" ? data.requested_model : undefined,
     repo_path: typeof data.repo_path === "string" ? data.repo_path : undefined,
     test_command: typeof data.test_command === "string" ? data.test_command : undefined,
     verify_commands: Array.isArray(data.verify_commands)

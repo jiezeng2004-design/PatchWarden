@@ -21,6 +21,9 @@ export interface TaskSummaryOutput {
   phase: string;
   agent: string;
   agent_runtime: Record<string, unknown> | null;
+  model_selection: Record<string, unknown> | null;
+  failure_category: string | null;
+  provider_error_reference: string | null;
   workspace_root: string;
   repo_path: string;
   resolved_repo_path: string;
@@ -30,6 +33,7 @@ export interface TaskSummaryOutput {
   workspace_dirty_after: boolean;
   verify_status: string;
   verify_commands: unknown[];
+  executed_verify_commands: unknown[];
   last_heartbeat_at: string;
   current_command: string | null;
   elapsed_ms: number;
@@ -55,10 +59,12 @@ export interface TaskSummaryOutput {
   verification_summary: {
     status: string;
     command_count: number;
+    configured_command_count: number;
     passed_commands: number;
     failed_commands: number;
     skipped_commands: number;
     headline: string;
+    reason: string | null;
   };
   failed_command_detail: {
     command: string;
@@ -90,6 +96,9 @@ export interface CompactTaskSummaryOutput {
   phase: string;
   repo_path: string;
   agent_runtime: Record<string, unknown> | null;
+  model_selection: Record<string, unknown> | null;
+  failure_category: string | null;
+  provider_error_reference: string | null;
   changed_files_total: number;
   out_of_scope_changes_total: number;
   artifact_hygiene: {
@@ -220,12 +229,29 @@ export function getTaskSummary(taskId: string, options: GetTaskSummaryOptions = 
   const artifactHygiene = asRecord(result.artifact_hygiene ?? changedFilesRead.data.artifact_hygiene ?? {
     counts: status.artifact_hygiene_counts || {},
   });
-  const verifyCommands = asArray(verify.commands ?? result.verify_commands ?? resultVerify.commands);
+  const verifyCommands = asArray(
+    verify.configured_commands
+    ?? verify.requested_commands
+    ?? result.configured_verify_commands
+    ?? result.verify_commands
+    ?? status.verify_commands,
+  );
+  const executedVerifyRecords = asArray(verify.commands ?? resultVerify.commands);
+  const executedVerifyCommands = executedVerifyRecords.map((entry) => {
+    const record = asRecord(entry);
+    return Object.keys(record).length > 0 ? String(record.command || "") : String(entry || "");
+  }).filter(Boolean);
   const testLogSummary = summarizeTestLog(join(taskDir, "test.log"));
-  const verificationSummary = buildVerificationSummary(verifyStatus, verifyCommands, testLogSummary);
+  const verificationSummary = buildVerificationSummary(
+    verifyStatus,
+    verifyCommands,
+    executedVerifyRecords,
+    testLogSummary,
+    typeof verify.reason === "string" ? verify.reason : null,
+  );
 
   // Extract failed command detail from verify records
-  const failedVerify = verifyCommands
+  const failedVerify = executedVerifyRecords
     .map(asRecord)
     .find((command) => ["failed", "timed_out", "canceled"].includes(String(command.status || "")));
   const failedCommandDetail = failedVerify ? {
@@ -253,7 +279,10 @@ export function getTaskSummary(taskId: string, options: GetTaskSummaryOptions = 
     acceptance_reviewer: acceptanceReviewer,
     phase: String(status.phase || "unknown"),
     agent: String(status.agent || result.agent || ""),
-    agent_runtime: sanitizeAgentRuntimeMetadata(status.agent_runtime ?? result.agent_runtime),
+    agent_runtime: sanitizeAgentRuntimeMetadata(status.agent_runtime ?? result.agent_runtime ?? status.model_selection ?? result.model_selection),
+    model_selection: sanitizeAgentRuntimeMetadata(status.model_selection ?? result.model_selection ?? status.agent_runtime ?? result.agent_runtime),
+    failure_category: String(status.failure_category || result.failure_category || status.agent_failure_category || result.agent_failure_category || "") || null,
+    provider_error_reference: safeProviderErrorReference(status.provider_error_reference ?? result.provider_error_reference),
     workspace_root: String(status.workspace_root || result.workspace_root || config.workspaceRoot),
     repo_path: String(status.repo_path || result.repo_path || ""),
     resolved_repo_path: String(status.resolved_repo_path || result.resolved_repo_path || ""),
@@ -263,6 +292,7 @@ export function getTaskSummary(taskId: string, options: GetTaskSummaryOptions = 
     workspace_dirty_after: Boolean(status.workspace_dirty_after ?? status.workspace_dirty ?? result.workspace_dirty_after),
     verify_status: verifyStatus,
     verify_commands: verifyCommands,
+    executed_verify_commands: executedVerifyCommands,
     last_heartbeat_at: String(status.last_heartbeat_at || status.updated_at || ""),
     current_command: status.current_command ?? null,
     elapsed_ms: elapsedMs,
@@ -340,6 +370,9 @@ function buildCompactSummary(output: Record<string, unknown>, maxItems: number):
     phase: String(output.phase),
     repo_path: String(output.repo_path),
     agent_runtime: Object.keys(asRecord(output.agent_runtime)).length > 0 ? asRecord(output.agent_runtime) : null,
+    model_selection: Object.keys(asRecord(output.model_selection)).length > 0 ? asRecord(output.model_selection) : null,
+    failure_category: output.failure_category ? String(output.failure_category) : null,
+    provider_error_reference: output.provider_error_reference ? String(output.provider_error_reference) : null,
     changed_files_total: asArray(output.changed_files).length,
     out_of_scope_changes_total: asArray(output.out_of_scope_changes).length,
     artifact_hygiene: {
@@ -416,8 +449,14 @@ function readResultFallback(path: string): string {
   return text.match(/## Summary\s+([\s\S]*?)(?:\n## |\n---|$)/i)?.[1]?.trim().slice(0, 1000) || "";
 }
 
-function buildVerificationSummary(status: string, commands: unknown[], testLogSummary: string) {
-  const commandRecords = commands.map(asRecord);
+function buildVerificationSummary(
+  status: string,
+  configuredCommands: unknown[],
+  executedCommands: unknown[],
+  testLogSummary: string,
+  reason: string | null,
+) {
+  const commandRecords = executedCommands.map(asRecord);
   const passed = commandRecords.filter((command) => command.status === "passed").length;
   const failed = commandRecords.filter((command) => ["failed", "timed_out", "canceled"].includes(String(command.status || ""))).length;
   const skipped = commandRecords.filter((command) => command.status === "skipped").length;
@@ -425,15 +464,21 @@ function buildVerificationSummary(status: string, commands: unknown[], testLogSu
     ...commandRecords.flatMap((command) => [command.stdout_tail, command.stderr_tail]),
     testLogSummary,
   ].filter((value): value is string => typeof value === "string").join("\n");
-  const headline = extractTestHeadline(evidenceText)
-    || (commands.length > 0 ? `${passed}/${commands.length} verification commands passed` : testLogSummary);
+  const headline = status === "not_run" && reason === "agent_failed_before_verification"
+    ? "Verification not run because the agent failed before verification"
+    : extractTestHeadline(evidenceText)
+      || (executedCommands.length > 0
+        ? `${passed}/${executedCommands.length} verification commands passed`
+        : configuredCommands.length > 0 ? "Verification configured but not executed" : testLogSummary);
   return {
     status,
-    command_count: commands.length,
+    command_count: executedCommands.length,
+    configured_command_count: configuredCommands.length,
     passed_commands: passed,
     failed_commands: failed,
     skipped_commands: skipped,
     headline,
+    reason,
   };
 }
 
@@ -458,4 +503,8 @@ function readLogTail(path: string, lines: number): string {
   } catch {
     return "(unreadable)";
   }
+}
+
+function safeProviderErrorReference(value: unknown): string | null {
+  return typeof value === "string" && /^err_[A-Za-z0-9_-]{4,120}$/.test(value) ? value : null;
 }

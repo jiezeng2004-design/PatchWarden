@@ -782,7 +782,7 @@ function registerDesktopIpc(): void {
     const selections = parseAgentSelections(asRecord(value).agents);
     if (detectedAgents.length === 0) detectedAgents = await detectAgents();
     const settings = updateAgentSettings(activeConfigPath!, detectedAgents as readonly AgentDetectionInput[], selections);
-    const expectedRevision = computeAgentConfigRevision(asRecord(readJson(activeConfigPath!)).agents);
+    const expectedRevision = computeAgentConfigRevision(readJson(activeConfigPath!));
     let application: AgentSettingsApplication = { applied: false, reason: "backend_unavailable" };
     if (appMode === "ready") {
       try {

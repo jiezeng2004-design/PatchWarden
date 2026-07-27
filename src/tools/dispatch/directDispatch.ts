@@ -45,6 +45,9 @@ export const directHandlers: ToolHandlerMap = {
       await createDirectSession({
         repo_path: String(args?.repo_path ?? ""),
         title: args?.title ? String(args.title) : undefined,
+        expected_changes: args?.expected_changes !== undefined
+          ? Boolean(args.expected_changes)
+          : undefined,
       }),
     );
   },

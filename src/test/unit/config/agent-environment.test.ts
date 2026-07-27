@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import {
+  getAgentConfigRevision,
   getAgentRuntimeMetadata,
   refreshAgentConfig,
   reloadConfig,
@@ -103,6 +104,66 @@ describe("agent environment configuration", () => {
 
     assert.equal(runtime.effective_model, null);
     assert.equal(runtime.model_argument_present, false);
+  });
+
+  it("keeps revisions stable across key order and unrelated config while tracking model policy inputs", () => {
+    const base = {
+      workspaceRoot: root,
+      agents: {
+        claude: {
+          command: "claude",
+          args: ["-p", "{prompt}"],
+          adapter: "claude",
+          default_model: "claude/model-a",
+          available_models: ["claude/model-a"],
+          allow_unlisted_model_override: false,
+          settings_policy: "inherit" as const,
+        },
+      },
+      repoAgentDefaults: { repo: { claude: "claude/model-a" } },
+      allowedTestCommands: ["npm test"],
+    } as any;
+    const reordered = {
+      ...base,
+      unrelated: "ignored",
+      agents: { claude: {
+        settings_policy: "inherit",
+        allow_unlisted_model_override: false,
+        available_models: ["claude/model-a"],
+        default_model: "claude/model-a",
+        adapter: "claude",
+        args: ["-p", "{prompt}"],
+        command: "claude",
+      } },
+    } as any;
+    const revision = getAgentConfigRevision(base);
+    assert.equal(getAgentConfigRevision(reordered), revision);
+    for (const changed of [
+      { ...base, agents: { claude: { ...base.agents.claude, default_model: "claude/model-b" } } },
+      { ...base, agents: { claude: { ...base.agents.claude, available_models: ["claude/model-b"] } } },
+      { ...base, agents: { claude: { ...base.agents.claude, settings_policy: "isolated" } } },
+      { ...base, repoAgentDefaults: { repo: { claude: "claude/model-b" } } },
+    ]) {
+      assert.notEqual(getAgentConfigRevision(changed as any), revision);
+    }
+  });
+
+  it("rejects an unlisted repository model before any task can start", () => {
+    const configPath = join(root, "repo-model-not-allowed.json");
+    writeFileSync(configPath, JSON.stringify({
+      workspaceRoot: root,
+      agents: {
+        opencode: {
+          command: "opencode",
+          args: ["run", "{prompt}"],
+          adapter: "opencode",
+          available_models: ["agnes/allowed"],
+          allow_unlisted_model_override: false,
+        },
+      },
+      repoAgentDefaults: { repo: { opencode: "agnes/blocked" } },
+    }), "utf-8");
+    assert.throws(() => reloadConfig(configPath), /not present in available_models/);
   });
 });
 

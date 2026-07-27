@@ -27,6 +27,9 @@ export function safeResult(taskId: string, options: SafeViewOptions = {}) {
     acceptance_status: summary.acceptance_status,
     phase: summary.phase,
     agent_runtime: summary.agent_runtime,
+    model_selection: summary.model_selection,
+    failure_category: summary.failure_category,
+    provider_error_reference: summary.provider_error_reference,
     repo_path: summary.repo_path,
     changed_files_total: summary.changed_files_total,
     out_of_scope_changes_total: summary.out_of_scope_changes_total,
@@ -65,6 +68,10 @@ export function safeTestSummary(taskId: string) {
     task_id: taskId,
     status: String(verify.status || summary.verification_summary.status || "not_available"),
     command_count: commands.length,
+    configured_command_count: asArray(verify.configured_commands ?? verify.requested_commands).length,
+    configured_commands: asArray(verify.configured_commands ?? verify.requested_commands).map(String),
+    executed_verify_commands: commands.map((entry) => entry.command),
+    reason: typeof verify.reason === "string" ? verify.reason : null,
     passed_commands: commands.filter((entry) => entry.status === "passed").length,
     failed_commands: commands.filter((entry) => ["failed", "timed_out", "canceled"].includes(entry.status)).length,
     skipped_commands: commands.filter((entry) => entry.status === "skipped").length,
@@ -129,6 +136,7 @@ export function safeAuditDirectSession(sessionId: string, options: SafeViewOptio
   const audit = auditSession({ session_id: sessionId });
   return redact({
     session_id: audit.session_id,
+    expected_changes: audit.expected_changes,
     decision: audit.decision,
     reason_codes: audit.reason_codes.slice(0, maxItems),
     blocking_findings: limitStrings(audit.blocking_findings, maxItems),
@@ -153,6 +161,9 @@ function auditToSafe(audit: AuditTaskOutput, maxItems: number) {
   return redact({
     schema_version: ARTIFACT_SCHEMA_VERSION,
     task_id: audit.task_id,
+    model_selection: audit.model_selection,
+    failure_category: audit.failure_category,
+    provider_error_reference: audit.provider_error_reference,
     verdict: audit.verdict,
     acceptance: {
       verdict: audit.acceptance.verdict,
@@ -188,6 +199,7 @@ function directSessionToSafe(session: DirectSessionRecord, maxItems: number, vie
     session_id: session.session_id,
     title: session.title || "",
     repo_path: session.repo_path,
+    expected_changes: session.expected_changes !== false,
     created_at: session.created_at,
     expires_at: session.expires_at,
     finalized: session.finalized,

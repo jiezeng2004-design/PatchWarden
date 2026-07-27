@@ -16,12 +16,16 @@ import { afterEach, describe, it } from "node:test";
 import { reloadConfig } from "../../../config.js";
 import { PatchWardenError } from "../../../errors.js";
 import {
+  appendDirectSessionVerificationRun,
   appendDirectSessionOperation,
+  createDirectSession,
+  finalizeDirectSessionRecord,
   readDirectSession,
   withDirectSessionMutationLock,
   withDirectSessionMutationLockAsync,
   type DirectSessionRecord,
 } from "../../../direct/directSessionStore.js";
+import { auditDirectSession } from "../../../direct/directAudit.js";
 
 describe("Direct session store", () => {
   let root: string | undefined;
@@ -179,7 +183,102 @@ describe("Direct session store", () => {
     assert.ok(elapsedMs < 9_000, `metadata update exceeded its bounded wait: ${elapsedMs}ms`);
     assert.equal(readDirectSession(sessionId).operations.length, 1);
   });
+
+  it("treats legacy sessions without expected_changes as edit sessions", () => {
+    root = mkdtempSync(join(tmpdir(), "patchwarden-direct-legacy-intent-"));
+    const repoPath = join(root, "repo");
+    const sessionId = "direct-legacy-intent";
+    const sessionDir = join(root, ".patchwarden", "direct-sessions", sessionId);
+    const configPath = join(root, "patchwarden.config.json");
+    mkdirSync(repoPath, { recursive: true });
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(configPath, JSON.stringify({ workspaceRoot: root }), "utf-8");
+    const legacy = { ...makeSession(sessionId, repoPath) } as Partial<DirectSessionRecord>;
+    delete legacy.expected_changes;
+    writeFileSync(join(sessionDir, "session.json"), JSON.stringify(legacy), "utf-8");
+    process.env.PATCHWARDEN_CONFIG = configPath;
+    reloadConfig();
+
+    assert.equal(readDirectSession(sessionId).expected_changes, true);
+  });
+
+  it("passes an empty diff when the session explicitly does not expect changes", () => {
+    root = mkdtempSync(join(tmpdir(), "patchwarden-direct-read-only-"));
+    const repoPath = join(root, "repo");
+    const configPath = join(root, "patchwarden.config.json");
+    mkdirSync(repoPath, { recursive: true });
+    writeFileSync(configPath, JSON.stringify({ workspaceRoot: root }), "utf-8");
+    process.env.PATCHWARDEN_CONFIG = configPath;
+    reloadConfig();
+
+    const now = new Date().toISOString();
+    const session = createDirectSession({
+      repo_path: "repo",
+      resolved_repo_path: repoPath,
+      title: "Read-only verification",
+      expected_changes: false,
+      snapshot: {
+        captured_at: now,
+        is_git: false,
+        head: null,
+        status: "",
+        workspace_dirty: false,
+        files: {},
+        dirty_paths: [],
+        warnings: [],
+      },
+    });
+    appendDirectSessionVerificationRun(session.session_id, {
+      command: "npm test",
+      exit_code: 0,
+      passed: true,
+      timed_out: false,
+      stdout_tail: "ok",
+      stderr_tail: "",
+      started_at: now,
+      finished_at: now,
+      log_path: "verification.log",
+    });
+    finalizeDirectSessionRecord(session.session_id, emptyChangeArtifacts());
+
+    const audit = auditDirectSession(session.session_id);
+    assert.equal(audit.decision, "pass");
+    assert.equal(audit.expected_changes, false);
+    assert.equal(audit.reason_codes.includes("empty_diff"), false);
+    assert.equal(audit.warnings.some((warning) => warning.startsWith("diff_empty:")), false);
+  });
 });
+
+function emptyChangeArtifacts() {
+  return {
+    changed_files: [],
+    diff: "",
+    diff_available: true,
+    diff_truncated: false,
+    diff_size_bytes: 0,
+    additions: 0,
+    deletions: 0,
+    file_stats: [],
+    workspace_dirty_before: false,
+    workspace_dirty_after: false,
+    patch_mode: "no_changes" as const,
+    unavailable_reason: null,
+    artifact_hygiene: {
+      counts: {
+        source_changes: 0,
+        tracked_build_artifacts: 0,
+        ignored_untracked_artifacts: 0,
+        runtime_generated_files: 0,
+        suspicious_changes: 0,
+      },
+      source_changes: [],
+      tracked_build_artifacts: [],
+      ignored_untracked_artifacts: [],
+      runtime_generated_files: [],
+      suspicious_changes: [],
+    },
+  };
+}
 
 function makeSession(sessionId: string, repoPath: string): DirectSessionRecord {
   const now = new Date().toISOString();
@@ -205,6 +304,7 @@ function makeSession(sessionId: string, repoPath: string): DirectSessionRecord {
     },
     workspace_fingerprint_before: "test",
     allowed_commands: [],
+    expected_changes: true,
     operations: [],
     verification_runs: [],
     finalized: false,

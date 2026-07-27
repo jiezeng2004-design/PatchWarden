@@ -40,6 +40,32 @@ describe("process security child environment", () => {
     assert.equal(env.ComSpec, "D:\\Trusted\\cmd.exe");
     assert.equal(env.PATHEXT, ".EXE;.CMD");
   });
+
+  it("applies case-insensitive environment overrides without leaking the watcher XDG directory", () => {
+    const inherited = buildChildEnvironment({
+      cwd: "C:\\workspace\\repo",
+      platform: "win32",
+      sourceEnvironment: {
+        SystemRoot: "C:\\Windows",
+        PATH: "C:\\Tools",
+        XDG_CONFIG_HOME: "C:\\PatchWarden\\opencode-config",
+      },
+      overrides: { XDG_CONFIG_HOME: "C:\\Users\\student\\custom-config" },
+    });
+    assert.equal(inherited.XDG_CONFIG_HOME, "C:\\Users\\student\\custom-config");
+
+    const defaultUserConfig = buildChildEnvironment({
+      cwd: "C:\\workspace\\repo",
+      platform: "win32",
+      sourceEnvironment: {
+        SystemRoot: "C:\\Windows",
+        PATH: "C:\\Tools",
+        xdg_config_home: "C:\\PatchWarden\\opencode-config",
+      },
+      overrides: { XDG_CONFIG_HOME: null },
+    });
+    assert.equal(Object.keys(defaultUserConfig).some((name) => name.toUpperCase() === "XDG_CONFIG_HOME"), false);
+  });
 });
 
 describe("process security Git environment", () => {

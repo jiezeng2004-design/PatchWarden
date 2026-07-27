@@ -20,7 +20,7 @@ const allowedLegacyFiles = new Set([
 ]);
 const legacyPattern = /safe-bifrost|Safe-Bifrost|SAFE_BIFROST|SafeBifrost|safe_bifrost/;
 
-const EXCLUDE_DIRS = new Set(["node_modules", ".npm-cache", "dist", "release", ".patchwarden", ".git", "logs", "tmp", "coverage", "build", "out", ".next"]);
+const EXCLUDE_DIRS = new Set(["node_modules", ".npm-cache", ".pnpm-store", ".local", "dist", "release", ".patchwarden", ".git", "logs", "tmp", "coverage", "build", "out", ".next"]);
 
 let trackedFiles;
 let inGit = false;
@@ -28,10 +28,10 @@ try {
   trackedFiles = execFileSync(
     "git",
     ["ls-files", "--cached", "--others", "--exclude-standard"],
-    { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }
+    { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 }
   )
     .split(/\r?\n/)
-    .filter(Boolean);
+    .filter((file) => file && !EXCLUDE_DIRS.has(file.replace(/\\/g, "/").split("/", 1)[0]));
   inGit = true;
 } catch {
   // Not a git repository — fall back to filesystem walk

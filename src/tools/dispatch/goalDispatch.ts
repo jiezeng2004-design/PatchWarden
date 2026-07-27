@@ -49,6 +49,7 @@ export const goalHandlers: ToolHandlerMap = {
         template: parseOptionalTaskTemplate(args?.template),
         goal: args?.goal ? String(args.goal) : undefined,
         agent: args?.agent ? String(args.agent) : undefined,
+        requested_model: args?.requested_model as string | undefined,
         repo_path: String(args?.repo_path ?? ""),
         test_command: args?.test_command ? String(args.test_command) : undefined,
         verify_commands: Array.isArray(args?.verify_commands)

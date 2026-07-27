@@ -3,6 +3,17 @@ import { createHash } from "node:crypto";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import { validateWorkspaceRoot } from "./security/workspaceRootGuard.js";
 import { stableJsonStringify } from "./utils/stableJson.js";
+import {
+  extractConfiguredModelArgument,
+  getAdapterDescriptor,
+  getAdapterRevisionPayload,
+  normalizeRepoAgentDefaults,
+  optionalModel,
+  resolveTaskModelSelection,
+  sanitizeModelSelectionEvidence,
+  validateRequestedModel,
+  type ModelSelectionEvidence,
+} from "./agents/modelSelection.js";
 
 // ── Type definitions ──────────────────────────────────────────────
 
@@ -12,6 +23,11 @@ export interface AgentConfig {
   envAllowlist?: string[];
   adapter?: string;
   model?: string;
+  provider?: string;
+  default_model?: string | null;
+  available_models?: string[];
+  allow_unlisted_model_override?: boolean;
+  settings_policy?: "inherit" | "isolated";
 }
 
 export interface PatchWardenConfig {
@@ -21,6 +37,7 @@ export interface PatchWardenConfig {
   assessmentsDir: string;
   assessmentTtlSeconds: number;
   agents: Record<string, AgentConfig>;
+  repoAgentDefaults?: Record<string, Record<string, string | null>>;
   allowedTestCommands: string[];
   repoAllowedTestCommands?: Record<string, string[]>;
   maxReadFileBytes: number;
@@ -60,6 +77,7 @@ const DEFAULT_CONFIG: PatchWardenConfig = {
   assessmentsDir: ".patchwarden/assessments",
   assessmentTtlSeconds: 3600,
   agents: {},
+  repoAgentDefaults: {},
   allowedTestCommands: [
     "npm test",
     "npm run test",
@@ -106,15 +124,8 @@ const DEFAULT_CONFIG: PatchWardenConfig = {
 
 let _config: PatchWardenConfig | null = null;
 
-export interface AgentRuntimeMetadata {
+export interface AgentRuntimeMetadata extends ModelSelectionEvidence {
   adapter: string | null;
-  provider: string | null;
-  requested_agent: string;
-  selected_agent: string;
-  effective_model: string | null;
-  agent_config_revision: string;
-  model_argument_present: boolean;
-  fallback_used: boolean;
   exit_code: number | null;
 }
 
@@ -123,43 +134,24 @@ export interface AgentRuntimeContext {
   selected_agent?: string;
   fallback_used?: boolean;
   exit_code?: number | null;
+  requested_model?: unknown;
+  repo_path?: string;
+  model_selection?: unknown;
 }
 
 export function sanitizeAgentRuntimeMetadata(value: unknown): AgentRuntimeMetadata | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
-  const revision = typeof record.agent_config_revision === "string"
-    ? record.agent_config_revision.slice(0, 64)
-    : "";
-  if (!/^[a-f0-9]{64}$/i.test(revision)) return null;
+  const selection = sanitizeModelSelectionEvidence(record);
+  if (!selection) return null;
   return {
+    ...selection,
     adapter: typeof record.adapter === "string" ? record.adapter.slice(0, 80) : null,
-    provider: typeof record.provider === "string" ? record.provider.slice(0, 80) : null,
-    requested_agent: typeof record.requested_agent === "string" ? record.requested_agent.slice(0, 120) : "",
-    selected_agent: typeof record.selected_agent === "string" ? record.selected_agent.slice(0, 120) : "",
-    effective_model: typeof record.effective_model === "string" ? record.effective_model.slice(0, 200) : null,
-    agent_config_revision: revision,
-    model_argument_present: record.model_argument_present === true,
-    fallback_used: record.fallback_used === true,
     exit_code: typeof record.exit_code === "number" && Number.isInteger(record.exit_code)
       ? record.exit_code
       : null,
   };
 }
-
-const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$/;
-const KNOWN_AGENT_ADAPTERS = new Set([
-  "codex", "claude", "gemini", "copilot", "qwen", "opencode", "kimi", "aider",
-]);
-const ADAPTER_PROVIDERS: Readonly<Record<string, string>> = Object.freeze({
-  codex: "openai",
-  claude: "anthropic",
-  gemini: "google",
-  copilot: "github",
-  qwen: "qwen",
-  kimi: "moonshot",
-  aider: "aider",
-});
 
 export function loadConfig(configPath?: string): PatchWardenConfig {
   if (_config) return _config;
@@ -230,8 +222,8 @@ export function refreshAgentConfig(): PatchWardenConfig {
   if (staticConfigFingerprint(candidate) !== staticConfigFingerprint(current)) {
     throw new Error("Agent config hot reload rejected because non-Agent runtime settings changed; restart PatchWarden Core.");
   }
-  validateManagedAgentModels(candidate.agents);
-  _config = { ...current, agents: candidate.agents };
+  validateManagedAgentModels(candidate);
+  _config = { ...current, agents: candidate.agents, repoAgentDefaults: candidate.repoAgentDefaults };
   return _config;
 }
 
@@ -241,7 +233,11 @@ export function refreshAgentConfigIfActive(config: PatchWardenConfig): PatchWard
 }
 
 export function getAgentConfigRevision(config: PatchWardenConfig): string {
-  return createHash("sha256").update(stableJsonStringify(config.agents)).digest("hex");
+  return createHash("sha256").update(stableJsonStringify({
+    agents: config.agents,
+    repoAgentDefaults: config.repoAgentDefaults || {},
+    adapter_templates: getAdapterRevisionPayload(config),
+  })).digest("hex");
 }
 
 export function getAgentRuntimeMetadata(
@@ -251,45 +247,25 @@ export function getAgentRuntimeMetadata(
 ): AgentRuntimeMetadata {
   const agent = config.agents[agentName];
   if (!agent) throw new Error(`Agent "${agentName}" is not configured.`);
-  const adapter = typeof agent.adapter === "string"
-    ? agent.adapter
-    : KNOWN_AGENT_ADAPTERS.has(agentName) ? agentName : null;
-  const modelArgs = agent.args.flatMap((arg, index) =>
-    arg === "--model" || arg === "-m" ? [agent.args[index + 1]] : []
-  ).filter((value): value is string => typeof value === "string" && value.length > 0);
-  const uniqueModelArgs = [...new Set(modelArgs)];
-  const configuredModel = typeof agent.model === "string" && agent.model.trim() ? agent.model.trim() : null;
-
-  if (adapter && uniqueModelArgs.length > 1) {
-    throw new Error(`Managed Agent "${agentName}" has conflicting model arguments.`);
-  }
-  const argumentModel = uniqueModelArgs[0] || null;
-  if (adapter && configuredModel && argumentModel !== configuredModel) {
-    throw new Error(`Managed Agent "${agentName}" model metadata does not match its CLI argument.`);
-  }
-  const effectiveModel = configuredModel || argumentModel;
-  if (effectiveModel && !MODEL_PATTERN.test(effectiveModel)) {
-    throw new Error(`Managed Agent "${agentName}" has an invalid model identifier.`);
-  }
+  const adapter = getAdapterDescriptor(agentName, agent)?.id ?? null;
+  const frozen = sanitizeModelSelectionEvidence(context.model_selection);
+  const selection = frozen ?? resolveTaskModelSelection({
+    agentName,
+    requestedAgent: context.requested_agent,
+    selectedAgent: context.selected_agent,
+    requestedModel: context.requested_model,
+    repoPath: context.repo_path || config.workspaceRoot,
+    config,
+    agentConfigRevision: getAgentConfigRevision(config),
+    agentFallbackUsed: context.fallback_used,
+  });
   return {
+    ...selection,
     adapter,
-    provider: resolveAgentProvider(adapter, effectiveModel),
-    requested_agent: String(context.requested_agent ?? agentName).slice(0, 120),
-    selected_agent: String(context.selected_agent || agentName).slice(0, 120),
-    effective_model: effectiveModel,
-    agent_config_revision: getAgentConfigRevision(config),
-    model_argument_present: argumentModel !== null,
-    fallback_used: context.fallback_used === true,
     exit_code: typeof context.exit_code === "number" && Number.isInteger(context.exit_code)
       ? context.exit_code
       : null,
   };
-}
-
-function resolveAgentProvider(adapter: string | null, model: string | null): string | null {
-  if (model?.includes("/")) return model.split("/", 1)[0].slice(0, 80) || null;
-  if (!adapter) return null;
-  return ADAPTER_PROVIDERS[adapter] || adapter;
 }
 
 /** Resolve workspaceRoot: expand relative paths */
@@ -323,14 +299,13 @@ function findActiveConfigPath(): string | null {
 }
 
 function staticConfigFingerprint(config: PatchWardenConfig): string {
-  const { agents: _agents, ...staticConfig } = config;
+  const { agents: _agents, repoAgentDefaults: _repoAgentDefaults, ...staticConfig } = config;
   return createHash("sha256").update(stableJsonStringify(staticConfig)).digest("hex");
 }
 
-function validateManagedAgentModels(agents: Record<string, AgentConfig>): void {
-  const validationConfig = { agents } as PatchWardenConfig;
-  for (const name of Object.keys(agents)) {
-    getAgentRuntimeMetadata(name, validationConfig);
+function validateManagedAgentModels(config: PatchWardenConfig): void {
+  for (const name of Object.keys(config.agents)) {
+    getAgentRuntimeMetadata(name, config);
   }
 }
 
@@ -370,7 +345,63 @@ function normalizeConfig(config: PatchWardenConfig): PatchWardenConfig {
     const blockedNames = new Set(["CONTROL_PLANE_API_KEY", "PATCHWARDEN_OWNER_TOKEN", config.http?.ownerTokenEnv?.toUpperCase()]);
     const blocked = envAllowlist.find((name) => blockedNames.has(name.toUpperCase()));
     if (blocked) throw new Error(`agents["${agentName}"].envAllowlist cannot include reserved variable "${blocked}"`);
-    agents[agentName] = { ...agent, args: [...agent.args], envAllowlist: [...new Set(envAllowlist)] };
+    const provider = agent.provider === undefined ? undefined : String(agent.provider).trim();
+    if (provider !== undefined && (!provider || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(provider))) {
+      throw new Error(`agents["${agentName}"].provider must be a safe non-empty provider identifier`);
+    }
+    const defaultModel = optionalModel(agent.default_model, `agents["${agentName}"].default_model`);
+    const legacyModel = optionalModel(agent.model, `agents["${agentName}"].model`);
+    const argumentModel = extractConfiguredModelArgument(agent);
+    if (defaultModel && legacyModel && defaultModel !== legacyModel) {
+      throw new Error(`agents["${agentName}"].default_model does not match legacy model metadata`);
+    }
+    if (agent.available_models !== undefined && !Array.isArray(agent.available_models)) {
+      throw new Error(`agents["${agentName}"].available_models must be an array`);
+    }
+    const availableModels = [...new Set((agent.available_models || []).map((model) =>
+      validateRequestedModel(model, `agents["${agentName}"].available_models`)
+    ))];
+    if (agent.allow_unlisted_model_override !== undefined && typeof agent.allow_unlisted_model_override !== "boolean") {
+      throw new Error(`agents["${agentName}"].allow_unlisted_model_override must be boolean`);
+    }
+    if (agent.settings_policy !== undefined && agent.settings_policy !== "inherit" && agent.settings_policy !== "isolated") {
+      throw new Error(`agents["${agentName}"].settings_policy must be "inherit" or "isolated"`);
+    }
+    const descriptor = getAdapterDescriptor(agentName, agent);
+    if (agent.settings_policy === "isolated" && descriptor?.settings_isolation !== "claude_empty_sources") {
+      throw new Error(`Agent "${agentName}" does not support settings_policy="isolated"`);
+    }
+    const normalizedDefault = defaultModel ?? legacyModel ?? argumentModel;
+    if (normalizedDefault && availableModels.length > 0 && agent.allow_unlisted_model_override === false && !availableModels.includes(normalizedDefault)) {
+      throw new Error(`Default model for Agent "${agentName}" is not present in available_models`);
+    }
+    agents[agentName] = {
+      ...agent,
+      args: [...agent.args],
+      envAllowlist: [...new Set(envAllowlist)],
+      ...(provider === undefined ? {} : { provider }),
+      default_model: normalizedDefault,
+      available_models: availableModels,
+      allow_unlisted_model_override: agent.allow_unlisted_model_override !== false,
+      settings_policy: agent.settings_policy || "inherit",
+    };
+  }
+  const repoAgentDefaults = normalizeRepoAgentDefaults(config.repoAgentDefaults, config.workspaceRoot);
+  for (const [repoKey, defaults] of Object.entries(repoAgentDefaults)) {
+    for (const [agentName, model] of Object.entries(defaults)) {
+      if (model === null) continue;
+      const agent = agents[agentName];
+      if (!agent) throw new Error(`repoAgentDefaults["${repoKey}"] references unknown Agent "${agentName}"`);
+      const descriptor = getAdapterDescriptor(agentName, agent);
+      if (!descriptor?.supports_model_override) {
+        throw new Error(`repoAgentDefaults["${repoKey}"]["${agentName}"] does not support model overrides`);
+      }
+      if ((agent.available_models || []).length > 0
+        && agent.allow_unlisted_model_override === false
+        && !agent.available_models!.includes(model)) {
+        throw new Error(`repoAgentDefaults["${repoKey}"]["${agentName}"] is not present in available_models`);
+      }
+    }
   }
   if (!Array.isArray(config.allowedTestCommands)) {
     throw new Error("allowedTestCommands must be an array");
@@ -550,6 +581,7 @@ function normalizeConfig(config: PatchWardenConfig): PatchWardenConfig {
   return {
     ...config,
     agents,
+    repoAgentDefaults,
     workspaceRoot: resolve(config.workspaceRoot),
     allowedTestCommands: [...new Set(config.allowedTestCommands.map((command) => command.trim()))],
     repoAllowedTestCommands,

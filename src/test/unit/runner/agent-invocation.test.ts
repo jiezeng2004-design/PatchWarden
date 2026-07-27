@@ -141,6 +141,55 @@ describe("agent executable resolution", () => {
     ]);
   });
 
+  it("keeps a custom Agent's static model arguments unchanged", () => {
+    const config = {
+      workspaceRoot: process.cwd(),
+      agents: {
+        custom: {
+          command: process.execPath,
+          adapter: "custom",
+          args: ["-e", "process.exit(0)", "--model", "custom/static", "{prompt}"],
+          default_model: "custom/static",
+        },
+      },
+    } as unknown as PatchWardenConfig;
+    const invocation = buildAgentInvocation("custom", process.cwd(), "prompt", config);
+    assert.deepEqual(invocation.args, ["-e", "process.exit(0)", "--model", "custom/static", "prompt"]);
+  });
+
+  it("restores the user's XDG config for OpenCode inherit mode under an owned Watcher", () => {
+    const previousOwned = process.env.PATCHWARDEN_WATCHER_XDG_CONFIG_HOME_OWNED;
+    const previousAgentXdg = process.env.PATCHWARDEN_AGENT_XDG_CONFIG_HOME;
+    try {
+      process.env.PATCHWARDEN_WATCHER_XDG_CONFIG_HOME_OWNED = "1";
+      process.env.PATCHWARDEN_AGENT_XDG_CONFIG_HOME = "C:\\Users\\student\\custom-config";
+      const config = {
+        agents: {
+          opencode: {
+            command: process.execPath,
+            args: ["-e", "{prompt}"],
+            adapter: "opencode",
+            settings_policy: "inherit",
+          },
+        },
+      } as unknown as PatchWardenConfig;
+
+      const invocation = buildAgentInvocation("opencode", process.cwd(), "prompt", config);
+      assert.deepEqual(invocation.environmentOverrides, {
+        XDG_CONFIG_HOME: "C:\\Users\\student\\custom-config",
+      });
+
+      delete process.env.PATCHWARDEN_AGENT_XDG_CONFIG_HOME;
+      const defaultInvocation = buildAgentInvocation("opencode", process.cwd(), "prompt", config);
+      assert.deepEqual(defaultInvocation.environmentOverrides, { XDG_CONFIG_HOME: null });
+    } finally {
+      if (previousOwned === undefined) delete process.env.PATCHWARDEN_WATCHER_XDG_CONFIG_HOME_OWNED;
+      else process.env.PATCHWARDEN_WATCHER_XDG_CONFIG_HOME_OWNED = previousOwned;
+      if (previousAgentXdg === undefined) delete process.env.PATCHWARDEN_AGENT_XDG_CONFIG_HOME;
+      else process.env.PATCHWARDEN_AGENT_XDG_CONFIG_HOME = previousAgentXdg;
+    }
+  });
+
   it("resolves npm to its trusted JavaScript CLI without cmd.exe", () => {
     const repo = "C:\\work\\untrusted-repo";
     const trustedRoot = "C:\\Program Files\\nodejs";

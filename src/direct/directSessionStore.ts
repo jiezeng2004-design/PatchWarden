@@ -73,6 +73,7 @@ export interface DirectSessionRecord {
   workspace_snapshot_before: RepoSnapshot;
   workspace_fingerprint_before: string;
   allowed_commands: string[];
+  expected_changes: boolean;
   operations: DirectSessionOperation[];
   verification_runs: DirectSessionVerificationRun[];
   finalized: boolean;
@@ -85,6 +86,7 @@ export interface DirectSessionCreateInput {
   repo_path: string;
   resolved_repo_path: string;
   title?: string;
+  expected_changes?: boolean;
   snapshot: RepoSnapshot;
 }
 
@@ -191,6 +193,7 @@ export function createDirectSession(
     workspace_snapshot_before: input.snapshot,
     workspace_fingerprint_before: workspaceFingerprint,
     allowed_commands: allowedCommands,
+    expected_changes: input.expected_changes !== false,
     operations: [],
     verification_runs: [],
     finalized: false,
@@ -473,7 +476,10 @@ function validateDirectSessionRecord(sessionId: string, value: unknown): DirectS
   if (!Array.isArray(record.operations) || !Array.isArray(record.verification_runs)) {
     throw invalidDirectSessionRecord(sessionId, "operation or verification history is invalid");
   }
-  return record as DirectSessionRecord;
+  return {
+    ...record,
+    expected_changes: record.expected_changes !== false,
+  } as DirectSessionRecord;
 }
 
 function formatSummaryMd(artifacts: ChangeArtifacts): string {

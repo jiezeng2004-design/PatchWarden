@@ -1,7 +1,7 @@
 # PatchWarden Code Wiki
 
 > 本文档是对 PatchWarden 仓库的结构化代码导览，覆盖项目整体架构、主要模块职责、关键类与函数说明、依赖关系、运行方式，以及现有缺陷分析。
-> 源码版本：**v1.6.3** · Schema Epoch：`2026-07-19-v15` · 复核日期：2026-07-26 · License：MIT
+> 源码版本：**v1.6.4** · Schema Epoch：`2026-07-26-v16` · 复核日期：2026-07-27 · License：MIT
 
 ## 目录
 
@@ -254,7 +254,7 @@ PatchWarden/
 │   └── release/                  # 发布打包
 ├── docs/                         # 文档
 ├── examples/                     # 配置与 Tunnel 示例
-├── package.json                  # v1.6.3，单一直接运行时依赖
+├── package.json                  # v1.6.4，单一直接运行时依赖
 ├── tsconfig.json
 └── PatchWarden.cmd               # Windows 统一控制入口
 ```
@@ -278,7 +278,7 @@ PatchWarden/
 | --- | --- |
 | [src/config.ts](../src/config.ts) | 加载并校验 `patchwarden.config.json`，提供 `loadConfig`/`getConfig`/`getTasksDir`/`getPlansDir`/`resolveWorkspaceRoot`/`getRepoAllowedTestCommands`/`getRepoDirectAllowedCommands` 等路径解析；严格校验 `workspaceRoot`、`agents`、`allowedTestCommands`、`watcherStaleSeconds`、`toolProfile`、`tunnelProxy`、Direct 数值范围等字段；含 `normalizeRepoKey` 与 `comparablePath` 工具 |
 | [src/errors.ts](../src/errors.ts) | 定义 `PatchWardenError`（含 `reason`/`suggestion`/`blocked`/`details`）与 `errorPayload` 序列化 |
-| [src/version.ts](../src/version.ts) | 导出 `PATCHWARDEN_VERSION = "1.6.3"` 与 `TOOL_SCHEMA_EPOCH = "2026-07-19-v15"` |
+| [src/version.ts](../src/version.ts) | 导出 `PATCHWARDEN_VERSION = "1.6.4"` 与 `TOOL_SCHEMA_EPOCH = "2026-07-26-v16"` |
 | [src/logging.ts](../src/logging.ts) | `Logger` 类输出 stderr JSON 日志，记录 `audit`/`info`/`warn`/`error`；`logToolInvocation` 仅写参数 digest，不写原参数，并通过跨进程锁有界追加到 5 MiB；`installGlobalHandlers` 捕获未处理异常但不吞错 |
 
 ### 4.3 安全模块（src/security/）
@@ -751,6 +751,10 @@ function guardDirectWritePath(session, requestedPath): string;
 function guardDirectPatchSize(patchBytes: number): void;
 function isBinaryFile(filePath: string): boolean;
 ```
+
+`DirectSessionCreateInput.expected_changes` defaults to `true`. Read-only and
+verification-only callers set it to `false`; `directAudit` then treats an empty
+diff as a passing expected result while preserving the warning for edit sessions.
 
 #### Discovery Token
 
@@ -1551,7 +1555,7 @@ npm.cmd run desktop:package   # 打包：先 stage 主仓 dist/，再 electron-b
 | 字段 | 上一版文档声称 | 当前源码 |
 | --- | --- | --- |
 | 源码版本 | `v1.6.0` | `v1.6.1` |
-| Schema Epoch | `2026-07-19-v15` | `2026-07-19-v15`（保持） |
+| Schema Epoch | `2026-07-19-v15` | `2026-07-26-v16`（任务级模型与失败证据） |
 | 主包 `@types/node` | `^26.1.0` | `^18.19.0`（与 Node.js 18 最低运行时对齐） |
 | `chatgpt_direct` 工具数 | 15 | 14 |
 

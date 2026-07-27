@@ -97,9 +97,11 @@ interface VerifyCommandRecord {
 }
 
 interface VerifyReport {
-  status: "passed" | "failed" | "skipped";
+  status: "passed" | "failed" | "skipped" | "not_run";
+  configured_commands: string[];
   requested_commands: string[];
   commands: VerifyCommandRecord[];
+  reason?: "agent_failed_before_verification" | "no_verify_commands_configured";
   failure_reason?: string;
 }
 
@@ -129,6 +131,8 @@ interface TaskContext {
 interface ExecutionState {
   agentResult: ManagedProcessResult | null;
   agentFailureCategory: string | null;
+  providerErrorReference: string | null;
+  agentFailureStderrTail: string | null;
   agentRuntime: import("../config.js").AgentRuntimeMetadata | null;
   testResult: TestExecutionResult;
   verifyResults: TestExecutionResult[];
@@ -285,6 +289,8 @@ async function executeAgent(ctx: TaskContext): Promise<ExecutionState> {
   const state: ExecutionState = {
     agentResult: null,
     agentFailureCategory: null,
+    providerErrorReference: null,
+    agentFailureStderrTail: null,
     agentRuntime: null,
     testResult: skippedTest(ctx.testCommand, ctx.repoPath, "Agent did not complete successfully."),
     verifyResults: [],
@@ -306,6 +312,9 @@ async function executeAgent(ctx: TaskContext): Promise<ExecutionState> {
         ? ctx.initialStatus.selected_agent
         : ctx.agentName,
       fallback_used: ctx.initialStatus.fallback_used === true,
+      requested_model: ctx.initialStatus.requested_model,
+      repo_path: ctx.repoPath,
+      model_selection: ctx.initialStatus.model_selection,
     });
 
     state.agentRuntime = invocation.runtime;
@@ -326,6 +335,7 @@ async function executeAgent(ctx: TaskContext): Promise<ExecutionState> {
       stderrPath: join(ctx.taskDir, "stderr.log"),
       environmentVariableNames: invocation.environmentVariableNames,
       blockedEnvironmentVariableNames: invocation.blockedEnvironmentVariableNames,
+      environmentOverrides: invocation.environmentOverrides,
     });
 
     const agentResult = state.agentResult;
@@ -340,10 +350,13 @@ async function executeAgent(ctx: TaskContext): Promise<ExecutionState> {
       state.finalStatus = "timeout";
       state.finalError = `Task timed out after ${ctx.timeoutSeconds} seconds during agent execution.`;
     } else if (agentResult.spawnError) {
-      state.agentFailureCategory = "cli_startup";
+      state.agentFailureCategory = "agent_process_error";
       state.finalError = `Agent spawn failed: ${agentResult.spawnError}`;
     } else if (agentResult.exitCode !== 0) {
-      state.agentFailureCategory = classifyAgentFailure(`${agentResult.stderr}\n${agentResult.stdout}`);
+      const failure = classifyAgentFailureDetails(`${agentResult.stderr}\n${agentResult.stdout}`);
+      state.agentFailureCategory = failure.failure_category;
+      state.providerErrorReference = failure.provider_error_reference;
+      state.agentFailureStderrTail = summarizeOutput(agentResult.stderr).slice(-4000) || null;
       state.finalError = `Agent failure (${state.agentFailureCategory}); process exited with code ${agentResult.exitCode}.`;
     }
   } catch (error) {
@@ -580,7 +593,7 @@ function finalizeTask(ctx: TaskContext, state: ExecutionState, evidence: Artifac
     artifactManifest, changedFileGroups } = evidence;
 
   atomicWriteFileSync(join(ctx.taskDir, "test.log"), buildTestLog(state.testResult));
-  const verifyJson = buildVerifyJson(ctx.verifyCommands, state.verifyResults, ctx.repoPath);
+  const verifyJson = buildVerifyJson(ctx.verifyCommands, state.verifyResults, ctx.repoPath, state.finalError !== null);
   if (newOutOfScopeChanges.length > 0) {
     verifyJson.status = "failed";
     verifyJson.failure_reason = "scope_violation";
@@ -591,7 +604,7 @@ function finalizeTask(ctx: TaskContext, state: ExecutionState, evidence: Artifac
       : "change_policy_violation";
   }
   atomicWriteJsonFileSync(join(ctx.taskDir, "verify.json"), verifyJson);
-  atomicWriteFileSync(join(ctx.taskDir, "verify.log"), buildVerifyLog(verifyJson.commands));
+  atomicWriteFileSync(join(ctx.taskDir, "verify.log"), buildVerifyLog(verifyJson));
 
   if (!["canceled", "timeout", "done_by_agent", "failed_verification", "failed_scope_violation", "failed_policy_violation"].includes(state.finalStatus)) state.finalStatus = "failed";
   const finalPhase: TaskPhase = state.finalStatus === "done_by_agent" ? "done_by_agent" : (state.finalStatus as TaskPhase);
@@ -655,6 +668,9 @@ function finalizeTask(ctx: TaskContext, state: ExecutionState, evidence: Artifac
       ? "timeout"
       : state.finalStatus === "canceled" ? "canceled" : null,
     agent_failure_category: state.agentFailureCategory,
+    failure_category: state.agentFailureCategory,
+    provider_error_reference: state.providerErrorReference,
+    agent_failure_stderr_tail: state.agentFailureStderrTail,
     agent_runtime: state.agentRuntime,
     changed_files: changes.changed_files.map(({ path, change }) => ({ path, change })),
     artifact_hygiene_counts: changes.artifact_hygiene.counts,
@@ -668,6 +684,9 @@ function finalizeTask(ctx: TaskContext, state: ExecutionState, evidence: Artifac
     preexisting_external_dirty_files: preexistingExternalDirty,
     verify_status: verifyJson.status,
     verify_commands: ctx.verifyCommands,
+    configured_verify_commands: ctx.verifyCommands,
+    executed_verify_commands: verifyJson.commands.map((command) => command.command),
+    verification_summary: { status: verifyJson.status, reason: verifyJson.reason ?? null },
     diff_available: changes.diff_available,
     diff_truncated: changes.diff_truncated,
     diff_redacted: changes.diff_redacted === true,
@@ -729,7 +748,18 @@ function buildResultJson(input: {
       ? "timeout"
       : state.finalStatus === "canceled" ? "canceled" : null,
     agent_failure_category: state.agentFailureCategory,
+    failure_category: state.agentFailureCategory,
+    provider_error_reference: state.providerErrorReference,
+    agent_failure: state.agentFailureCategory ? {
+      failure_category: state.agentFailureCategory,
+      provider_error_reference: state.providerErrorReference,
+      exit_code: state.agentRuntime?.exit_code ?? null,
+      provider: state.agentRuntime?.provider ?? null,
+      effective_model: state.agentRuntime?.effective_model ?? null,
+      stderr_tail: state.agentFailureStderrTail,
+    } : null,
     agent_runtime: state.agentRuntime,
+    model_selection: state.agentRuntime ?? ctx.initialStatus.model_selection ?? null,
     changed_files: changes.changed_files,
     changed_file_groups: {
       source_changes: changedFileGroups.source_changes.length,
@@ -753,7 +783,9 @@ function buildResultJson(input: {
     workspace_status: changes.workspace_dirty_after ? "dirty" : "clean",
     android_diagnostic: androidDiagnostic,
     verify_status: verifyJson.status,
-    verify_commands: verifyJson.commands,
+    verify_commands: verifyJson.configured_commands,
+    configured_verify_commands: verifyJson.configured_commands,
+    executed_verify_commands: verifyJson.commands.map((command) => command.command),
     commands_run: verifyJson.commands.map((command) => ({
       command: command.command,
       cwd: command.cwd,
@@ -859,6 +891,7 @@ async function runManagedProcess(options: {
   stderrPath?: string;
   environmentVariableNames?: string[];
   blockedEnvironmentVariableNames?: string[];
+  environmentOverrides?: Readonly<Record<string, string | null>>;
   maxLogBytes?: number;
   runnerInstanceId: string;
 }): Promise<ManagedProcessResult> {
@@ -877,6 +910,7 @@ async function runManagedProcess(options: {
       cwd: options.cwd,
       allowedNames: options.environmentVariableNames,
       blockedNames: options.blockedEnvironmentVariableNames,
+      overrides: options.environmentOverrides,
     });
     const command = resolveTrustedExecutable(options.command, options.cwd, { pathValue: env.PATH });
     child = spawn(command, options.args, {
@@ -1206,7 +1240,7 @@ function skippedTest(command: string, cwd: string, reason: string): TestExecutio
   };
 }
 
-function buildVerifyJson(requested: string[], results: TestExecutionResult[], cwd: string): VerifyReport {
+function buildVerifyJson(requested: string[], results: TestExecutionResult[], cwd: string, agentFailed = false): VerifyReport {
   const commands = results.map((result): VerifyCommandRecord => ({
     command: result.command,
     cwd: result.cwd || cwd,
@@ -1226,15 +1260,27 @@ function buildVerifyJson(requested: string[], results: TestExecutionResult[], cw
   }));
   const status: VerifyReport["status"] = requested.length === 0
     ? "skipped"
+    : commands.length === 0 && agentFailed
+      ? "not_run"
     : commands.length === requested.length && commands.every((command) => command.status === "passed")
       ? "passed"
       : "failed";
-  return { status, requested_commands: requested, commands };
+  return {
+    status,
+    configured_commands: requested,
+    requested_commands: requested,
+    commands,
+    ...(status === "not_run" ? { reason: "agent_failed_before_verification" as const } : {}),
+    ...(status === "skipped" ? { reason: "no_verify_commands_configured" as const } : {}),
+  };
 }
 
-function buildVerifyLog(commands: VerifyCommandRecord[]): string {
-  if (commands.length === 0) return "Verification skipped: no verify_commands configured.\n";
-  return commands.map((entry) => [
+function buildVerifyLog(report: VerifyReport): string {
+  if (report.status === "not_run") {
+    return `Verification not run because the agent failed before verification.\nConfigured commands: ${report.configured_commands.join(", ")}\n`;
+  }
+  if (report.status === "skipped") return "Verification skipped: no verify_commands configured.\n";
+  return report.commands.map((entry) => [
     `$ ${entry.command}`,
     `cwd: ${entry.cwd}`,
     `status: ${entry.status}`,
@@ -1292,9 +1338,13 @@ function failBeforeExecution(taskId: string, taskDir: string, message: string, c
   const current = readStatus(join(taskDir, "status.json"));
   const now = new Date().toISOString();
   const verify: VerifyReport = {
-    status: "failed",
+    status: Array.isArray(current.verify_commands) && current.verify_commands.length > 0 ? "not_run" : "skipped",
+    configured_commands: Array.isArray(current.verify_commands) ? current.verify_commands : [],
     requested_commands: Array.isArray(current.verify_commands) ? current.verify_commands : [],
     commands: [],
+    reason: Array.isArray(current.verify_commands) && current.verify_commands.length > 0
+      ? "agent_failed_before_verification"
+      : "no_verify_commands_configured",
   };
   atomicWriteJsonFileSync(join(taskDir, "verify.json"), verify);
   atomicWriteFileSync(join(taskDir, "verify.log"), `Verification did not run: ${message}\n`);
@@ -1318,7 +1368,9 @@ function failBeforeExecution(taskId: string, taskDir: string, message: string, c
     changed_files: [],
     out_of_scope_changes: [],
     verify_status: verify.status,
-    verify_commands: verify.commands,
+    verify_commands: verify.configured_commands,
+    configured_verify_commands: verify.configured_commands,
+    executed_verify_commands: [],
     commands_run: [],
     commands_observed: [],
     verify,
@@ -1339,7 +1391,11 @@ function failBeforeExecution(taskId: string, taskDir: string, message: string, c
     phase: "failed",
     error: message,
     finished_at: now,
-    verify_status: "failed",
+    verify_status: verify.status,
+    verify_commands: verify.configured_commands,
+    configured_verify_commands: verify.configured_commands,
+    executed_verify_commands: [],
+    verification_summary: { status: verify.status, reason: verify.reason },
     changed_files: [],
     out_of_scope_changes: [],
   });
@@ -1414,40 +1470,58 @@ function errorMessage(error: unknown): string {
 }
 
 export type AgentFailureCategory =
-  | "invalid_arguments"
-  | "authentication"
-  | "rate_limit"
-  | "insufficient_balance"
   | "model_not_found"
-  | "network"
-  | "cli_startup"
+  | "provider_authentication_failed"
+  | "provider_permission_denied"
+  | "provider_insufficient_balance"
+  | "provider_rate_limited"
+  | "provider_server_error"
+  | "provider_unavailable"
+  | "provider_timeout"
+  | "network_error"
+  | "cli_configuration_error"
+  | "invalid_model_argument"
+  | "agent_process_error"
   | "unknown";
 
 export function classifyAgentFailure(stderr: string): AgentFailureCategory {
+  return classifyAgentFailureDetails(stderr).failure_category;
+}
+
+export function classifyAgentFailureDetails(stderr: string): {
+  failure_category: AgentFailureCategory;
+  provider_error_reference: string | null;
+} {
   const normalized = stderr.toLowerCase();
-  if (/unknown (?:option|argument)|invalid (?:option|argument)|usage:|unexpected argument/.test(normalized)) {
-    return "invalid_arguments";
-  }
-  if (/err_unknown_file_extension|cannot find module|module_not_found|failed to launch|startup/.test(normalized)) {
-    return "cli_startup";
-  }
-  if (normalized.includes("insufficient balance") || normalized.includes("insufficient credits") || normalized.includes("credit balance is too low")) {
-    return "insufficient_balance";
-  }
-  if (/unauthorized|authentication failed|invalid api key|not logged in|login required|missing api key/.test(normalized)) {
-    return "authentication";
-  }
-  if (/rate.?limit|too many requests|\b429\b/.test(normalized)) {
-    return "rate_limit";
-  }
+  const reference = stderr.match(/\berr_[A-Za-z0-9_-]{4,120}\b/)?.[0] || null;
+  let failureCategory: AgentFailureCategory = "unknown";
   if (
-    /model not found|unknown model|invalid model|model access|does not have access to (?:the )?model/.test(normalized)
+    /model not found|unknown model|model (?:does not exist|is unavailable)|model access|does not have access to (?:the )?model/.test(normalized)
     || (normalized.includes("selected model") && (normalized.includes("may not exist") || normalized.includes("may not have access")))
   ) {
-    return "model_not_found";
+    failureCategory = "model_not_found";
+  } else if (/invalid (?:value|argument).*(?:--model|model)|model (?:argument|identifier).*(?:invalid|malformed)/.test(normalized)) {
+    failureCategory = "invalid_model_argument";
+  } else if (normalized.includes("insufficient balance") || normalized.includes("insufficient credits") || normalized.includes("credit balance is too low")) {
+    failureCategory = "provider_insufficient_balance";
+  } else if (/unauthorized|authentication failed|invalid api key|not logged in|login required|missing api key|\b401\b/.test(normalized)) {
+    failureCategory = "provider_authentication_failed";
+  } else if (/permission denied|forbidden|access denied|\b403\b/.test(normalized)) {
+    failureCategory = "provider_permission_denied";
+  } else if (/rate.?limit|too many requests|\b429\b/.test(normalized)) {
+    failureCategory = "provider_rate_limited";
+  } else if (/unexpected server error|internal server error|server_error|http\s*(?:500|502|503|504)\b|\b(?:500|502|503|504)\s+(?:server|bad gateway|service unavailable|gateway timeout)/.test(normalized)) {
+    failureCategory = "provider_server_error";
+  } else if (/provider unavailable|temporarily unavailable|service overloaded|overloaded_error/.test(normalized)) {
+    failureCategory = "provider_unavailable";
+  } else if (/provider timeout|request timed out|upstream timeout|\b408\b/.test(normalized)) {
+    failureCategory = "provider_timeout";
+  } else if (/econnreset|econnrefused|enotfound|etimedout|network|socket hang up|fetch failed|dns/.test(normalized)) {
+    failureCategory = "network_error";
+  } else if (/unknown (?:option|argument)|invalid (?:option|argument)|usage:|unexpected argument|err_unknown_file_extension|cannot find module|module_not_found|configuration error/.test(normalized)) {
+    failureCategory = "cli_configuration_error";
+  } else if (/failed to launch|spawn |process exited|startup/.test(normalized)) {
+    failureCategory = "agent_process_error";
   }
-  if (/econnreset|econnrefused|enotfound|etimedout|network|socket hang up|fetch failed|dns/.test(normalized)) {
-    return "network";
-  }
-  return "unknown";
+  return { failure_category: failureCategory, provider_error_reference: reference };
 }

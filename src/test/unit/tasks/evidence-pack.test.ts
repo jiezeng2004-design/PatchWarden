@@ -117,12 +117,27 @@ describe("v1.5 evidence packs and agent recommendations", () => {
         reason: "test route",
         fallback: false,
       },
+      model_selection: {
+        requested_agent: "codex",
+        selected_agent: "codex",
+        requested_model: "openai/gpt-test",
+        configured_default_model: null,
+        effective_model: "openai/gpt-test",
+        model_source: "task_override",
+        provider: "openai",
+        model_argument_present: true,
+        agent_config_revision: "a".repeat(64),
+        fallback_used: false,
+        agent_fallback_used: false,
+        model_fallback_used: false,
+      },
     });
 
     const pack = exportTaskEvidencePack({ lineage_id: "lineage_v15_pack" });
     assert.equal(pack.bounded, true);
     assert.equal(pack.lineage.worktree.worktree_id, "wt-one");
     assert.equal(pack.lineage.agent_routing?.selected_agent, "codex");
+    assert.equal(pack.lineage.model_selection?.effective_model, "openai/gpt-test");
     const raw = readFileSync(pack.files.json);
     assert.notEqual(raw[0], 0xef);
     JSON.parse(raw.toString("utf-8"));
@@ -199,6 +214,8 @@ describe("v1.5 evidence packs and agent recommendations", () => {
         terminal: true,
         verification_status: "passed",
         audit_verdict: "pass",
+        failure_category: "provider_server_error",
+        provider_error_reference: "err_agnes_TEST123",
         fail_checks: [],
         warn_checks: ["minor scope drift"],
         next_action: "accept",
@@ -214,6 +231,12 @@ describe("v1.5 evidence packs and agent recommendations", () => {
     });
 
     const pack = exportTaskEvidencePack({ lineage_id: "lineage_v2_secret" });
+    const lineageEvidence = JSON.parse(readFileSync(pack.files.lineage, "utf-8"));
+    assert.deepEqual(lineageEvidence.failures, [{
+      task_id: "task-v2-secret",
+      failure_category: "provider_server_error",
+      provider_error_reference: "err_agnes_TEST123",
+    }]);
 
     // All six v2 files should exist.
     for (const key of ["risk", "verify", "diffstat", "lineage", "attestation", "redactions"] as const) {

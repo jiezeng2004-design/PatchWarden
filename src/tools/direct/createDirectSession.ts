@@ -13,6 +13,7 @@ import {
 export interface CreateDirectSessionInput {
   repo_path: string;
   title?: string;
+  expected_changes?: boolean;
 }
 
 export interface CreateDirectSessionOutput {
@@ -21,6 +22,7 @@ export interface CreateDirectSessionOutput {
   resolved_repo_path: string;
   workspace_clean: boolean;
   allowed_commands: string[];
+  expected_changes: boolean;
   expires_at: string;
   next_action: string;
 }
@@ -96,6 +98,7 @@ export async function createDirectSession(
     repo_path: input.repo_path,
     resolved_repo_path: resolvedRepoPath,
     title: input.title,
+    expected_changes: input.expected_changes,
     snapshot,
   });
 
@@ -105,6 +108,7 @@ export async function createDirectSession(
     resolved_repo_path: session.resolved_repo_path,
     workspace_clean: !snapshot.workspace_dirty,
     allowed_commands: session.allowed_commands,
+    expected_changes: session.expected_changes,
     expires_at: session.expires_at,
     next_action:
       "Use search_workspace/read_workspace_file, then apply_patch to make file changes within this session. " +

@@ -94,6 +94,7 @@ export async function runAgentAssessment(input: AgentAssessorInput): Promise<Age
     stderrPath: logPaths.stderr,
     environmentVariableNames: invocation.environmentVariableNames,
     blockedEnvironmentVariableNames: invocation.blockedEnvironmentVariableNames,
+    environmentOverrides: invocation.environmentOverrides,
   });
 
   // ── 5. After snapshot + read-only violation check ──
