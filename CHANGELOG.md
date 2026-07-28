@@ -1,5 +1,21 @@
 # PatchWarden CHANGELOG
 
+## v1.6.7 (2026-07-28)
+
+> Release preparation only. This entry does not assert that v1.6.7 has been published to GitHub or npm.
+
+### Task lineage and audit correctness
+
+- Keep verified terminal tasks ready for audit instead of misclassifying them as verification failures.
+- Synchronize completed task audits into linked lineage rounds and final state, including legacy lineage reconciliation.
+- Treat blocked acceptance decisions as authoritative even when the audit summary passes, so unverified release claims still require approval.
+- Detect remote-write risk only for explicit publish, push, release, upload, or production-deployment actions without leaking risk notes between requests.
+
+### Desktop cold-start reliability
+
+- Allow 45 seconds for cold Control Center startup and perform a final grace probe at the deadline.
+- Record bounded startup timing and child-exit diagnostics while redacting quoted and unquoted credential values before logging.
+
 ## v1.6.6 (2026-07-28)
 
 > Local worktree version. This entry does not assert that v1.6.6 has been published to GitHub or npm.
