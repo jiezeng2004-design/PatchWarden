@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  DEFAULT_BACKEND_FINAL_PROBE_GRACE_MS,
+  DEFAULT_BACKEND_START_TIMEOUT_MS,
   configIdentity,
   desktopInstanceIdentity,
   hasExpectedDesktopInstance,
   mayStopBackend,
   probeControlCenter,
+  waitForBackendStartup,
 } from "../dist/backend-probe.js";
 
 describe("desktop backend ownership", () => {
@@ -56,5 +59,42 @@ describe("desktop backend ownership", () => {
     assert.equal(mayStopBackend(owned, owned), true);
     assert.equal(mayStopBackend(owned, {}), false);
     assert.equal(mayStopBackend(null, owned), false);
+  });
+
+  it("allows 45 seconds for a cold Control Center start", () => {
+    assert.equal(DEFAULT_BACKEND_START_TIMEOUT_MS, 45_000);
+    assert.ok(DEFAULT_BACKEND_FINAL_PROBE_GRACE_MS > 0);
+  });
+
+  it("uses a final grace probe instead of missing readiness at the deadline", async () => {
+    let clock = 0;
+    const result = await waitForBackendStartup({
+      timeoutMs: 1_000,
+      pollIntervalMs: 300,
+      finalProbeGraceMs: 50,
+      now: () => clock,
+      sleep: async (delayMs) => { clock += delayMs; },
+      probe: async () => clock >= 1_030
+        ? { kind: "patchwarden", version: "1.6.6" }
+        : { kind: "absent", version: null },
+    });
+    assert.equal(result.probe.kind, "patchwarden");
+    assert.equal(result.finalProbeUsed, true);
+    assert.equal(result.elapsedMs, 1_050);
+  });
+
+  it("stops waiting promptly when the owned child exits", async () => {
+    let clock = 0;
+    let alive = true;
+    const result = await waitForBackendStartup({
+      timeoutMs: 45_000,
+      now: () => clock,
+      sleep: async (delayMs) => { clock += delayMs; alive = false; },
+      shouldContinue: () => alive,
+      probe: async () => ({ kind: "absent", version: null }),
+    });
+    assert.equal(result.stoppedEarly, true);
+    assert.equal(result.attempts, 1);
+    assert.ok(result.elapsedMs < 45_000);
   });
 });

@@ -214,13 +214,36 @@ describe("runTaskLoop", () => {
       verify_commands: ["npm test"],
     }, deps);
 
-    assert.equal(result.stop_reason, "success");
+    assert.equal(result.stop_reason, "audit_accepted");
     assert.equal(result.final_status, "accepted");
     assert.equal(result.tasks.main, "task-main");
     const payload = JSON.stringify(result);
     assert.ok(!payload.includes("stdout"));
     assert.ok(!payload.includes("stderr"));
     assert.ok(!payload.includes("diff.patch"));
+  });
+
+  it("keeps verified terminal work ready for audit when no audit has run", async () => {
+    const { deps } = depsFor({
+      audits: { "task-main": { verdict: "not_run" } },
+    });
+    const result = await runTaskLoopWithDeps({
+      repo_path: ".",
+      goal: "Inspect files without changing them",
+      agent: "fake",
+      template: "inspect_only",
+      verify_commands: ["npm test"],
+      max_iterations: 1,
+      auto_fix_tests: false,
+    }, deps);
+
+    assert.equal(result.final_status, "ready_for_audit");
+    assert.notEqual(result.final_status, "needs_fix");
+    assert.equal(result.stop_reason, "verification_passed");
+    assert.notEqual(result.stop_reason, "verification_failed");
+    assert.equal(result.next_action, "audit_task");
+    assert.equal(result.verification.latest_status, "passed");
+    assert.equal(result.verification.passed, true);
   });
 
   it("emits lineage and main task evidence before waiting for completion", async () => {
@@ -346,7 +369,7 @@ describe("runTaskLoop", () => {
       direct_verify: false,
     }, deps);
 
-    assert.equal(result.stop_reason, "success");
+    assert.equal(result.stop_reason, "audit_accepted");
     assert.equal(result.direct_verify, false);
     assert.deepEqual(result.tasks.direct_sessions, []);
     assert.equal(result.isolation_mode, "current_repo");
@@ -363,7 +386,7 @@ describe("runTaskLoop", () => {
       scope_files: ["src/index.ts"],
     }, deps);
 
-    assert.equal(result.stop_reason, "success");
+    assert.equal(result.stop_reason, "audit_accepted");
     assert.equal(result.agent_routing?.requested_agent, "auto");
     assert.equal(result.agent_routing?.selected_agent, "fake");
     assert.equal(result.agent_routing?.reason, "test route");
@@ -447,7 +470,7 @@ describe("runTaskLoop", () => {
       worktree_cleanup: "keep",
     }, deps);
 
-    assert.equal(result.stop_reason, "success");
+    assert.equal(result.stop_reason, "audit_accepted");
     assert.equal(result.isolation_mode, "worktree");
     assert.equal(result.worktree.worktree_id, "wt-test");
     assert.equal(result.worktree.branch, "pw-test");
@@ -468,7 +491,7 @@ describe("runTaskLoop", () => {
       direct_verify: true,
     }, deps);
 
-    assert.equal(result.stop_reason, "success");
+    assert.equal(result.stop_reason, "audit_accepted");
     assert.equal(result.direct_verify, true);
     assert.equal(result.tasks.direct_sessions.length, 1);
     assert.equal(result.tasks.direct_sessions[0].session_id, "direct-test");
@@ -479,6 +502,25 @@ describe("runTaskLoop", () => {
     assert.ok(!payload.includes("stdout_tail"));
     assert.ok(!payload.includes("stderr_tail"));
     assert.ok(!payload.includes("diff.patch"));
+  });
+
+  it("runs Direct verification before returning a verified task as ready for audit", async () => {
+    const { deps, calls } = depsFor({
+      audits: { "task-main": { verdict: "not_run" } },
+    });
+    const result = await runTaskLoopWithDeps({
+      repo_path: ".",
+      goal: "Verify read-only work with Direct",
+      agent: "fake",
+      verify_commands: ["npm test"],
+      direct_verify: true,
+      auto_fix_tests: false,
+    }, deps);
+
+    assert.equal(result.final_status, "ready_for_audit");
+    assert.equal(result.stop_reason, "verification_passed");
+    assert.equal(result.tasks.direct_sessions[0].status, "passed");
+    assert.ok(calls.includes("direct-session:false"));
   });
 
   it("stops clearly when direct_verify is requested but Direct profile is disabled", async () => {
@@ -555,7 +597,7 @@ describe("runTaskLoop", () => {
       max_iterations: 2,
     }, deps);
 
-    assert.equal(result.stop_reason, "success");
+    assert.equal(result.stop_reason, "audit_accepted");
     assert.equal(result.tasks.main, "task-main");
     assert.deepEqual(result.tasks.fix, ["task-fix"]);
     assert.equal(result.rounds.length, 2);

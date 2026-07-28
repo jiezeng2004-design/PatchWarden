@@ -64,6 +64,41 @@ describe("v1.5 evidence packs and agent recommendations", () => {
     assert.ok(!payload.includes("diff"));
   });
 
+  it("does not report remote-write risk for local read-only verification", () => {
+    const goals = [
+      "只读查看 README.md 和 package.json，并运行 npm test。",
+      "Inspect README.md and run local tests without modifying files.",
+      "Run npm run build for local verification only.",
+    ];
+    for (const goal of goals) {
+      const recommendation = recommendAgentForTask({ repo_path: ".", goal });
+      assert.ok(!recommendation.risk_notes.includes("release_or_remote_write_language_detected"), goal);
+    }
+  });
+
+  it("reports remote-write risk only for explicit publication actions", () => {
+    const goals = [
+      "运行 npm publish",
+      "git push origin main",
+      "创建 GitHub Release",
+      "创建 tag 并推送到远程仓库",
+    ];
+    for (const goal of goals) {
+      const recommendation = recommendAgentForTask({ repo_path: ".", goal });
+      assert.ok(recommendation.risk_notes.includes("release_or_remote_write_language_detected"), goal);
+    }
+  });
+
+  it("does not leak release risk notes between requests", () => {
+    const publishing = recommendAgentForTask({ repo_path: ".", goal: "运行 npm publish" });
+    const readOnly = recommendAgentForTask({
+      repo_path: ".",
+      goal: "只读查看 README.md 和 package.json，并运行 npm test。",
+    });
+    assert.ok(publishing.risk_notes.includes("release_or_remote_write_language_detected"));
+    assert.ok(!readOnly.risk_notes.includes("release_or_remote_write_language_detected"));
+  });
+
   it("exports bounded BOM-free evidence pack from lineage", () => {
     writeTaskLineage({
       lineage_id: "lineage_v15_pack",

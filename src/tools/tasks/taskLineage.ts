@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { getConfig } from "../../config.js";
+import { getConfig, getTasksDir } from "../../config.js";
 import { guardReadPath } from "../../security/pathGuard.js";
 import { redactSensitiveValue } from "../../security/contentRedaction.js";
 import { PatchWardenError } from "../../errors.js";
@@ -11,6 +11,9 @@ import { sanitizeModelSelectionEvidence, type ModelSelectionEvidence } from "../
 
 export type TaskLoopStopReason =
   | "success"
+  | "verification_passed"
+  | "audit_accepted"
+  | "audit_failed"
   | "task_queued"
   | "max_iterations_reached"
   | "verification_failed"
@@ -76,7 +79,7 @@ export interface TaskLineageRecord {
   repo_path: string;
   created_at: string;
   updated_at: string;
-  final_status: "running" | "accepted" | "needs_fix" | "blocked" | "failed";
+  final_status: "running" | "ready_for_audit" | "accepted" | "needs_fix" | "blocked" | "failed";
   stop_reason: TaskLoopStopReason;
   next_action: string;
   main_task: string | null;
@@ -130,10 +133,14 @@ export function writeTaskLineage(record: TaskLineageRecord): SafeTaskLineage {
   const config = getConfig();
   const lineageDir = resolve(config.workspaceRoot, ".patchwarden", "lineages", record.lineage_id);
   mkdirSync(lineageDir, { recursive: true });
-  const safeRecord = redactSensitiveValue(record).value as TaskLineageRecord;
-  atomicWriteJsonFileSync(join(lineageDir, "lineage.json"), safeRecord);
-  atomicWriteFileSync(join(lineageDir, "SUMMARY.md"), buildSummaryMarkdown(safeRecord));
-  return toSafeTaskLineage(safeRecord);
+  const lineageFile = join(lineageDir, "lineage.json");
+  return withFileLockSync(lineageFile, () => {
+    const next = structuredClone(record);
+    if (reconcileStoredAudits(next)) next.updated_at = new Date().toISOString();
+    const safeRecord = redactSensitiveValue(next).value as TaskLineageRecord;
+    persistLineageRecord(lineageFile, safeRecord);
+    return toSafeTaskLineage(safeRecord);
+  });
 }
 
 export function getTaskLineage(lineageId: string, options: { max_items?: number } = {}): SafeTaskLineage {
@@ -159,9 +166,72 @@ export function getTaskLineage(lineageId: string, options: { max_items?: number 
       { lineage_id: lineageId }
     );
   }
-  const raw = readFileSync(lineageFile, "utf-8").replace(/^\uFEFF/, "");
-  const record = JSON.parse(raw) as TaskLineageRecord;
-  return toSafeTaskLineage(redactSensitiveValue(record).value as TaskLineageRecord, maxItems);
+  return withFileLockSync(lineageFile, () => {
+    const raw = readFileSync(lineageFile, "utf-8").replace(/^\uFEFF/, "");
+    const record = JSON.parse(raw) as TaskLineageRecord;
+    if (reconcileStoredAudits(record)) {
+      record.updated_at = new Date().toISOString();
+      const safeRecord = redactSensitiveValue(record).value as TaskLineageRecord;
+      persistLineageRecord(lineageFile, safeRecord);
+      return toSafeTaskLineage(safeRecord, maxItems);
+    }
+    return toSafeTaskLineage(redactSensitiveValue(record).value as TaskLineageRecord, maxItems);
+  });
+}
+
+interface LineageAuditEvidence {
+  task_id?: unknown;
+  verdict?: unknown;
+  acceptance?: unknown;
+  checks?: unknown;
+  fail_checks?: unknown;
+  warn_checks?: unknown;
+  recommended_next_actions?: unknown;
+}
+
+/**
+ * Synchronize a completed task audit into every lineage that references it.
+ * New loop tasks carry lineage_id directly; the bounded directory scan keeps
+ * pre-link lineage files readable and repairable.
+ */
+export function syncTaskAuditToLineages(
+  taskId: string,
+  audit: LineageAuditEvidence,
+  lineageId?: string | null,
+  now = new Date(),
+): string[] {
+  if (!/^[A-Za-z0-9_-]+$/.test(taskId)) return [];
+  const config = getConfig();
+  const lineagesDir = resolve(config.workspaceRoot, ".patchwarden", "lineages");
+  if (!existsSync(lineagesDir)) return [];
+  const candidates = new Set<string>();
+  const linkedLineageFile = lineageId && /^[A-Za-z0-9_-]+$/.test(lineageId)
+    ? resolve(lineagesDir, lineageId, "lineage.json")
+    : null;
+  if (lineageId && linkedLineageFile && existsSync(linkedLineageFile)) {
+    candidates.add(lineageId);
+  } else {
+    for (const entry of readdirSync(lineagesDir, { withFileTypes: true }).slice(0, 2_000)) {
+      if (entry.isDirectory() && /^[A-Za-z0-9_-]+$/.test(entry.name)) candidates.add(entry.name);
+    }
+  }
+
+  const updated: string[] = [];
+  for (const candidate of candidates) {
+    const lineageFile = resolve(lineagesDir, candidate, "lineage.json");
+    if (!existsSync(lineageFile)) continue;
+    guardReadPath(lineageFile, config.workspaceRoot, ".patchwarden/lineages");
+    const changed = withFileLockSync(lineageFile, () => {
+      const record = JSON.parse(readFileSync(lineageFile, "utf-8").replace(/^\uFEFF/, "")) as TaskLineageRecord;
+      if (!applyAuditEvidence(record, taskId, audit)) return false;
+      record.updated_at = now.toISOString();
+      const safeRecord = redactSensitiveValue(record).value as TaskLineageRecord;
+      persistLineageRecord(lineageFile, safeRecord);
+      return true;
+    });
+    if (changed) updated.push(candidate);
+  }
+  return updated;
 }
 
 export function failInterruptedTaskLineage(lineageId: string, now = new Date()): SafeTaskLineage {
@@ -260,6 +330,154 @@ function buildSummaryMarkdown(record: TaskLineageRecord): string {
     ...(rounds.length > 0 ? rounds : ["- None."]),
     "",
   ].join("\n");
+}
+
+function persistLineageRecord(lineageFile: string, record: TaskLineageRecord): void {
+  atomicWriteJsonFileSync(lineageFile, record);
+  atomicWriteFileSync(resolve(lineageFile, "..", "SUMMARY.md"), buildSummaryMarkdown(record));
+}
+
+function reconcileStoredAudits(record: TaskLineageRecord): boolean {
+  let changed = false;
+  for (const round of record.rounds) {
+    const audit = readStoredAudit(round.task_id);
+    if (audit && applyAuditEvidence(record, round.task_id, audit)) changed = true;
+  }
+  return changed;
+}
+
+function readStoredAudit(taskId: string): LineageAuditEvidence | null {
+  if (!/^[A-Za-z0-9_-]+$/.test(taskId)) return null;
+  const config = getConfig();
+  const auditPath = resolve(getTasksDir(config), taskId, "audit.json");
+  if (!existsSync(auditPath)) return null;
+  guardReadPath(auditPath, config.workspaceRoot, config.tasksDir);
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(auditPath, "utf-8").replace(/^\uFEFF/, ""));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as LineageAuditEvidence
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function applyAuditEvidence(record: TaskLineageRecord, taskId: string, audit: LineageAuditEvidence): boolean {
+  let roundIndex = -1;
+  for (let index = record.rounds.length - 1; index >= 0; index--) {
+    if (record.rounds[index].task_id === taskId) {
+      roundIndex = index;
+      break;
+    }
+  }
+  if (roundIndex < 0) return false;
+  const round = record.rounds[roundIndex];
+  const acceptance = asRecord(audit.acceptance);
+  const acceptanceStatus = String(acceptance.status || "").toLowerCase();
+  const auditVerdict = normalizeAuditVerdict(audit.verdict);
+  const acceptanceVerdict = normalizeAuditVerdict(acceptance.verdict);
+  // Acceptance is the authoritative gate: a summary "pass" cannot accept a
+  // task that still requires explicit approval (for example, release claims).
+  const verdict = acceptanceStatus === "blocked" || acceptanceVerdict === "fail"
+    ? "fail"
+    : acceptanceVerdict === "warn"
+      ? "warn"
+      : auditVerdict ?? acceptanceVerdict;
+  if (!verdict || verdict === "not_run") return false;
+  const failChecks = collectCheckNames(audit, acceptance, "fail");
+  const warnChecks = collectCheckNames(audit, acceptance, "warn");
+  const nextAction = verdict === "pass"
+    ? "none"
+    : firstBoundedString(acceptance.next_suggested_task, audit.recommended_next_actions, "review_task");
+  const before = JSON.stringify({
+    audit_verdict: round.audit_verdict,
+    fail_checks: round.fail_checks,
+    warn_checks: round.warn_checks,
+    next_action: round.next_action,
+    final_status: record.final_status,
+    stop_reason: record.stop_reason,
+    lineage_next_action: record.next_action,
+  });
+  round.audit_verdict = verdict;
+  round.fail_checks = failChecks;
+  round.warn_checks = warnChecks;
+  round.next_action = nextAction;
+
+  if (roundIndex === record.rounds.length - 1) {
+    if (verdict === "pass" && isVerifiedSuccessfulRound(round)) {
+      record.final_status = "accepted";
+      record.stop_reason = "audit_accepted";
+      record.next_action = "none";
+    } else if (verdict === "fail" || verdict === "warn") {
+      const highRisk = [...failChecks, ...warnChecks].some((name) =>
+        /scope|policy|sensitive|secret|forbidden|publish|release|remote/.test(name.toLowerCase())
+      );
+      record.final_status = acceptanceStatus === "blocked" || highRisk ? "blocked" : "needs_fix";
+      record.stop_reason = "audit_failed";
+      record.next_action = nextAction;
+    }
+  }
+
+  const after = JSON.stringify({
+    audit_verdict: round.audit_verdict,
+    fail_checks: round.fail_checks,
+    warn_checks: round.warn_checks,
+    next_action: round.next_action,
+    final_status: record.final_status,
+    stop_reason: record.stop_reason,
+    lineage_next_action: record.next_action,
+  });
+  return before !== after;
+}
+
+function normalizeAuditVerdict(value: unknown): "pass" | "warn" | "fail" | "not_run" | null {
+  const normalized = String(value || "").toLowerCase();
+  if (normalized === "pass" || normalized === "accepted") return "pass";
+  if (normalized === "warn" || normalized === "needs_fix") return "warn";
+  if (normalized === "fail" || normalized === "rejected" || normalized === "blocked_by_approval") return "fail";
+  if (normalized === "not_run" || normalized === "unknown" || normalized === "") return "not_run";
+  return null;
+}
+
+function collectCheckNames(
+  audit: LineageAuditEvidence,
+  acceptance: Record<string, unknown>,
+  result: "fail" | "warn",
+): string[] {
+  const names = new Set<string>();
+  const add = (value: unknown) => {
+    for (const entry of Array.isArray(value) ? value : []) {
+      const record = asRecord(entry);
+      const name = String(record.name || entry || "").trim();
+      if (name) names.add(truncate(name, 160));
+    }
+  };
+  add(result === "fail" ? audit.fail_checks : audit.warn_checks);
+  add(result === "fail" ? acceptance.fail_checks : acceptance.warn_checks);
+  for (const entry of Array.isArray(audit.checks) ? audit.checks : []) {
+    const check = asRecord(entry);
+    if (String(check.result || "").toLowerCase() === result) add([entry]);
+  }
+  return [...names].slice(0, 50);
+}
+
+function firstBoundedString(primary: unknown, list: unknown, fallback: string): string {
+  if (typeof primary === "string" && primary.trim()) return truncate(primary.trim(), 240);
+  const first = Array.isArray(list) ? list.find((entry) => typeof entry === "string" && entry.trim()) : undefined;
+  return truncate(typeof first === "string" ? first.trim() : fallback, 240);
+}
+
+function isVerifiedSuccessfulRound(round: TaskLineageRound): boolean {
+  return round.terminal
+    && ["done_by_agent", "done", "accepted"].includes(round.status)
+    && round.verification_status === "passed"
+    && round.fail_checks.length === 0;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
 function normalizeWorktree(value: TaskLineageWorktree | undefined): TaskLineageWorktree {

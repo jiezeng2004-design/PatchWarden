@@ -304,6 +304,7 @@ export async function runTaskLoopWithDeps(
       [MODEL_SELECTION_REPO_PATH]: resolvedRepoPath,
       execution_mode: "execute",
       assessment_id: String(assessment.assessment_id || ""),
+      lineage_id: lineage.lineage_id,
       agent_routing_metadata: {
         requested_agent: routing.requested_agent,
         selected_agent: routing.selected_agent,
@@ -334,7 +335,9 @@ export async function runTaskLoopWithDeps(
     lineage.rounds.push(round);
     lineage.updated_at = deps.now().toISOString();
 
-    if (isSuccessfulRound(round)) {
+    const successfulRound = isSuccessfulRound(round);
+    const readyForAudit = isReadyForAudit(round);
+    if (successfulRound || readyForAudit) {
       if (normalized.direct_verify) {
         const direct = await runDirectVerification(lineage.lineage_id, normalized, taskRepoPath, deps);
         lineage.direct_sessions.push(direct.evidence);
@@ -343,7 +346,9 @@ export async function runTaskLoopWithDeps(
           return finalize(direct.final_status, direct.stop_reason, direct.next_action, direct.error);
         }
       }
-      return finalize("accepted", "success", "accept");
+      return successfulRound
+        ? finalize("accepted", "audit_accepted", "none")
+        : finalize("ready_for_audit", "verification_passed", "audit_task");
     }
 
     if (isHardStop(round, result, audit, normalized.stop_on_high_risk)) {
@@ -531,6 +536,17 @@ function isSuccessfulRound(round: TaskLineageRound): boolean {
     round.fail_checks.length === 0 &&
     round.warn_checks.length === 0 &&
     round.audit_verdict === "pass"
+  );
+}
+
+function isReadyForAudit(round: TaskLineageRound): boolean {
+  return (
+    round.terminal &&
+    ["done_by_agent", "done", "accepted"].includes(round.status) &&
+    round.verification_status === "passed" &&
+    round.fail_checks.length === 0 &&
+    round.warn_checks.length === 0 &&
+    ["not_run", "unknown", ""].includes(round.audit_verdict)
   );
 }
 
