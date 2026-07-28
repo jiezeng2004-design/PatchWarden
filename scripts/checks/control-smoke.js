@@ -31,6 +31,9 @@ const env = {
 let fakeTunnel = null;
 let fakeWatcher = null;
 let healthServer = null;
+let ownedSupervisor = null;
+let ownedSupervisorOutput = "";
+const ownedProcessIds = [];
 
 try {
   const statusOutput = run(["status", "all", "-Json"]);
@@ -85,12 +88,99 @@ try {
   const legacyDirectUrl = join(env.TEMP, "patchwarden-direct-health.url");
   writeFileSync(legacyDirectPid, String(fakeTunnel.pid), "utf8");
   writeFileSync(legacyDirectUrl, "http://127.0.0.1:8081", "utf8");
+
+  const desktopOwnerA = "0123456789abcdef0123456789abcdef";
+  const desktopOwnerB = "fedcba9876543210fedcba9876543210";
+  const missingReceiptStop = runFailure(["stop", "direct", "-OwnedOnly", "-OwnerInstanceId", desktopOwnerA]);
+  requireText(`${missingReceiptStop.stdout}\n${missingReceiptStop.stderr}`, "ownership could not be verified");
+  if (fakeTunnel.exitCode !== null || !existsSync(join(directRuntime, "tunnel-client.pid"))) {
+    throw new Error("owner-scoped stop changed a runtime with no ownership receipt");
+  }
+  writeFileSync(join(directRuntime, "tunnel-status.json"), JSON.stringify({
+    status: "ready", ready: true, pid: fakeTunnel.pid, owner_instance_id: desktopOwnerB,
+  }), "utf8");
+  writeFileSync(join(directRuntime, "supervisor-status.json"), JSON.stringify({
+    status: "running", pid: fakeTunnel.pid, owner_instance_id: desktopOwnerB,
+  }), "utf8");
+  const mismatchedOwnerStop = runFailure(["stop", "direct", "-OwnedOnly", "-OwnerInstanceId", desktopOwnerA]);
+  requireText(`${mismatchedOwnerStop.stdout}\n${mismatchedOwnerStop.stderr}`, "ownership could not be verified");
+  if (fakeTunnel.exitCode !== null || !existsSync(join(directRuntime, "tunnel-client.pid"))) {
+    throw new Error("owner-scoped stop changed a runtime belonging to another Desktop instance");
+  }
+  writeFileSync(join(directRuntime, "supervisor-status.json"), "{not-json", "utf8");
+  const corruptReceiptStop = runFailure(["stop", "direct", "-OwnedOnly", "-OwnerInstanceId", desktopOwnerA]);
+  requireText(`${corruptReceiptStop.stdout}\n${corruptReceiptStop.stderr}`, "ownership could not be verified");
+  if (fakeTunnel.exitCode !== null || !existsSync(join(directRuntime, "tunnel-client.pid"))) {
+    throw new Error("owner-scoped stop changed a runtime with a corrupt ownership receipt");
+  }
+
   const stopOutput = run(["stop", "direct"]);
   requireText(stopOutput, `Stopped PID ${fakeTunnel.pid}`);
   await waitForExit(fakeTunnel, 5000);
   if (fakeTunnel.exitCode === null) throw new Error("manager did not stop the owned Direct fixture process");
   for (const stalePath of [join(directRuntime, "tunnel-client.pid"), join(directRuntime, "tunnel-health-url.txt"), legacyDirectPid, legacyDirectUrl]) {
     if (existsSync(stalePath)) throw new Error(`manager did not clean stale runtime file: ${stalePath}`);
+  }
+
+  const ownedTree = join(temp, "owned-runtime-tree");
+  const ownedTunnel = join(ownedTree, "tunnel-client.exe");
+  const ownedSleep = join(ownedTree, "sleep.ps1");
+  const ownedLauncher = join(ownedTree, "owned-launcher.ps1");
+  const ownedSupervisorScript = join(ownedTree, "owned-supervisor.ps1");
+  const ownedLauncherPid = join(ownedTree, "launcher.pid");
+  const ownedTunnelPid = join(ownedTree, "tunnel.pid");
+  mkdirSync(ownedTree, { recursive: true });
+  copyFileSync(systemPowerShell, ownedTunnel);
+  writeFileSync(ownedSleep, "Start-Sleep -Seconds 120\r\n", "utf8");
+  writeFileSync(ownedLauncher, `
+param([string]$TunnelExe, [string]$SleepScript, [string]$TunnelPidFile, [string]$ProjectRootMarker, [string]$LauncherMarker, [string]$ToolProfile, [string]$Profile, [string]$OwnerInstanceId)
+$child = Start-Process -FilePath $TunnelExe -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $SleepScript, "run", "--profile", $Profile) -PassThru -WindowStyle Hidden
+Set-Content -LiteralPath $TunnelPidFile -Value $child.Id -Encoding ASCII
+Start-Sleep -Seconds 120
+`, "utf8");
+  writeFileSync(ownedSupervisorScript, `
+param([string]$LauncherScript, [string]$TunnelExe, [string]$SleepScript, [string]$LauncherPidFile, [string]$TunnelPidFile, [string]$ProjectRootMarker, [string]$SupervisorMarker, [string]$ToolProfile, [string]$Profile, [string]$OwnerInstanceId)
+$child = Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $LauncherScript, $TunnelExe, $SleepScript, $TunnelPidFile, $ProjectRootMarker, "scripts/control/start-patchwarden-tunnel.ps1", "-ToolProfile", $ToolProfile, "-Profile", $Profile, "-OwnerInstanceId", $OwnerInstanceId) -PassThru -WindowStyle Hidden
+Set-Content -LiteralPath $LauncherPidFile -Value $child.Id -Encoding ASCII
+Start-Sleep -Seconds 120
+`, "utf8");
+  ownedSupervisor = spawn("powershell.exe", [
+    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ownedSupervisorScript,
+    ownedLauncher, ownedTunnel, ownedSleep, ownedLauncherPid, ownedTunnelPid,
+    root, "scripts/control/run-background-supervisor.ps1", "-ToolProfile", "chatgpt_direct", "-Profile", "patchwarden-direct", "-OwnerInstanceId", desktopOwnerA,
+  ], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  ownedSupervisor.stdout.on("data", (chunk) => { ownedSupervisorOutput += chunk.toString(); });
+  ownedSupervisor.stderr.on("data", (chunk) => { ownedSupervisorOutput += chunk.toString(); });
+  try {
+    await waitForFile(ownedLauncherPid, 5000);
+    await waitForFile(ownedTunnelPid, 5000);
+  } catch (error) {
+    throw new Error(`${error.message}\nowned tree output:\n${ownedSupervisorOutput}`);
+  }
+  const ownedLauncherId = Number(readFileSync(ownedLauncherPid, "utf8").trim());
+  const ownedTunnelId = Number(readFileSync(ownedTunnelPid, "utf8").trim());
+  if (!Number.isInteger(ownedLauncherId) || !Number.isInteger(ownedTunnelId)) {
+    throw new Error("owned runtime fixture did not record process identifiers");
+  }
+  ownedProcessIds.push(ownedSupervisor.pid, ownedLauncherId, ownedTunnelId);
+  writeFileSync(join(directRuntime, "tunnel-status.json"), JSON.stringify({
+    status: "ready", ready: true, pid: ownedTunnelId, launcher_pid: ownedLauncherId,
+    supervisor_pid: ownedSupervisor.pid, owner_instance_id: desktopOwnerA,
+  }), "utf8");
+  writeFileSync(join(directRuntime, "supervisor-status.json"), JSON.stringify({
+    status: "running", pid: ownedSupervisor.pid, owner_instance_id: desktopOwnerA,
+  }), "utf8");
+  writeFileSync(join(directRuntime, "tunnel-client.pid"), String(ownedTunnelId), "utf8");
+  const ownedStop = run(["stop", "direct", "-OwnedOnly", "-OwnerInstanceId", desktopOwnerA]);
+  if (!ownedStop.includes("Signaled owned tunnel")) {
+    throw new Error(`verified owner tree was rejected:\n${ownedStop}\nsupervisor=${processCommandLine(ownedSupervisor.pid)}\nlauncher=${processCommandLine(ownedLauncherId)}\ntunnel=${processCommandLine(ownedTunnelId)}`);
+  }
+  await waitForExit(ownedSupervisor, 5000);
+  if (isProcessAlive(ownedLauncherId) || isProcessAlive(ownedTunnelId)) {
+    throw new Error("owner-scoped stop did not stop the verified supervisor process tree");
+  }
+  if (existsSync(join(directRuntime, "tunnel-client.pid"))) {
+    throw new Error("owner-scoped stop did not clean its verified runtime receipt");
   }
 
   fakeWatcher = spawn(
@@ -169,12 +259,12 @@ try {
   }
   const managerSource = readFileSync(manager, "utf8");
   const wrapperSource = readFileSync(join(root, "scripts", "control", "run-background-supervisor.ps1"), "utf8");
-  for (const expected of ["supervisor-status.json", "supervisor.stdout.log", "supervisor.stderr.log", "run-background-supervisor.ps1", "Write-BackgroundStartingState"]) {
+  for (const expected of ["supervisor-status.json", "supervisor.stdout.log", "supervisor.stderr.log", "run-background-supervisor.ps1", "Write-BackgroundStartingState", "OwnerInstanceId", "OwnedOnly", "Get-OwnedRuntimeReceipt"]) {
     if (!managerSource.includes(expected)) {
       throw new Error(`background manager is missing supervisor observability: ${expected}`);
     }
   }
-  if (!wrapperSource.includes("1> $stdout 2> $stderr") || wrapperSource.includes("CONTROL_PLANE_API_KEY")) {
+  if (!wrapperSource.includes("1> $stdout 2> $stderr") || !wrapperSource.includes("-SupervisorProcessId") || wrapperSource.includes("CONTROL_PLANE_API_KEY")) {
     throw new Error("background wrapper must redirect supervisor logs without credential arguments");
   }
   console.log("ok - control handles orphan cleanup, scoped kill, port conflicts, health fallback, and Core/Direct lifecycle actions");
@@ -182,7 +272,15 @@ try {
   if (fakeTunnel?.exitCode === null) fakeTunnel.kill();
   if (fakeWatcher?.exitCode === null) fakeWatcher.kill();
   if (healthServer?.exitCode === null) healthServer.kill();
-  rmSync(temp, { recursive: true, force: true });
+  if (ownedSupervisor?.exitCode === null) ownedSupervisor.kill();
+  for (const pid of ownedProcessIds) {
+    try { process.kill(pid); } catch { /* fixture process already exited */ }
+  }
+  await Promise.all([fakeTunnel, fakeWatcher, healthServer, ownedSupervisor]
+    .filter(Boolean)
+    .map((child) => waitForExit(child, 3000).catch(() => undefined)));
+  await Promise.all(ownedProcessIds.map((pid) => waitForPidExit(pid, 3000)));
+  rmSync(temp, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
 }
 
 function run(args) {
@@ -228,4 +326,39 @@ function waitForExit(child, timeoutMilliseconds) {
       resolvePromise();
     });
   });
+}
+
+async function waitForFile(path, timeoutMilliseconds) {
+  const deadline = Date.now() + timeoutMilliseconds;
+  while (Date.now() < deadline) {
+    if (existsSync(path)) return;
+    await delay(50);
+  }
+  throw new Error(`timed out waiting for fixture file: ${path}`);
+}
+
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function processCommandLine(pid) {
+  const result = spawnSync("powershell.exe", [
+    "-NoProfile", "-Command",
+    `(Get-CimInstance Win32_Process -Filter \"ProcessId = ${pid}\" -ErrorAction SilentlyContinue).CommandLine`,
+  ], { encoding: "utf8" });
+  return `${result.stdout || ""}${result.stderr || ""}`.trim();
+}
+
+async function waitForPidExit(pid, timeoutMilliseconds) {
+  const deadline = Date.now() + timeoutMilliseconds;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return;
+    await delay(25);
+  }
+  throw new Error(`timed out waiting for fixture process ${pid} to exit`);
 }

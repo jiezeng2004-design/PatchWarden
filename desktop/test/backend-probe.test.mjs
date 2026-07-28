@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { configIdentity, mayStopBackend, probeControlCenter } from "../dist/backend-probe.js";
+import {
+  configIdentity,
+  desktopInstanceIdentity,
+  hasExpectedDesktopInstance,
+  mayStopBackend,
+  probeControlCenter,
+} from "../dist/backend-probe.js";
 
 describe("desktop backend ownership", () => {
   it("recognizes a PatchWarden diagnostics response", async () => {
@@ -30,6 +36,19 @@ describe("desktop backend ownership", () => {
       "1.6.4",
     );
     assert.deepEqual(result, { kind: "outdated_patchwarden", version: "1.6.1" });
+  });
+
+  it("marks only the diagnostics hash for this Desktop instance as owned", async () => {
+    const instanceId = "0123456789abcdef0123456789abcdef";
+    const result = await probeControlCenter(async () => ({
+      ok: true,
+      json: async () => ({
+        server_version: "1.6.6",
+        desktop_instance_sha256: desktopInstanceIdentity(instanceId),
+      }),
+    }));
+    assert.equal(hasExpectedDesktopInstance(result, instanceId), true);
+    assert.equal(hasExpectedDesktopInstance(result, "fedcba9876543210fedcba9876543210"), false);
   });
 
   it("stops only the exact owned child handle", () => {

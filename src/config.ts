@@ -44,6 +44,9 @@ export interface PatchWardenConfig {
   defaultTaskTimeoutSeconds: number;
   maxTaskTimeoutSeconds: number;
   watcherStaleSeconds: number;
+  taskArchiveRetentionDays?: number;
+  taskArchiveCleanupIntervalHours?: number;
+  taskArchiveCleanupMaxBatch?: number;
   toolProfile?: "full" | "chatgpt_core" | "chatgpt_direct" | "chatgpt_search";
   repoAliases?: Record<string, string>;
   httpPort?: number;
@@ -101,6 +104,9 @@ const DEFAULT_CONFIG: PatchWardenConfig = {
   defaultTaskTimeoutSeconds: 900,
   maxTaskTimeoutSeconds: 3600,
   watcherStaleSeconds: 30,
+  taskArchiveRetentionDays: 30,
+  taskArchiveCleanupIntervalHours: 24,
+  taskArchiveCleanupMaxBatch: 100,
   toolProfile: "full",
   enableAgentAssessment: false,
   agentAssessmentTimeoutSeconds: 120,
@@ -127,6 +133,8 @@ let _config: PatchWardenConfig | null = null;
 export interface AgentRuntimeMetadata extends ModelSelectionEvidence {
   adapter: string | null;
   exit_code: number | null;
+  model_argument_verified?: boolean;
+  model_argument_name?: string | null;
 }
 
 export interface AgentRuntimeContext {
@@ -150,6 +158,12 @@ export function sanitizeAgentRuntimeMetadata(value: unknown): AgentRuntimeMetada
     exit_code: typeof record.exit_code === "number" && Number.isInteger(record.exit_code)
       ? record.exit_code
       : null,
+    ...(typeof record.model_argument_verified === "boolean"
+      ? { model_argument_verified: record.model_argument_verified }
+      : {}),
+    ...(record.model_argument_name === null || record.model_argument_name === "--model" || record.model_argument_name === "-m"
+      ? { model_argument_name: record.model_argument_name }
+      : {}),
   };
 }
 
@@ -428,6 +442,21 @@ function normalizeConfig(config: PatchWardenConfig): PatchWardenConfig {
   if (!Number.isFinite(config.maxReadFileBytes) || config.maxReadFileBytes <= 0) {
     throw new Error("maxReadFileBytes must be a positive number");
   }
+  const taskArchiveRetentionDays = config.taskArchiveRetentionDays ?? 30;
+  if (!Number.isSafeInteger(taskArchiveRetentionDays) || taskArchiveRetentionDays < 1 || taskArchiveRetentionDays > 3650) {
+    throw new Error("taskArchiveRetentionDays must be an integer from 1 to 3650");
+  }
+  const taskArchiveCleanupIntervalHours = config.taskArchiveCleanupIntervalHours ?? 24;
+  if (!Number.isSafeInteger(taskArchiveCleanupIntervalHours) || taskArchiveCleanupIntervalHours < 1 || taskArchiveCleanupIntervalHours > 168) {
+    throw new Error("taskArchiveCleanupIntervalHours must be an integer from 1 to 168");
+  }
+  const taskArchiveCleanupMaxBatch = config.taskArchiveCleanupMaxBatch ?? 100;
+  if (!Number.isSafeInteger(taskArchiveCleanupMaxBatch) || taskArchiveCleanupMaxBatch < 1 || taskArchiveCleanupMaxBatch > 100) {
+    throw new Error("taskArchiveCleanupMaxBatch must be an integer from 1 to 100");
+  }
+  config.taskArchiveRetentionDays = taskArchiveRetentionDays;
+  config.taskArchiveCleanupIntervalHours = taskArchiveCleanupIntervalHours;
+  config.taskArchiveCleanupMaxBatch = taskArchiveCleanupMaxBatch;
   if (!Number.isInteger(config.defaultTaskTimeoutSeconds) || config.defaultTaskTimeoutSeconds <= 0) {
     throw new Error("defaultTaskTimeoutSeconds must be a positive integer");
   }

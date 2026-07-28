@@ -222,7 +222,7 @@ html.dark {
     <!-- Bottom Section -->
     <div class="px-5 py-4" style="border-top: 1px solid var(--pw-border-subtle);">
       <div class="flex items-center gap-2 mb-3">
-        <span class="text-xs font-medium px-2 py-0.5 rounded-md whitespace-nowrap" style="color: var(--pw-text-tertiary); background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border-subtle); font-family: var(--pw-font-mono);">Core v0.6.0</span>
+        <span data-core-version class="text-xs font-medium px-2 py-0.5 rounded-md whitespace-nowrap" style="color: var(--pw-text-tertiary); background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border-subtle); font-family: var(--pw-font-mono);">Core</span>
       </div>
       <div class="flex items-center gap-2">
         <span class="shrink-0 w-2 h-2 rounded-full" style="background-color: var(--pw-state-success);"></span>
@@ -256,7 +256,7 @@ html.dark {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
           <span data-zh="打开目录" data-en="Open Folder">打开目录</span>
         </button>
-        <button id="btnAudit" title="运行 audit_task" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors" style="background-color: var(--pw-accent-muted); color: var(--pw-accent); border: 1px solid rgba(45, 212, 168, 0.3); font-family: var(--pw-font-sans);">
+        <button id="btnAudit" title="运行验收" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors" style="background-color: var(--pw-accent-muted); color: var(--pw-accent); border: 1px solid rgba(45, 212, 168, 0.3); font-family: var(--pw-font-sans);">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
           <span data-zh="运行审计" data-en="Run Audit">运行审计</span>
         </button>
@@ -317,6 +317,17 @@ html.dark {
             <p id="staleReasonsText" class="text-xs mt-1 break-words" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);"></p>
           </div>
           <button id="btnReconcile" class="shrink-0 px-3 py-1 rounded-md text-xs font-medium transition-colors" style="background-color: var(--pw-bg-hover); color: var(--pw-text-primary); border: 1px solid var(--pw-border-subtle); font-family: var(--pw-font-sans);" data-zh="Reconcile" data-en="Reconcile">Reconcile</button>
+        </div>
+
+        <div id="acceptanceGuide" class="hidden rounded-lg px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3" style="background-color: var(--pw-state-info-bg); border: 1px solid var(--pw-state-info);">
+          <div class="min-w-0 flex-1">
+            <p id="acceptanceGuideTitle" class="text-sm font-semibold" style="color: var(--pw-text-primary);">Agent 已执行，等待验收</p>
+            <p id="acceptanceGuideText" class="text-xs mt-1" style="color: var(--pw-text-secondary);">执行结束不等于验收通过。请运行验收检查结果、测试和变更范围。</p>
+          </div>
+          <div class="flex items-center gap-2 shrink-0">
+            <a id="acceptanceGuideDetails" href="#safeAuditSection" class="hidden px-3 py-1.5 rounded-md text-xs font-medium" style="background-color: var(--pw-bg-hover); color: var(--pw-text-primary); border: 1px solid var(--pw-border-subtle);">查看修复项</a>
+            <button id="acceptanceGuideAudit" type="button" class="px-3 py-1.5 rounded-md text-xs font-medium" style="background-color: var(--pw-accent-muted); color: var(--pw-accent); border: 1px solid rgba(45, 212, 168, 0.3);">运行验收</button>
+          </div>
         </div>
 
         <!-- Task Header Card -->
@@ -396,38 +407,38 @@ html.dark {
             <!-- Safe Result Overview -->
             <div class="rounded-lg p-4 flex flex-col gap-3" style="background-color: var(--pw-bg); border: 1px solid var(--pw-border-subtle);">
               <div class="flex items-center justify-between">
-                <h3 class="text-sm font-semibold" data-zh="结果概览" data-en="Safe Result" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">结果概览 (safe_result)</h3>
+                <h3 class="text-sm font-semibold" data-zh="结果概览" data-en="Task Result" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">结果概览</h3>
                 <span id="srStatusBadge" class="text-xs px-2 py-0.5 rounded-md whitespace-nowrap" style="color: var(--pw-text-tertiary); background-color: var(--pw-bg-hover); font-family: var(--pw-font-mono);">—</span>
               </div>
               <dl class="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
-                <div class="flex flex-col gap-0.5 min-w-0"><dt style="color: var(--pw-text-tertiary);">terminal</dt><dd id="srTerminal" class="truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">—</dd></div>
-                <div class="flex flex-col gap-0.5 min-w-0"><dt style="color: var(--pw-text-tertiary);">history_state</dt><dd id="srHistory" class="truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">active</dd></div>
-                <div class="flex flex-col gap-0.5 min-w-0"><dt style="color: var(--pw-text-tertiary);">acceptance_status</dt><dd id="srAcceptance" class="truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">—</dd></div>
-                <div class="flex flex-col gap-0.5 min-w-0"><dt style="color: var(--pw-text-tertiary);">changed_files_total</dt><dd id="srChangedTotal" class="truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">—</dd></div>
-                <div class="flex flex-col gap-0.5 min-w-0"><dt style="color: var(--pw-text-tertiary);">out_of_scope_changes_total</dt><dd id="srOosTotal" class="truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">—</dd></div>
+                <div class="flex flex-col gap-0.5 min-w-0"><dt style="color: var(--pw-text-tertiary);">是否终态</dt><dd id="srTerminal" class="truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">—</dd></div>
+                <div class="flex flex-col gap-0.5 min-w-0"><dt style="color: var(--pw-text-tertiary);">历史状态</dt><dd id="srHistory" class="truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">当前任务</dd></div>
+                <div class="flex flex-col gap-0.5 min-w-0"><dt style="color: var(--pw-text-tertiary);">验收状态</dt><dd id="srAcceptance" class="truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">—</dd></div>
+                <div class="flex flex-col gap-0.5 min-w-0"><dt style="color: var(--pw-text-tertiary);">变更文件</dt><dd id="srChangedTotal" class="truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">—</dd></div>
+                <div class="flex flex-col gap-0.5 min-w-0"><dt style="color: var(--pw-text-tertiary);">范围外变更</dt><dd id="srOosTotal" class="truncate" style="color: var(--pw-text-primary); font-family: var(--pw-font-mono);">—</dd></div>
               </dl>
               <div class="flex flex-col gap-0.5 min-w-0">
-                <span class="text-xs" style="color: var(--pw-text-tertiary);">verification.headline</span>
+                <span class="text-xs" style="color: var(--pw-text-tertiary);">验证摘要</span>
                 <span id="srVerifyHeadline" class="text-xs break-words" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);">—</span>
               </div>
               <div id="srFailureBlock" class="hidden flex flex-col gap-1">
-                <div class="flex flex-col gap-0.5 min-w-0"><span class="text-xs" style="color: var(--pw-state-error);">failure_reason</span><span id="srFailureReason" class="text-xs break-words" style="color: var(--pw-state-error); font-family: var(--pw-font-mono);">—</span></div>
-                <div class="flex flex-col gap-0.5 min-w-0"><span class="text-xs" style="color: var(--pw-state-error);">failed_command</span><span id="srFailedCommand" class="text-xs break-all" style="color: var(--pw-state-error); font-family: var(--pw-font-mono);">—</span></div>
+                <div class="flex flex-col gap-0.5 min-w-0"><span class="text-xs" style="color: var(--pw-state-error);">失败原因</span><span id="srFailureReason" class="text-xs break-words" style="color: var(--pw-state-error); font-family: var(--pw-font-mono);">—</span></div>
+                <div class="flex flex-col gap-0.5 min-w-0"><span class="text-xs" style="color: var(--pw-state-error);">失败命令</span><span id="srFailedCommand" class="text-xs break-all" style="color: var(--pw-state-error); font-family: var(--pw-font-mono);">—</span></div>
               </div>
               <div class="flex flex-col gap-0.5 min-w-0">
-                <span class="text-xs" style="color: var(--pw-text-tertiary);">next_action</span>
+                <span class="text-xs" style="color: var(--pw-text-tertiary);">下一步</span>
                 <span id="srNextAction" class="text-xs break-words" style="color: var(--pw-accent); font-family: var(--pw-font-mono);">—</span>
               </div>
               <div id="srBlockedBlock" class="hidden flex flex-col gap-0.5 min-w-0">
-                <span class="text-xs" style="color: var(--pw-state-warning);">execution_blocked / pending_reason</span>
+                <span class="text-xs" style="color: var(--pw-state-warning);">当前阻塞原因</span>
                 <span id="srPendingReason" class="text-xs break-words" style="color: var(--pw-state-warning); font-family: var(--pw-font-mono);">—</span>
               </div>
               <div id="srWarningsBlock" class="hidden flex flex-col gap-1 min-w-0">
-                <span class="text-xs font-medium" style="color: var(--pw-state-warning);">warnings</span>
+                <span class="text-xs font-medium" style="color: var(--pw-state-warning);">注意事项</span>
                 <pre id="srWarnings" class="rounded-md p-2 text-xs leading-relaxed whitespace-pre-wrap break-all" style="background-color: var(--pw-state-warning-bg); color: var(--pw-state-warning); font-family: var(--pw-font-mono); max-height: 160px; overflow-y: auto;"></pre>
               </div>
               <div id="srInformationBlock" class="hidden flex flex-col gap-1 min-w-0">
-                <span class="text-xs font-medium" style="color: var(--pw-state-info);">information</span>
+                <span class="text-xs font-medium" style="color: var(--pw-state-info);">补充信息</span>
                 <pre id="srInformation" class="rounded-md p-2 text-xs leading-relaxed whitespace-pre-wrap break-all" style="background-color: var(--pw-state-info-bg); color: var(--pw-state-info); font-family: var(--pw-font-mono); max-height: 160px; overflow-y: auto;"></pre>
               </div>
             </div>
@@ -435,7 +446,7 @@ html.dark {
             <!-- Safe Test Summary -->
             <div class="rounded-lg p-4 flex flex-col gap-3" style="background-color: var(--pw-bg); border: 1px solid var(--pw-border-subtle);">
               <div class="flex items-center justify-between">
-                <h3 class="text-sm font-semibold" data-zh="测试摘要" data-en="Safe Test Summary" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">测试摘要 (safe_test_summary)</h3>
+                <h3 class="text-sm font-semibold" data-zh="测试摘要" data-en="Test Summary" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">测试摘要</h3>
                 <span id="stStatusBadge" class="text-xs px-2 py-0.5 rounded-md whitespace-nowrap" style="color: var(--pw-text-tertiary); background-color: var(--pw-bg-hover); font-family: var(--pw-font-mono);">—</span>
               </div>
               <dl class="grid grid-cols-4 gap-x-3 gap-y-2 text-xs">
@@ -457,7 +468,7 @@ html.dark {
             <!-- Safe Diff Summary -->
             <div class="rounded-lg p-4 flex flex-col gap-3" style="background-color: var(--pw-bg); border: 1px solid var(--pw-border-subtle);">
               <div class="flex items-center justify-between">
-                <h3 class="text-sm font-semibold" data-zh="变更摘要" data-en="Safe Diff Summary" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">变更摘要 (safe_diff_summary)</h3>
+                <h3 class="text-sm font-semibold" data-zh="变更摘要" data-en="Change Summary" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">变更摘要</h3>
                 <span id="sdPatchMode" class="text-xs px-2 py-0.5 rounded-md whitespace-nowrap" style="color: var(--pw-text-tertiary); background-color: var(--pw-bg-hover); font-family: var(--pw-font-mono);">—</span>
               </div>
               <dl class="grid grid-cols-4 gap-x-3 gap-y-2 text-xs">
@@ -478,9 +489,9 @@ html.dark {
             </div>
 
             <!-- Safe Audit -->
-            <div class="rounded-lg p-4 flex flex-col gap-3" style="background-color: var(--pw-bg); border: 1px solid var(--pw-border-subtle);">
+            <div id="safeAuditSection" class="rounded-lg p-4 flex flex-col gap-3" style="background-color: var(--pw-bg); border: 1px solid var(--pw-border-subtle);">
               <div class="flex items-center justify-between">
-                <h3 class="text-sm font-semibold" data-zh="审计结论" data-en="Safe Audit" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">审计结论 (safe_audit)</h3>
+                <h3 class="text-sm font-semibold" data-zh="审计结论" data-en="Acceptance Evidence" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans);">审计结论</h3>
                 <span id="saVerdictBadge" class="text-xs px-2 py-0.5 rounded-md whitespace-nowrap" style="color: var(--pw-text-tertiary); background-color: var(--pw-bg-hover); font-family: var(--pw-font-mono);">—</span>
               </div>
               <dl class="grid grid-cols-3 gap-x-3 gap-y-2 text-xs">
@@ -489,24 +500,31 @@ html.dark {
                 <div class="flex flex-col gap-0.5"><dt style="color: var(--pw-text-tertiary);">fail</dt><dd id="saCountsFail" style="color: var(--pw-state-error); font-family: var(--pw-font-mono);">—</dd></div>
               </dl>
               <div class="flex flex-col gap-0.5 min-w-0">
-                <span class="text-xs" style="color: var(--pw-text-tertiary);">acceptance.verdict / status</span>
+                <span class="text-xs" style="color: var(--pw-text-tertiary);">验收结论</span>
                 <span id="saAccVerdict" class="text-xs break-words" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);">—</span>
               </div>
               <div class="flex flex-col gap-0.5 min-w-0">
-                <span class="text-xs" style="color: var(--pw-text-tertiary);">acceptance.reason</span>
+                <span class="text-xs" style="color: var(--pw-text-tertiary);">结论说明</span>
                 <span id="saAccReason" class="text-xs break-words" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);">—</span>
               </div>
               <div class="flex flex-col gap-0.5 min-w-0">
-                <span class="text-xs" style="color: var(--pw-text-tertiary);">next_suggested_task</span>
+                <span class="text-xs" style="color: var(--pw-text-tertiary);">建议下一步</span>
                 <span id="saAccNextTask" class="text-xs break-words" style="color: var(--pw-accent); font-family: var(--pw-font-mono);">—</span>
               </div>
               <div id="saFailChecksBlock" class="hidden flex flex-col gap-0.5 min-w-0">
-                <span class="text-xs" style="color: var(--pw-state-error);">fail_checks</span>
+                <span class="text-xs" style="color: var(--pw-state-error);">未通过项</span>
                 <pre id="saFailChecks" class="rounded-md p-2 text-xs whitespace-pre-wrap break-all" style="background-color: var(--pw-state-error-bg); color: var(--pw-state-error); font-family: var(--pw-font-mono); max-height: 120px; overflow-y: auto;"></pre>
               </div>
-              <div id="saManualBlock" class="hidden text-xs" style="color: var(--pw-state-warning); font-family: var(--pw-font-mono);">⚠ manual_verification_required</div>
+              <div id="saWarnChecksBlock" class="hidden flex flex-col gap-0.5 min-w-0">
+                <span class="text-xs" style="color: var(--pw-state-warning);">需要修复项</span>
+                <pre id="saWarnChecks" class="rounded-md p-2 text-xs whitespace-pre-wrap break-all" style="background-color: var(--pw-state-warning-bg); color: var(--pw-state-warning); font-family: var(--pw-font-mono); max-height: 120px; overflow-y: auto;"></pre>
+              </div>
+              <div id="saManualBlock" class="hidden flex flex-col gap-0.5 min-w-0" style="color: var(--pw-state-warning);">
+                <span class="text-xs font-medium">需要人工确认</span>
+                <pre id="saManualItems" class="text-xs whitespace-pre-wrap break-all" style="font-family: var(--pw-font-mono);"></pre>
+              </div>
               <div id="saActionsBlock" class="hidden flex flex-col gap-0.5 min-w-0">
-                <span class="text-xs" style="color: var(--pw-text-tertiary);">recommended_next_actions</span>
+                <span class="text-xs" style="color: var(--pw-text-tertiary);">建议操作</span>
                 <pre id="saActions" class="text-xs whitespace-pre-wrap break-all" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);"></pre>
               </div>
             </div>
@@ -565,7 +583,7 @@ html.dark {
               <div class="flex items-center gap-2 flex-wrap">
                 <button id="advBtnAudit" class="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors" style="background-color: var(--pw-accent-muted); color: var(--pw-accent); border: 1px solid rgba(45, 212, 168, 0.3); font-family: var(--pw-font-sans);">
                   <svg id="advSpinnerAudit" class="hidden pw-spin" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></svg>
-                  <span data-zh="运行 audit_task 完整审计" data-en="Run audit_task full review">运行 audit_task 完整审计</span>
+                  <span data-zh="运行完整验收" data-en="Run full acceptance">运行完整验收</span>
                 </button>
                 <span class="text-xs" style="color: var(--pw-state-warning); font-family: var(--pw-font-mono);">⚠️ Advanced view: may contain large output</span>
               </div>
@@ -605,6 +623,12 @@ html.dark {
       function show(el) { el && el.classList.remove('hidden'); }
       function hide(el) { el && el.classList.add('hidden'); }
       function text(el, value) { if (el) el.textContent = value; }
+      function isZh() {
+        return window.PatchWardenI18n
+          ? window.PatchWardenI18n.getLanguage() === 'zh-CN'
+          : /^zh(?:-|$)/i.test(document.documentElement.lang || navigator.language || '');
+      }
+      function local(zh, en) { return isZh() ? zh : en; }
 
       function escapeText(s) {
         if (s === null || s === undefined) return '';
@@ -624,13 +648,16 @@ html.dark {
       // status -> { color, text, bg, border }
       // color: success (green) | info (blue) | warning (yellow) | error (red) | muted (gray)
       var STATUS_META = {
-        pending:                { color: 'warning', text: '等待中' },
-        running:                { color: 'info',    text: '运行中' },
-        done:                   { color: 'success', text: '已完成' },
-        failed:                 { color: 'error',   text: '失败' },
-        failed_scope_violation: { color: 'error',   text: '范围违规' },
-        canceled:               { color: 'muted',   text: '已取消' },
-        timeout:                { color: 'muted',   text: '超时' }
+        pending:                { color: 'warning', zh: '等待中', en: 'Pending' },
+        queued:                 { color: 'warning', zh: '等待中', en: 'Queued' },
+        running:                { color: 'info',    zh: '运行中', en: 'Running' },
+        done:                   { color: 'success', zh: '已完成', en: 'Completed' },
+        done_by_agent:          { color: 'success', zh: 'Agent 已执行', en: 'Agent completed' },
+        failed:                 { color: 'error',   zh: '失败', en: 'Failed' },
+        failed_verification:    { color: 'error',   zh: '验证失败', en: 'Verification failed' },
+        failed_scope_violation: { color: 'error',   zh: '范围违规', en: 'Scope violation' },
+        canceled:               { color: 'muted',   zh: '已取消', en: 'Cancelled' },
+        timeout:                { color: 'muted',   zh: '超时', en: 'Timed out' }
       };
 
       var PHASE_LABELS = {
@@ -643,7 +670,8 @@ html.dark {
       };
 
       function getStatusMeta(status) {
-        return STATUS_META[status] || { color: 'muted', text: status || '—' };
+        var meta = STATUS_META[status];
+        return meta ? { color: meta.color, text: local(meta.zh, meta.en) } : { color: 'muted', text: status ? local('状态需要核查', 'Status needs review') : '—' };
       }
 
       function getPhaseLabel(phase) {
@@ -674,7 +702,45 @@ html.dark {
         else if (v === 'warn' || v === 'warning') color = 'warning';
         else if (v === 'fail' || v === 'failed' || v === 'error') color = 'error';
         applyBadgeColors(el, color);
-        text(el, verdict || '—');
+        text(el, verdictLabel(verdict));
+      }
+
+      function acceptanceLabel(value) {
+        var labels = {
+          pending: ['等待验收', 'Awaiting acceptance'],
+          accepted: ['验收通过', 'Accepted'],
+          rejected: ['验收未通过', 'Rejected'],
+          needs_fix: ['需要修复', 'Needs fixes'],
+          blocked: ['需要人工确认', 'Manual confirmation required']
+        };
+        var entry = labels[value];
+        return entry ? local(entry[0], entry[1]) : (value ? local('验收状态需要核查', 'Acceptance status needs review') : '—');
+      }
+      function historyLabel(value) {
+        var labels = { active: ['当前任务', 'Current task'], archived: ['已归档', 'Archived'] };
+        var entry = labels[value];
+        return entry ? local(entry[0], entry[1]) : local('历史状态需要核查', 'History state needs review');
+      }
+      function verdictLabel(value) {
+        var labels = {
+          pass: ['通过', 'Passed'], passed: ['通过', 'Passed'],
+          warn: ['需要复核', 'Needs review'], warning: ['需要复核', 'Needs review'],
+          fail: ['未通过', 'Failed'], failed: ['未通过', 'Failed'],
+          not_run: ['尚未运行验收', 'Acceptance not run']
+        };
+        var entry = labels[String(value || '').toLowerCase()];
+        return entry ? local(entry[0], entry[1]) : (value ? local('结论需要核查', 'Conclusion needs review') : '—');
+      }
+      function nextActionLabel(value) {
+        var labels = {
+          run_audit: ['运行验收', 'Run acceptance'],
+          audit_task: ['运行验收', 'Run acceptance'],
+          review_audit: ['查看验收证据', 'Review acceptance evidence'],
+          fix_and_reaudit: ['修复后重新验收', 'Fix and run acceptance again'],
+          reconcile: ['核对任务状态', 'Reconcile task state']
+        };
+        var entry = labels[String(value || '').toLowerCase()];
+        return entry ? local(entry[0], entry[1]) : (value ? local('请查看验收建议', 'Review the acceptance guidance') : '—');
       }
 
       function renderListOrJoin(value) {
@@ -775,12 +841,14 @@ html.dark {
 
       // Render safe_result card
       function renderSafeResult(sr) {
-        text($('srStatusBadge'), sr.status || '—');
-        applyBadgeColors($('srStatusBadge'), getStatusMeta(sr.status).color);
+        var statusMeta = getStatusMeta(sr.status);
+        text($('srStatusBadge'), statusMeta.text);
+        applyBadgeColors($('srStatusBadge'), statusMeta.color);
 
-        text($('srTerminal'), sr.terminal ? 'true' : 'false');
-        text($('srHistory'), sr.history_state || 'active');
-        text($('srAcceptance'), sr.acceptance_status || '—');
+        text($('srTerminal'), sr.terminal ? local('是', 'Yes') : local('否', 'No'));
+        text($('srHistory'), historyLabel(sr.history_state || 'active'));
+        text($('srAcceptance'), acceptanceLabel(sr.acceptance_status));
+        renderAcceptanceGuide(sr);
         text($('srChangedTotal'), sr.changed_files_total != null ? String(sr.changed_files_total) : '—');
         text($('srOosTotal'), sr.out_of_scope_changes_total != null ? String(sr.out_of_scope_changes_total) : '—');
 
@@ -795,10 +863,10 @@ html.dark {
           hide($('srFailureBlock'));
         }
 
-        text($('srNextAction'), sr.next_action || '—');
+        text($('srNextAction'), nextActionLabel(sr.next_action));
 
         if (sr.execution_blocked || sr.pending_reason) {
-          text($('srPendingReason'), sr.pending_reason || (sr.execution_blocked ? 'blocked' : '—'));
+          text($('srPendingReason'), sr.pending_reason ? local('任务暂时无法继续，请查看上方原因。', 'The task cannot continue yet. Review the reason above.') : (sr.execution_blocked ? local('任务已被阻止', 'Task is blocked') : '—'));
           show($('srBlockedBlock'));
         } else {
           hide($('srBlockedBlock'));
@@ -816,6 +884,65 @@ html.dark {
         } else {
           hide($('srInformationBlock'));
         }
+      }
+
+      function renderAcceptanceGuide(sr) {
+        var guide = $('acceptanceGuide');
+        var acceptance = sr.acceptance_status || 'pending';
+        // Acceptance is its own lifecycle. A task can retain a terminal
+        // execution status while its acceptance status is updated later.
+        if (!guide || (sr.status !== 'done_by_agent' && ['pending', 'needs_fix', 'rejected', 'blocked', 'accepted'].indexOf(acceptance) < 0)) {
+          hide(guide);
+          return;
+        }
+        var title = local('Agent 已执行，等待验收', 'Agent completed, awaiting acceptance');
+        var description = local('执行结束不等于验收通过。请运行验收检查结果、测试和变更范围。', 'Completion is not acceptance. Run acceptance to check results, tests, and scope.');
+        var color = 'info';
+        var auditLabel = local('运行验收', 'Run acceptance');
+        var showDetails = false;
+        var detailsLabel = local('查看验收证据', 'View acceptance evidence');
+        if (acceptance === 'needs_fix') {
+          title = local('执行已结束，但验收发现需要修复的警告项', 'Execution completed, but acceptance found items that need fixes');
+          description = local('先查看修复项，完成修改和验证后再重新运行验收。', 'Review the fixes, complete the changes and verification, then run acceptance again.');
+          color = 'warning';
+          auditLabel = local('重新运行验收', 'Run acceptance again');
+          showDetails = true;
+          detailsLabel = local('查看修复项', 'View required fixes');
+        } else if (acceptance === 'rejected') {
+          title = local('验收未通过', 'Acceptance failed');
+          description = local('存在失败级检查项。查看审计结论，修复后重新运行验收。', 'There are failed checks. Review the audit, fix them, then run acceptance again.');
+          color = 'error';
+          auditLabel = local('重新运行验收', 'Run acceptance again');
+          showDetails = true;
+          detailsLabel = local('查看失败项', 'View failed checks');
+        } else if (acceptance === 'blocked') {
+          title = local('验收需要人工确认', 'Acceptance requires manual confirmation');
+          description = local('查看所需证据并完成确认，然后重新运行验收。', 'Review the required evidence, complete confirmation, then run acceptance again.');
+          color = 'warning';
+          auditLabel = local('重新运行验收', 'Run acceptance again');
+          showDetails = true;
+          detailsLabel = local('查看人工确认项', 'View manual checks');
+        } else if (acceptance === 'accepted') {
+          title = local('任务已通过验收', 'Task accepted');
+          description = local('Agent 执行结果、验证和变更范围均已审计。', 'The Agent result, verification, and change scope have been audited.');
+          color = 'success';
+          showDetails = true;
+          detailsLabel = local('查看验收证据', 'View acceptance evidence');
+        }
+        text($('acceptanceGuideTitle'), title);
+        text($('acceptanceGuideText'), description);
+        text($('acceptanceGuideAudit'), auditLabel);
+        text($('acceptanceGuideDetails'), detailsLabel);
+        showDetails ? show($('acceptanceGuideDetails')) : hide($('acceptanceGuideDetails'));
+        acceptance === 'accepted' ? hide($('acceptanceGuideAudit')) : show($('acceptanceGuideAudit'));
+        // Once accepted, the primary action is to review its evidence. Keep
+        // the header action aligned with the acceptance guide so it cannot
+        // suggest an unnecessary re-audit.
+        acceptance === 'accepted' ? hide($('btnAudit')) : show($('btnAudit'));
+        var colors = COLOR_VARS[color] || COLOR_VARS.info;
+        guide.style.backgroundColor = colors.bg;
+        guide.style.borderColor = colors.fg;
+        show(guide);
       }
 
       // Render safe_test_summary card
@@ -884,31 +1011,55 @@ html.dark {
         text($('saCountsFail'), String(cc.fail || 0));
 
         var acc = sa.acceptance || {};
-        text($('saAccVerdict'), (acc.verdict || '—') + ' / ' + (acc.status || '—'));
+        text($('saAccVerdict'), verdictLabel(acc.verdict) + ' / ' + acceptanceLabel(acc.status));
         text($('saAccReason'), acc.reason || '—');
-        text($('saAccNextTask'), acc.next_suggested_task || '—');
+        text($('saAccNextTask'), acc.next_suggested_task || local('无需后续任务', 'No follow-up task suggested'));
 
-        var failChecks = Array.isArray(sa.fail_checks) ? sa.fail_checks : [];
+        var failChecks = Array.isArray(sa.fail_checks) ? sa.fail_checks : (Array.isArray(acc.fail_checks) ? acc.fail_checks : []);
         if (failChecks.length > 0) {
-          $('saFailChecks').textContent = failChecks.map(function (c) { return c.name || String(c); }).join('\n');
+          $('saFailChecks').textContent = auditCheckText(failChecks).join('\n');
           show($('saFailChecksBlock'));
         } else {
           hide($('saFailChecksBlock'));
         }
 
-        if (sa.manual_verification_required) {
+        var warnChecks = Array.isArray(sa.warn_checks) ? sa.warn_checks : (Array.isArray(acc.warn_checks) ? acc.warn_checks : []);
+        if (warnChecks.length > 0) {
+          $('saWarnChecks').textContent = auditCheckText(warnChecks).join('\n');
+          show($('saWarnChecksBlock'));
+        } else {
+          hide($('saWarnChecksBlock'));
+        }
+
+        if (sa.manual_verification_required || acc.manual_verification_required) {
+          var manualItems = Array.isArray(sa.manual_verification_items)
+            ? sa.manual_verification_items
+            : (Array.isArray(acc.manual_verification_items) ? acc.manual_verification_items : []);
+          text($('saManualItems'), manualItems.length > 0 ? manualItems.join('\n') : local('请完成审计列出的人工确认。', 'Complete the manual checks listed by the audit.'));
           show($('saManualBlock'));
         } else {
           hide($('saManualBlock'));
         }
 
-        var actions = Array.isArray(sa.recommended_next_actions) ? sa.recommended_next_actions : [];
+        var actions = Array.isArray(sa.recommended_next_actions)
+          ? sa.recommended_next_actions
+          : (Array.isArray(acc.recommended_next_actions) ? acc.recommended_next_actions : []);
         if (actions.length > 0) {
           $('saActions').textContent = actions.join('\n');
           show($('saActionsBlock'));
         } else {
           hide($('saActionsBlock'));
         }
+      }
+
+      function auditCheckText(checks) {
+        return checks.map(function (check) {
+          if (typeof check === 'string') return check;
+          if (!check || typeof check !== 'object') return String(check);
+          var name = check.name || check.title || check.key || local('审计检查项', 'Audit check');
+          var detail = check.detail || check.message || check.reason || '';
+          return detail ? String(name) + ': ' + String(detail) : String(name);
+        });
       }
 
       // ---- Render: stale / reconcile banner ----
@@ -937,9 +1088,14 @@ html.dark {
       // ---- Action: run audit_task ----
       function runAudit(taskId) {
         var btn = $('btnAudit');
+        var guideBtn = $('acceptanceGuideAudit');
         if (btn) {
           btn.disabled = true;
           btn.style.opacity = '0.6';
+        }
+        if (guideBtn) {
+          guideBtn.disabled = true;
+          guideBtn.style.opacity = '0.6';
         }
         postAction('/api/tasks/' + encodeURIComponent(taskId) + '/audit')
           .then(function (res) {
@@ -963,6 +1119,10 @@ html.dark {
             if (btn) {
               btn.disabled = false;
               btn.style.opacity = '';
+            }
+            if (guideBtn) {
+              guideBtn.disabled = false;
+              guideBtn.style.opacity = '';
             }
           });
       }
@@ -1215,6 +1375,9 @@ html.dark {
       } else {
         loadSafeSummary(taskId);
       }
+      window.addEventListener('patchwarden:languagechange', function () {
+        if (taskId) loadSafeSummary(taskId);
+      });
 
       // ---- Action button wiring ----
       var btnRefresh = $('btnRefresh');
@@ -1232,7 +1395,13 @@ html.dark {
       var btnAudit = $('btnAudit');
       if (btnAudit) btnAudit.addEventListener('click', function () {
         if (!taskId) return;
-        if (!confirm('确认对该任务运行 audit_task？仅当任务处于终态时才会执行。')) return;
+        if (!confirm('确认对该任务运行验收？仅当任务处于终态时才会执行。')) return;
+        runAudit(taskId);
+      });
+      var acceptanceGuideAudit = $('acceptanceGuideAudit');
+      if (acceptanceGuideAudit) acceptanceGuideAudit.addEventListener('click', function () {
+        if (!taskId) return;
+        if (!confirm('运行验收会重新检查任务结果、测试和变更范围。是否继续？')) return;
         runAudit(taskId);
       });
       var btnReconcile = $('btnReconcile');
@@ -1258,7 +1427,7 @@ html.dark {
       var advBtnAudit = $('advBtnAudit');
       if (advBtnAudit) advBtnAudit.addEventListener('click', function () {
         if (!taskId) return;
-        if (!confirm('确认运行 audit_task 完整审计？')) return;
+        if (!confirm('确认运行完整验收？')) return;
         runFullAuditReview(taskId);
       });
     })();

@@ -58,11 +58,26 @@ export interface ListTasksOutput {
   watcher: WatcherStatusSnapshot;
 }
 
+/**
+ * Enumerate the complete matching task set for in-process consumers.
+ * MCP callers must continue to use listTasks(), which applies its bounded
+ * response limit after this scan completes.
+ */
+export function listAllTasks(input?: Omit<ListTasksInput, "limit">): ListTasksOutput {
+  return scanTasks(input);
+}
+
 export function listTasks(input?: ListTasksInput): ListTasksOutput {
+  const limit = input?.limit && input.limit > 0 ? Math.min(input.limit, 100) : 20;
+  const scanned = scanTasks(input);
+  const tasks = scanned.tasks.slice(0, limit);
+  return { ...scanned, tasks, returned: tasks.length };
+}
+
+function scanTasks(input?: Omit<ListTasksInput, "limit"> | ListTasksInput): ListTasksOutput {
   const config = getConfig();
   const tasksDir = getTasksDir(config);
   const plansDir = getPlansDir(config);
-  const limit = input?.limit && input.limit > 0 ? Math.min(input.limit, 100) : 20;
   const filterStatus = input?.status || null;
   const filterAcceptance = input?.acceptance_status || null;
   const filterRepo = input?.repo_path?.trim().replace(/\\/g, "/") || null;
@@ -113,7 +128,6 @@ export function listTasks(input?: ListTasksInput): ListTasksOutput {
       const normalizedResolvedRepo = String(data.resolved_repo_path || "").replace(/\\/g, "/");
       if (filterRepo && normalizedRepo !== filterRepo && normalizedResolvedRepo !== filterRepo) continue;
       totalMatched++;
-      if (tasks.length >= limit) continue;
 
       // Read plan title from plans directory (not task dir)
       let title = `Plan: ${data.plan_id || "unknown"}`;

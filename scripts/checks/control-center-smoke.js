@@ -14,7 +14,7 @@
 
 import { spawn, execSync } from "node:child_process";
 import http from "node:http";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -31,9 +31,14 @@ const BASE_URL = `http://127.0.0.1:${TEST_PORT}`;
 // by the dev sandbox. Cleaned up on exit.
 const TEST_LOG_DIR = join(projectRoot, ".tmp", "control-center-smoke");
 try { mkdirSync(TEST_LOG_DIR, { recursive: true }); } catch { /* ignore */ }
+const TEST_WORKSPACE = join(TEST_LOG_DIR, "workspace");
+const TEST_CONFIG_PATH = join(TEST_LOG_DIR, "patchwarden.config.json");
 const READY_TIMEOUT_MS = 15_000;
 const READY_POLL_MS = 500;
 const REQUEST_TIMEOUT_MS = 5000;
+// Browser acceptance can reuse this fully isolated fixture without touching
+// the real 8090 runtime. The normal smoke path remains unchanged.
+const BROWSER_HOLD_MS = Math.min(Math.max(Number(process.env.PATCHWARDEN_CONTROL_SMOKE_HOLD_MS || "0") || 0, 0), 600_000);
 
 let child = null;
 let childExitedEarly = false;
@@ -83,6 +88,138 @@ function cleanup() {
   } catch {
     /* ignore */
   }
+}
+
+function prepareIsolatedWorkspace() {
+  const tasksDir = join(TEST_WORKSPACE, ".patchwarden", "tasks");
+  const directSessionsDir = join(TEST_WORKSPACE, ".patchwarden", "direct-sessions");
+  const expiredDir = join(tasksDir, "task-archived-expired-smoke");
+  const recentDir = join(tasksDir, "task-archived-recent-smoke");
+  const passedDir = join(tasksDir, "task-audit-passed-smoke");
+  mkdirSync(expiredDir, { recursive: true });
+  mkdirSync(recentDir, { recursive: true });
+  mkdirSync(passedDir, { recursive: true });
+  for (const name of ["visible-repo", ".hidden-repo", "_worktrees"]) {
+    const directory = join(TEST_WORKSPACE, name);
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, "package.json"), JSON.stringify({ name, version: "1.0.0" }), "utf-8");
+  }
+  mkdirSync(join(TEST_WORKSPACE, "plain-folder"), { recursive: true });
+  writeFileSync(join(TEST_WORKSPACE, "package.json"), JSON.stringify({ name: "control-center-smoke", version: "1.0.0" }), "utf-8");
+  writeFileSync(join(expiredDir, "status.json"), JSON.stringify({
+    task_id: "task-archived-expired-smoke",
+    status: "failed",
+    phase: "failed",
+    history_state: "archived",
+    archived_at: "2020-01-01T00:00:00.000Z",
+    updated_at: "2020-01-01T00:00:00.000Z",
+    repo_path: ".",
+  }), "utf-8");
+  writeFileSync(join(recentDir, "status.json"), JSON.stringify({
+    task_id: "task-archived-recent-smoke",
+    status: "failed",
+    phase: "failed",
+    history_state: "archived",
+    archived_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    repo_path: ".",
+  }), "utf-8");
+  writeFileSync(join(recentDir, "audit.json"), JSON.stringify({
+    task_id: "task-archived-recent-smoke",
+    verdict: "warn",
+    summary: "One warning requires review before acceptance.",
+    checks: [
+      { name: "repo_path_consistency", result: "pass", detail: "Repository matches." },
+      { name: "artifact_hygiene", result: "warn", detail: "Review generated output." },
+    ],
+    risks: [{ severity: "medium", description: "Generated output requires review." }],
+    manual_verification_required: true,
+    manual_verification_items: ["Confirm generated output is expected."],
+    recommended_next_actions: ["Review the generated output before acceptance."],
+    acceptance: { status: "needs_fix", reason: "Warning needs review." },
+  }), "utf-8");
+  writeFileSync(join(passedDir, "status.json"), JSON.stringify({
+    task_id: "task-audit-passed-smoke",
+    status: "done_by_agent",
+    phase: "done_by_agent",
+    history_state: "active",
+    acceptance_status: "accepted",
+    updated_at: new Date().toISOString(),
+    repo_path: ".",
+  }), "utf-8");
+  writeFileSync(join(passedDir, "independent-review.md"), [
+    "# Independent Review",
+    "",
+    "**Task**: task-audit-passed-smoke",
+    "**Verdict**: PASS",
+    "",
+    "## Summary",
+    "Audit complete: 2 pass, 0 warn, 0 fail across 2 checks. No risks identified.",
+    "",
+    "## Checks",
+    "- [x] **repo_path_consistency**: Repository matches.",
+    "- [x] **verification**: Verification passed.",
+    "",
+    "## Risks",
+    "- None.",
+    "",
+    "## Confirmed Failures",
+    "- None.",
+    "",
+    "## Manual Verification Required",
+    "- No additional manual verification identified by this audit.",
+    "",
+    "## Recommended Actions",
+    "- No specific actions recommended.",
+  ].join("\n"), "utf-8");
+  // Keep one uniquely filterable task older than the first 100 directory
+  // entries. This proves Control Center filtering is not constrained by the
+  // public MCP list_tasks response cap.
+  for (let index = 0; index < 125; index += 1) {
+    const taskId = `task-page-${String(index).padStart(3, "0")}`;
+    const taskDir = join(tasksDir, taskId);
+    mkdirSync(taskDir, { recursive: true });
+    writeFileSync(join(taskDir, "status.json"), JSON.stringify({
+      task_id: taskId,
+      status: "done_by_agent",
+      phase: "done_by_agent",
+      acceptance_status: index === 0 ? "needs_fix" : "accepted",
+      created_at: `2025-01-${String((index % 28) + 1).padStart(2, "0")}T00:00:00.000Z`,
+      updated_at: `2025-01-${String((index % 28) + 1).padStart(2, "0")}T00:00:00.000Z`,
+      repo_path: index === 0 ? "late-history-repo" : "visible-repo",
+      resolved_repo_path: join(TEST_WORKSPACE, index === 0 ? "late-history-repo" : "visible-repo"),
+    }), "utf-8");
+  }
+  const future = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  const past = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const directFixtures = [
+    { id: "direct_smoke_active", created_at: "2026-07-28T04:00:00.000Z", expires_at: future, finalized: false, audited: false },
+    { id: "direct_smoke_finalized", created_at: "2026-07-28T03:00:00.000Z", expires_at: future, finalized: true, finalized_at: "2026-07-28T03:10:00.000Z", audited: false },
+    { id: "direct_smoke_audited", created_at: "2026-07-28T02:00:00.000Z", expires_at: future, finalized: true, finalized_at: "2026-07-28T02:10:00.000Z", audited: true },
+    { id: "direct_smoke_expired", created_at: "2026-07-28T01:00:00.000Z", expires_at: past, finalized: false, audited: false },
+  ];
+  for (const fixture of directFixtures) {
+    const sessionDir = join(directSessionsDir, fixture.id);
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(join(sessionDir, "session.json"), JSON.stringify({
+      ...fixture,
+      session_id: fixture.id,
+      repo_path: "demo-project",
+      resolved_repo_path: join(TEST_WORKSPACE, "demo-project"),
+      title: fixture.id,
+    }), "utf-8");
+    if (fixture.audited) {
+      writeFileSync(join(sessionDir, "audit.json"), JSON.stringify({ decision: "pass", checked_at: "2026-07-28T02:15:00.000Z" }), "utf-8");
+    }
+  }
+  writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+    workspaceRoot: TEST_WORKSPACE,
+    agents: {},
+    enableDirectProfile: true,
+    taskArchiveRetentionDays: 30,
+    taskArchiveCleanupIntervalHours: 24,
+    taskArchiveCleanupMaxBatch: 100,
+  }), "utf-8");
 }
 
 function waitForChildExit(timeoutMs = 5000) {
@@ -742,6 +879,42 @@ async function testOtherGetApis() {
       const json = tryJson(res.body);
       if (!json || !Array.isArray(json.audits)) {
         problems.push(`/api/audit missing 'audits' array: ${res.body.slice(0, 120)}`);
+      } else {
+        const stats = json.stats;
+        if (!isObject(stats)) {
+          problems.push("/api/audit missing normalized stats");
+        } else if (stats.pass + stats.warn + stats.fail + stats.unknown !== stats.total) {
+          problems.push("/api/audit verdict totals do not reconcile");
+        }
+        if (json.total !== 3 || json.audits.length !== 3) {
+          problems.push(`/api/audit expected two task audits plus one Direct audit, got total=${json.total}`);
+        }
+        const auditSubjects = new Set(json.audits.map((audit) => `${audit.subject_type}:${audit.subject_id}`));
+        for (const expectedSubject of [
+          "task:task-archived-recent-smoke",
+          "task:task-audit-passed-smoke",
+          "direct_session:direct_smoke_audited",
+        ]) {
+          if (!auditSubjects.has(expectedSubject)) problems.push(`/api/audit missing fixture ${expectedSubject}`);
+        }
+        for (const audit of json.audits) {
+          if (!isObject(audit)) {
+            problems.push("/api/audit contains a non-object entry");
+            continue;
+          }
+          for (const field of ["audit_id", "subject_type", "subject_id", "verdict", "summary", "detail_url"]) {
+            if (typeof audit[field] !== "string") problems.push(`/api/audit entry missing string ${field}`);
+          }
+          if (!isObject(audit.check_counts) || !Array.isArray(audit.findings) || !Array.isArray(audit.recommended_actions)) {
+            problems.push("/api/audit entry missing conclusion evidence fields");
+          }
+          if ("content_excerpt" in audit || "checks" in audit) {
+            problems.push("/api/audit returned legacy raw evidence fields");
+          }
+        }
+        if (!Array.isArray(json.attention_groups) || json.attention_groups.length !== 2) {
+          problems.push("/api/audit attention groups do not reflect warning + manual verification");
+        }
       }
     }
   } catch (err) {
@@ -952,7 +1125,7 @@ async function testReconcileNoToken() {
 
 // ── Test 14: GET /api/direct-sessions returns a bounded list (not 500)
 async function testDirectSessionsEmptyList() {
-  const name = "Test 14: /api/direct-sessions returns a bounded list (not 500)";
+  const name = "Test 14: Direct sessions default to all and every state filter is accurate";
   try {
     const res = await httpGet(`${BASE_URL}/api/direct-sessions`);
     if (res.status !== 200) {
@@ -967,6 +1140,8 @@ async function testDirectSessionsEmptyList() {
     const problems = [];
     if (!Array.isArray(json.sessions)) problems.push("'sessions' is not an array");
     if (typeof json.total !== "number") problems.push("'total' is not a number");
+    if (json.total !== 4 || json.available_total !== 4) problems.push(`default view expected all 4 sessions, got total=${json.total}, available_total=${json.available_total}`);
+    if (json.filters?.applied?.state !== null) problems.push("default Direct session view unexpectedly applies a state filter");
     if (!(json.nextCursor === null || typeof json.nextCursor === "string")) problems.push("'nextCursor' is neither null nor string");
     if (!isObject(json.filters) || !isObject(json.filters.options)) problems.push("'filters' contract is missing");
     if (typeof json.direct_profile_enabled !== "boolean") problems.push("'direct_profile_enabled' is not a boolean");
@@ -976,6 +1151,23 @@ async function testDirectSessionsEmptyList() {
     }
     if (Array.isArray(json.sessions) && json.sessions.length < json.total && typeof json.nextCursor !== "string") {
       problems.push("paginated direct sessions response is missing nextCursor");
+    }
+    const expectedByState = { active: "direct_smoke_active", finalized: "direct_smoke_finalized", audited: "direct_smoke_audited", expired: "direct_smoke_expired" };
+    for (const [state, expectedId] of Object.entries(expectedByState)) {
+      const stateRes = await httpGet(`${BASE_URL}/api/direct-sessions?state=${state}`);
+      const stateJson = tryJson(stateRes.body);
+      if (stateRes.status !== 200 || !stateJson || stateJson.total !== 1 || stateJson.sessions?.[0]?.session_id !== expectedId || stateJson.available_total !== 4) {
+        problems.push(`${state} filter did not return only ${expectedId}`);
+      }
+    }
+    const archiveRes = await httpGet(`${BASE_URL}/api/direct-sessions?state=archive`);
+    const archiveJson = tryJson(archiveRes.body);
+    if (archiveRes.status !== 200 || archiveJson?.total !== 3 || archiveJson?.sessions?.some((session) => session.session_id === "direct_smoke_active")) {
+      problems.push("archive filter must return the three non-active sessions");
+    }
+    const page = await httpGet(`${BASE_URL}/pages/direct-sessions.html`);
+    if (!page.body.includes('<option value="">全部会话</option>') || !page.body.includes("available_total") || !page.body.includes("清除筛选")) {
+      problems.push("Direct sessions page is missing the all-sessions default or filtered-empty recovery action");
     }
     const invalidDetail = await httpGet(`${BASE_URL}/api/direct-sessions/invalid.id`);
     const invalidSummary = await httpGet(`${BASE_URL}/api/direct-sessions/invalid.id/summary`);
@@ -1185,6 +1377,31 @@ async function testControlCenterStatusApi() {
   }
 }
 
+function testArchivedTaskCleanupStartup() {
+  const name = "Archived task retention runs at startup without touching recent archives";
+  const tasksDir = join(TEST_WORKSPACE, ".patchwarden", "tasks");
+  const expiredDir = join(tasksDir, "task-archived-expired-smoke");
+  const recentDir = join(tasksDir, "task-archived-recent-smoke");
+  const receiptPath = join(TEST_WORKSPACE, ".patchwarden", "history-cleanup", "latest.json");
+  const problems = [];
+  if (existsSync(expiredDir)) problems.push("expired archived task was not deleted on startup");
+  if (!existsSync(recentDir)) problems.push("recent archived task was deleted");
+  if (!existsSync(receiptPath)) {
+    problems.push("cleanup receipt was not written");
+  } else {
+    try {
+      const receipt = JSON.parse(readFileSync(receiptPath, "utf-8"));
+      if (receipt.deleted_count !== 1) problems.push(`receipt deleted_count=${receipt.deleted_count}, expected 1`);
+      if (!Array.isArray(receipt.deleted) || receipt.deleted[0]?.task_id !== "task-archived-expired-smoke") {
+        problems.push("receipt does not identify the deleted archived task");
+      }
+    } catch (err) {
+      problems.push(`cleanup receipt is unreadable: ${err.message}`);
+    }
+  }
+  record(name, problems.length === 0, problems.join("; "));
+}
+
 // ── Test 21: GET /api/workspace/repos returns valid JSON with repos array ──
 async function testWorkspaceReposApi() {
   const name = "Test 21: /api/workspace/repos returns valid JSON with repos array";
@@ -1205,6 +1422,11 @@ async function testWorkspaceReposApi() {
       problems.push("'workspace_root' is neither string nor null");
     }
     if (Array.isArray(json.repos)) {
+      const repoNames = json.repos.map((repo) => repo && repo.name).filter(Boolean);
+      if (!repoNames.includes("visible-repo")) problems.push("visible package repository is missing");
+      for (const hidden of [".hidden-repo", "_worktrees", ".patchwarden", "plain-folder"]) {
+        if (repoNames.includes(hidden)) problems.push(`internal or non-project directory leaked: ${hidden}`);
+      }
       for (let i = 0; i < json.repos.length; i++) {
         const repo = json.repos[i];
         if (!isObject(repo)) {
@@ -1352,6 +1574,108 @@ async function testTasksFilter() {
     } else {
       record(name, false, problems.join("; "));
     }
+  } catch (err) {
+    record(name, false, `error: ${err.message}`);
+  }
+}
+
+// ── Test 24a: unreadable audit/session artifacts must not become empty success ──
+async function testAuditAndDirectReadFailuresFailClosed() {
+  const name = "Test 24a: audit and Direct source failures return explicit errors";
+  const auditPath = join(TEST_WORKSPACE, ".patchwarden", "tasks", "task-archived-recent-smoke", "audit.json");
+  const sessionPath = join(TEST_WORKSPACE, ".patchwarden", "direct-sessions", "direct_smoke_active", "session.json");
+  const tasksRoot = join(TEST_WORKSPACE, ".patchwarden", "tasks");
+  const sessionsRoot = join(TEST_WORKSPACE, ".patchwarden", "direct-sessions");
+  const missingTasksRoot = `${tasksRoot}.missing-root`;
+  const missingSessionsRoot = `${sessionsRoot}.missing-root`;
+  let auditOriginal = null;
+  let sessionOriginal = null;
+  let tasksRootMoved = false;
+  let sessionsRootMoved = false;
+  const problems = [];
+  try {
+    auditOriginal = readFileSync(auditPath, "utf-8");
+    writeFileSync(auditPath, "{", "utf-8");
+    const auditResponse = await httpGet(`${BASE_URL}/api/audit`);
+    const audit = tryJson(auditResponse.body);
+    if (auditResponse.status !== 500 || audit?.error_code !== "audit_data_unavailable" || "audits" in (audit || {})) {
+      problems.push(`audit failure was not fail-closed: ${auditResponse.status} ${auditResponse.body.slice(0, 120)}`);
+    }
+    writeFileSync(auditPath, auditOriginal, "utf-8");
+    auditOriginal = null;
+
+    sessionOriginal = readFileSync(sessionPath, "utf-8");
+    writeFileSync(sessionPath, "{", "utf-8");
+    const directResponse = await httpGet(`${BASE_URL}/api/direct-sessions`);
+    const direct = tryJson(directResponse.body);
+    if (directResponse.status !== 500 || direct?.error_code !== "direct_sessions_data_unavailable" || "sessions" in (direct || {})) {
+      problems.push(`Direct failure was not fail-closed: ${directResponse.status} ${directResponse.body.slice(0, 120)}`);
+    }
+    writeFileSync(sessionPath, sessionOriginal, "utf-8");
+    sessionOriginal = null;
+
+    // A genuinely missing primary root is normal first-run state. It must stay
+    // distinguishable from the corrupt artifacts above and return a valid empty response.
+    renameSync(tasksRoot, missingTasksRoot);
+    tasksRootMoved = true;
+    renameSync(sessionsRoot, missingSessionsRoot);
+    sessionsRootMoved = true;
+    const missingAuditResponse = await httpGet(`${BASE_URL}/api/audit`);
+    const missingAudit = tryJson(missingAuditResponse.body);
+    if (missingAuditResponse.status !== 200 || !Array.isArray(missingAudit?.audits) || missingAudit.total !== 0 || missingAudit?.stats?.total !== 0) {
+      problems.push(`missing audit roots did not produce a valid empty response: ${missingAuditResponse.status} ${missingAuditResponse.body.slice(0, 120)}`);
+    }
+    const missingDirectResponse = await httpGet(`${BASE_URL}/api/direct-sessions`);
+    const missingDirect = tryJson(missingDirectResponse.body);
+    if (missingDirectResponse.status !== 200 || !Array.isArray(missingDirect?.sessions) || missingDirect.total !== 0 || missingDirect.available_total !== 0) {
+      problems.push(`missing Direct root did not produce a valid empty response: ${missingDirectResponse.status} ${missingDirectResponse.body.slice(0, 120)}`);
+    }
+  } catch (err) {
+    problems.push(`error: ${err.message}`);
+  } finally {
+    if (auditOriginal !== null) writeFileSync(auditPath, auditOriginal, "utf-8");
+    if (sessionOriginal !== null) writeFileSync(sessionPath, sessionOriginal, "utf-8");
+    if (sessionsRootMoved && existsSync(missingSessionsRoot)) renameSync(missingSessionsRoot, sessionsRoot);
+    if (tasksRootMoved && existsSync(missingTasksRoot)) renameSync(missingTasksRoot, tasksRoot);
+  }
+  record(name, problems.length === 0, problems.join("; "));
+}
+
+// ── Test 24b: Control Center scans beyond the public 100-task MCP cap ──
+async function testTaskPaginationBeyondMcpLimit() {
+  const name = "Test 24b: task filters and cursors include history beyond 100 entries";
+  try {
+    const filtered = tryJson((await httpGet(`${BASE_URL}/api/tasks?acceptance_status=needs_fix&limit=20`)).body);
+    const problems = [];
+    if (!filtered || filtered.total !== 1 || filtered.tasks?.[0]?.task_id !== "task-page-000") {
+      problems.push("unique task beyond the first 100 entries was not returned by its filter");
+    }
+    if (!Array.isArray(filtered?.facets?.repos) || !filtered.facets.repos.includes("late-history-repo")) {
+      problems.push("facets omitted the repo that only exists beyond the first 100 entries");
+    }
+
+    const seen = new Set();
+    let cursor = null;
+    let total = null;
+    do {
+      const query = cursor ? `?limit=20&cursor=${encodeURIComponent(cursor)}` : "?limit=20";
+      const response = await httpGet(`${BASE_URL}/api/tasks${query}`);
+      const page = tryJson(response.body);
+      if (response.status !== 200 || !page || !Array.isArray(page.tasks)) {
+        problems.push(`page request failed at cursor ${cursor || "initial"}`);
+        break;
+      }
+      total = page.total;
+      for (const task of page.tasks) {
+        if (seen.has(task.task_id)) problems.push(`duplicate task ${task.task_id} across cursors`);
+        seen.add(task.task_id);
+      }
+      cursor = page.nextCursor;
+    } while (cursor);
+    if (typeof total !== "number" || seen.size !== total || total <= 100) {
+      problems.push(`cursor coverage was incomplete: seen=${seen.size}, total=${total}`);
+    }
+    record(name, problems.length === 0, problems.join("; "));
   } catch (err) {
     record(name, false, `error: ${err.message}`);
   }
@@ -1561,10 +1885,13 @@ async function main() {
     process.exit(1);
   }
 
+  prepareIsolatedWorkspace();
+
   child = spawn(process.execPath, [serverPath], {
     cwd: projectRoot,
     env: {
       ...process.env,
+      PATCHWARDEN_CONFIG: TEST_CONFIG_PATH,
       PATCHWARDEN_CONTROL_PORT: String(TEST_PORT),
       PATCHWARDEN_CONTROL_LOG_DIR: TEST_LOG_DIR,
       PATCHWARDEN_CONTROL_FORCE_MISSING_TUNNEL_CLIENT: "1",
@@ -1600,6 +1927,7 @@ async function main() {
     await waitForServer();
     console.log(`[control-center-smoke] server ready at ${BASE_URL}`);
 
+    testArchivedTaskCleanupStartup();
     await testStaticFiles();
     await testLoopbackHostBoundary();
     await testPageNavigationRoutes();
@@ -1630,7 +1958,9 @@ async function main() {
     await testWorkspaceReposApi();
     await testReleaseStatusFields();
     await testSafeTaskEndpoints();
+    await testAuditAndDirectReadFailuresFailClosed();
     await testTasksFilter();
+    await testTaskPaginationBeyondMcpLimit();
     await testStaleTasksExplanation();
     await testHideStaleNoToken();
     if (token) await testHideStaleWithToken(token);
@@ -1646,6 +1976,10 @@ async function main() {
   } catch (err) {
     record("server bootstrap", false, err.message);
   } finally {
+    if (failed === 0 && BROWSER_HOLD_MS > 0) {
+      console.log(`[control-center-smoke] browser fixture ready; holding isolated server for ${BROWSER_HOLD_MS}ms`);
+      await new Promise((resolve) => setTimeout(resolve, BROWSER_HOLD_MS));
+    }
     cleanup();
     // Wait for the child to actually exit so the port is released before we exit.
     await waitForChildExit(5000);

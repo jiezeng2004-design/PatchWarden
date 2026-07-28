@@ -26,6 +26,10 @@ import { recordEvent, removeStatusFile, writeStatusFile } from "./runtime.js";
 import { checkControlToken, isTrustedControlHost } from "./middleware/auth.js";
 import { serveFavicon, serveStatic } from "./middleware/static.js";
 import { buildRoutes } from "./routeTable.js";
+import {
+  startArchivedTaskCleanupScheduler,
+  type ArchivedTaskCleanupScheduler,
+} from "../tools/tasks/pruneArchivedTasks.js";
 
 // ── Request router ────────────────────────────────────────────────
 
@@ -111,8 +115,11 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 // ── Server bootstrap ──────────────────────────────────────────────
 
 let server: Server | null = null;
+let archivedTaskCleanup: ArchivedTaskCleanupScheduler | null = null;
 
 export function startServer(): Server {
+  archivedTaskCleanup?.stop();
+  archivedTaskCleanup = startArchivedTaskCleanupScheduler({ config });
   server = createServer((req, res) => {
     handleRequest(req, res).catch((err) => {
       if (!res.headersSent) {
@@ -156,6 +163,8 @@ function shutdown(): void {
   logger.info("[control-center] Shutting down...");
   recordEvent("control_center.stopped", { pid: process.pid });
   removeStatusFile();
+  archivedTaskCleanup?.stop();
+  archivedTaskCleanup = null;
   if (server) {
     server.close(() => {
       try { process.exit(0); } catch { /* ignore */ }

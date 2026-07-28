@@ -70,9 +70,9 @@ interface WorkspaceRepoEntry {
 }
 
 /**
- * Lists first-level subdirectories of the workspace root and, for each one,
- * reads package.json (if present) to expose name/version. Read-only and
- * path-bounded: only direct children of workspaceRoot are inspected.
+ * Lists visible first-level Git or package repositories and exposes package
+ * name/version when present. Internal dot/underscore directories and ordinary
+ * folders are excluded from project selectors. Read-only and path-bounded.
  */
 export function handleWorkspaceRepos(res: ServerResponse): void {
   let workspaceRoot: string | null = null;
@@ -88,7 +88,11 @@ export function handleWorkspaceRepos(res: ServerResponse): void {
   }
   let entries: import("node:fs").Dirent[] = [];
   try {
-    entries = readdirSync(workspaceRoot, { withFileTypes: true }).filter((e) => e.isDirectory());
+    entries = readdirSync(workspaceRoot, { withFileTypes: true }).filter((entry) => {
+      if (!entry.isDirectory() || entry.name.startsWith(".") || entry.name.startsWith("_")) return false;
+      const child = join(workspaceRoot as string, entry.name);
+      return existsSync(join(child, ".git")) || existsSync(join(child, "package.json"));
+    });
   } catch (err) {
     sendJson(res, 200, { repos: [], workspace_root: workspaceRoot, error: errorMessage(err) });
     return;

@@ -12,6 +12,9 @@ param(
   [ValidatePattern('^127\.0\.0\.1:\d+$')]
   [string]$HealthListenAddr,
 
+  [ValidatePattern('^[A-Fa-f0-9]{32}$')]
+  [string]$OwnerInstanceId = "",
+
   [switch]$SkipWatcher
 )
 
@@ -28,8 +31,10 @@ $arguments = @(
   "-ToolProfile", $ToolProfile,
   "-Profile", $Profile,
   "-HealthListenAddr", $HealthListenAddr,
+  "-SupervisorProcessId", $PID,
   "-NoTunnelWebUi"
 )
+if ($OwnerInstanceId) { $arguments += @("-OwnerInstanceId", $OwnerInstanceId.ToLowerInvariant()) }
 if ($SkipWatcher) { $arguments += "-SkipWatcher" }
 
 try {

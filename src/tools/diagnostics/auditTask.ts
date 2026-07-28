@@ -42,7 +42,7 @@ import { guardSensitivePath, isSensitivePath } from "../../security/sensitiveGua
 import { evaluateAcceptance } from "../../goal/acceptanceEngine.js";
 import { renderAcceptanceMarkdown } from "../../goal/acceptanceTemplate.js";
 import type { ChangedFile } from "../../runner/changeCapture.js";
-import { atomicWriteFileSync } from "../../utils/atomicFile.js";
+import { atomicWriteFileSync, atomicWriteJsonFileSync } from "../../utils/atomicFile.js";
 import { mutateTaskStatus } from "../../runner/taskStatusStore.js";
 import {
   readTextFilePrefixSync,
@@ -1011,7 +1011,7 @@ export function auditTask(taskId: string): AuditTaskOutput {
     // 导出 ACCEPTANCE.md
     const acceptanceMd = renderAcceptanceMarkdown(taskId, acceptanceResult, acceptanceEvidence);
     atomicWriteFileSync(join(taskDir, "ACCEPTANCE.md"), acceptanceMd);
-    return {
+    const output: AuditTaskOutput = {
         task_id: taskId,
         model_selection: sanitizeAgentRuntimeMetadata(statusData.model_selection ?? statusData.agent_runtime) as unknown as Record<string, unknown> | null,
         failure_category: statusData.failure_category || statusData.agent_failure_category || null,
@@ -1036,4 +1036,6 @@ export function auditTask(taskId: string): AuditTaskOutput {
         manual_verification_items: manualVerificationItems,
         recommended_next_actions: actions,
     };
+    atomicWriteJsonFileSync(join(taskDir, "audit.json"), output);
+    return output;
 }

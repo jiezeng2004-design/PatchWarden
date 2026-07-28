@@ -6,7 +6,7 @@
  * by type. `handleLogs` returns redacted stdout/stderr tails for core, direct,
  * watcher, and control-center log categories.
  */
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { type ServerResponse } from "node:http";
 import { type TaskEntry, listTasks } from "../../tools/tasks/listTasks.js";
@@ -16,9 +16,15 @@ import { getDirectSessionsDir, getTasksDir } from "../../config.js";
 import {
   classifyStaleTask,
   fileMtimeIso,
-  parseReviewVerdict,
   readWatcherStatusSafe,
 } from "../runtime.js";
+import {
+  buildAuditOverview,
+  summarizeDirectAudit,
+  summarizeIndependentReview,
+  summarizeTaskAudit,
+  type AuditSummaryEntry,
+} from "../auditSummary.js";
 import {
   config,
   errorMessage,
@@ -90,74 +96,49 @@ export function handleLogs(res: ServerResponse, category: LogCategory, tailLines
 
 export function handleAudit(res: ServerResponse): void {
   try {
-    const audits: Array<Record<string, unknown>> = [];
+    const audits: AuditSummaryEntry[] = [];
 
     // 1. tasks/*/independent-review.md (written by audit_task — the primary audit artifact)
     // 2. tasks/*/audit.json (legacy/explicit JSON audit, if present)
-    const tasksDir = getTasksDir(config);
-    if (existsSync(tasksDir)) {
-      let taskEntries: import("node:fs").Dirent[] = [];
-      try {
-        taskEntries = readdirSync(tasksDir, { withFileTypes: true }).filter((e) => e.isDirectory());
-      } catch {
-        taskEntries = [];
-      }
+    const tasksDir = existingControlDirectory(getTasksDir(config), config.tasksDir, "audit_tasks_directory");
+    if (tasksDir) {
+      const taskEntries = readdirSync(tasksDir, { withFileTypes: true }).filter((e) => e.isDirectory());
       for (const entry of taskEntries) {
         const taskDir = guardControlPath(join(tasksDir, entry.name), config.tasksDir);
-        if (!taskDir) continue;
+        if (!taskDir) throw new Error("audit_task_directory_outside_workspace");
 
-        // independent-review.md
-        const reviewFile = join(taskDir, "independent-review.md");
-        if (existsSync(reviewFile)) {
-          const content = readTextFileSafe(reviewFile) ?? "";
-          audits.push({
-            task_id: entry.name,
-            source: "independent-review.md",
-            verdict: parseReviewVerdict(content),
-            checked_at: fileMtimeIso(reviewFile),
-            content_excerpt: content.slice(0, 500),
-          });
-        }
-
-        // audit.json (explicit JSON audit if present)
-        const auditFile = join(taskDir, "audit.json");
-        if (existsSync(auditFile)) {
+        // Prefer the structured JSON artifact. The Markdown review is a
+        // compatibility fallback, never a second row for the same task.
+        const auditFile = existingControlFile(join(taskDir, "audit.json"), config.tasksDir, "audit");
+        if (auditFile) {
           const data = readJsonFileSafe<Record<string, unknown>>(auditFile);
-          if (data) {
-            audits.push({
-              task_id: entry.name,
-              source: "audit.json",
-              checked_at: data.checked_at ?? fileMtimeIso(auditFile),
-              ...data,
-            });
-          }
+          if (!isRecord(data)) throw new Error("audit_artifact_unreadable");
+          const checkedAt = typeof data.checked_at === "string" ? data.checked_at : fileMtimeIso(auditFile);
+          audits.push(summarizeTaskAudit(entry.name, data, checkedAt));
+          continue;
+        }
+        const reviewFile = existingControlFile(join(taskDir, "independent-review.md"), config.tasksDir, "review");
+        if (reviewFile) {
+          const content = readTextFileSafe(reviewFile);
+          if (content === null) throw new Error("audit_review_unreadable");
+          audits.push(summarizeIndependentReview(entry.name, content, fileMtimeIso(reviewFile)));
         }
       }
     }
 
     // 3. direct-sessions/*/audit.json (written by Direct audit_session)
-    const sessionsDir = getDirectSessionsDir(config);
-    if (existsSync(sessionsDir)) {
-      let sessionEntries: import("node:fs").Dirent[] = [];
-      try {
-        sessionEntries = readdirSync(sessionsDir, { withFileTypes: true }).filter((e) => e.isDirectory());
-      } catch {
-        sessionEntries = [];
-      }
+    const sessionsDir = existingControlDirectory(getDirectSessionsDir(config), config.directSessionsDir, "audit_direct_sessions_directory");
+    if (sessionsDir) {
+      const sessionEntries = readdirSync(sessionsDir, { withFileTypes: true }).filter((e) => e.isDirectory());
       for (const entry of sessionEntries) {
         const sessionDir = guardControlPath(join(sessionsDir, entry.name), config.directSessionsDir);
-        if (!sessionDir) continue;
-        const auditFile = join(sessionDir, "audit.json");
-        if (!existsSync(auditFile)) continue;
+        if (!sessionDir) throw new Error("audit_direct_session_directory_outside_workspace");
+        const auditFile = existingControlFile(join(sessionDir, "audit.json"), config.directSessionsDir, "direct_audit");
+        if (!auditFile) continue;
         const data = readJsonFileSafe<Record<string, unknown>>(auditFile);
-        if (data) {
-          audits.push({
-            source: "direct-session",
-            session_id: data.session_id ?? entry.name,
-            checked_at: fileMtimeIso(auditFile),
-            ...data,
-          });
-        }
+        if (!isRecord(data)) throw new Error("direct_audit_artifact_unreadable");
+        const sessionId = typeof data.session_id === "string" ? data.session_id : entry.name;
+        audits.push(summarizeDirectAudit(sessionId, data, fileMtimeIso(auditFile)));
       }
     }
 
@@ -168,10 +149,47 @@ export function handleAudit(res: ServerResponse): void {
       return bc.localeCompare(ac);
     });
     const limited = audits.slice(0, 50);
-    sendJson(res, 200, { audits: limited, total: limited.length });
-  } catch (err) {
-    sendJson(res, 200, { audits: [], reason: errorMessage(err) });
+    const overview = buildAuditOverview(audits, limited.length);
+    sendJson(res, 200, { audits: limited, total: audits.length, returned: limited.length, truncated: overview.truncated, stats: overview, attention_groups: overview.attention_groups });
+  } catch {
+    sendJson(res, 500, {
+      ok: false,
+      error_code: "audit_data_unavailable",
+      error: "Audit data is unavailable.",
+    });
   }
+}
+
+function existingControlDirectory(path: string, allowedPrefix: string, label: string): string | null {
+  try {
+    lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  const guardedPath = guardControlPath(path, allowedPrefix);
+  if (!guardedPath) throw new Error(`${label}_outside_workspace`);
+  const stats = statSync(guardedPath);
+  if (!stats.isDirectory()) throw new Error(`${label}_invalid`);
+  return guardedPath;
+}
+
+function existingControlFile(path: string, allowedPrefix: string, label: string): string | null {
+  try {
+    lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  const guardedPath = guardControlPath(path, allowedPrefix);
+  if (!guardedPath) throw new Error(`${label}_artifact_outside_workspace`);
+  const stats = statSync(guardedPath);
+  if (!stats.isFile()) throw new Error(`${label}_artifact_invalid`);
+  return guardedPath;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 // ── Warnings aggregation ─────────────────────────────────────────

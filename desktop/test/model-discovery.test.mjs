@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { discoverModelsForAgent } from "../dist/model-discovery.js";
+import { discoverModelsForAgent, mergeDiscoveredModels } from "../dist/model-discovery.js";
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "patchwarden-models-"));
@@ -39,6 +39,37 @@ describe("desktop model discovery", () => {
     const aider = discoverModelsForAgent("aider", workspace, {}, home);
     assert.deepEqual(aider.models.map((item) => item.id), ["openrouter/coder"]);
     assert.doesNotMatch(JSON.stringify(aider), /forbidden-secret/);
+  });
+
+  it("reads only Claude model environment fields and excludes credentials", () => {
+    const { home, workspace } = fixture();
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({
+      model: "claude-primary",
+      env: {
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-current",
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-current",
+        ANTHROPIC_API_KEY: "forbidden-secret",
+      },
+    }));
+    const result = discoverModelsForAgent("claude", workspace, {}, home);
+    assert.deepEqual(result.models.map((item) => item.id), ["claude-haiku-current", "claude-primary", "claude-sonnet-current"]);
+    assert.doesNotMatch(JSON.stringify(result), /forbidden-secret|ANTHROPIC_API_KEY/);
+  });
+
+  it("merges local and manual CLI catalogs while preserving the saved selection", () => {
+    const local = [
+      { id: "local-only", label: "local-only", source: "Local config" },
+      { id: "shared", label: "shared-local", source: "Local config" },
+    ];
+    const refreshed = [
+      { id: "cli-only", label: "cli-only", source: "Agent CLI" },
+      { id: "shared", label: "shared-cli", source: "Agent CLI" },
+    ];
+    const result = mergeDiscoveredModels(local, refreshed, "saved-but-not-discovered");
+    assert.deepEqual(result.map((item) => item.id), ["cli-only", "local-only", "saved-but-not-discovered", "shared"]);
+    assert.equal(result.find((item) => item.id === "shared")?.source, "Agent CLI");
+    assert.equal(result.find((item) => item.id === "saved-but-not-discovered")?.source, "Current PatchWarden selection");
   });
 
   it("rejects symbolic-link config files", () => {

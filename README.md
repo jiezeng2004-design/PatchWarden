@@ -25,7 +25,7 @@ PatchWarden 负责把计划保存成工作区内任务，再由预先配置的�
 
 <sub>PatchWarden Desktop 真实首启界面，来自隐私安全的桌面 smoke 验收；截图未使用真实工作区、账号或凭据。</sub>
 
-当前源码版本和 Windows Release：**v1.6.4**。npm `latest` 由维护者独立手动发布，
+当前源码版本：**v1.6.6**；最新 Windows Release：**v1.6.4**。npm `latest` 由维护者独立手动发布，
 请以页面顶部的 npm 徽章和注册表查询结果为准。Windows 首次体验推荐上面的安装版；查看
 [CHANGELOG](CHANGELOG.md)、[贡献名单](CONTRIBUTORS.md)、[迁移指南](docs/migration-from-safe-bifrost.md)和
 [发布检查清单](docs/release-checklist.md)。
@@ -269,6 +269,9 @@ Copy-Item .\examples\config.example.json .\patchwarden.config.json
   "defaultTaskTimeoutSeconds": 900,
   "maxTaskTimeoutSeconds": 3600,
   "watcherStaleSeconds": 30,
+  "taskArchiveRetentionDays": 30,
+  "taskArchiveCleanupIntervalHours": 24,
+  "taskArchiveCleanupMaxBatch": 100,
   "httpPort": 7331
 }
 ```
@@ -289,6 +292,9 @@ Copy-Item .\examples\config.example.json .\patchwarden.config.json
 | `defaultTaskTimeoutSeconds` | 是 | 默认任务超时。 |
 | `maxTaskTimeoutSeconds` | 是 | 客户端可请求的最大任务超时。 |
 | `watcherStaleSeconds` | 是 | Watcher 心跳超过该时间后视为失联，范围为 5–3600 秒。 |
+| `taskArchiveRetentionDays` | 否 | 已归档终态任务的本地保留天数，默认 30 天，范围为 1–3650。 |
+| `taskArchiveCleanupIntervalHours` | 否 | Control Center 清理归档任务的间隔，默认 24 小时，范围为 1–168。启动时也会立即检查一次。 |
+| `taskArchiveCleanupMaxBatch` | 否 | 单轮最多删除的过期归档任务数，默认及上限均为 100。 |
 | `repoAliases` | 否 | 给工作区内仓库设置简短别名。 |
 | `httpPort` | 否 | 本地 HTTP MCP 端口，默认 7331。 |
 | `http.ownerTokenEnv` | 否 | HTTP 鉴权 Token 所在的环境变量名。 |
@@ -299,6 +305,7 @@ Copy-Item .\examples\config.example.json .\patchwarden.config.json
 - 如果使用反斜杠，必须写成 `D:\\path\\to\\project`。
 - 不要把 `workspaceRoot` 设置成磁盘根目录、用户主目录、桌面、下载或文档目录。
 - `plansDir` 和 `tasksDir` 相对于 `workspaceRoot` 解析。
+- 只有显式归档且已进入终态的任务会参与定时清理；当前任务、运行中任务、近期归档和路径检查失败的任务不会删除。最新收据位于 `.patchwarden/history-cleanup/latest.json`。
 - `repo_path` 必须位于 `workspaceRoot` 内，不能通过 `..` 跳出。
 - `allowedTestCommands` 是精确匹配，不会把相似命令自动视为已授权。
 - 仓库专属命令只从本机可信配置读取；目标仓库不能通过 `package.json` 自行扩权。
@@ -736,7 +743,9 @@ loopback Control Center 与安全控制 API。桌面依赖隔离在私有的
 无代理、手动代理三种模式；手动代理只接受不含凭据的 http/https/socks5 URL。
 启动和重启只有在 health/ready 与 Core Watcher 验证通过后才会报告成功。
 桌面端支持 Codex、OpenCode、Claude Code、Gemini CLI、GitHub Copilot CLI、
-Qwen Code、Kimi Code 和 Aider；只读取各 Agent 配置中的模型字段，不读取凭据。
+Qwen Code、Kimi Code 和 Aider。设置页会在打开和重新获得焦点时自动读取各 Agent 的
+本地配置，只提取允许的模型字段，不读取 API key、token 或其他凭据。联网或 CLI 模型
+列表查询仅在用户点击刷新时执行；刷新结果与本地目录合并去重，并始终保留当前已选模型。
 
 ```powershell
 npm.cmd install --prefix desktop --cache .\.npm-cache
@@ -969,7 +978,8 @@ PatchWarden v0.4.0 不自动读取旧 CLI、旧环境变量、旧 Header、旧�
 
 桌面 Agent 模型设置控制本地 Codex、OpenCode、Claude 等 CLI 的 `--model` 参数，
 不会改变当前 ChatGPT 会话自身选择的模型。运行时任务证据只记录 adapter、effective model、
-provider、requested/selected Agent、配置 revision、模型参数是否存在、Agent/model fallback 与 exit code，
+provider、requested/selected Agent、配置 revision、模型参数是否存在、最终 argv 是否与所选模型精确匹配、
+Agent/model fallback 与 exit code，
 不记录完整参数、提示词或环境变量值。CLI 失败会归类为 `model_not_found`、
 `provider_authentication_failed`、`provider_permission_denied`、`provider_insufficient_balance`、
 `provider_rate_limited`、`provider_server_error`、`provider_unavailable`、`provider_timeout`、

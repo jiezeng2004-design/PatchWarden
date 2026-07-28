@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 
 /** Discriminated result of probing the local Control Center. */
 export type ProbeResult =
-  | { readonly kind: "patchwarden"; readonly version: string }
+  | { readonly kind: "patchwarden"; readonly version: string; readonly desktop_instance_sha256?: string }
   | { readonly kind: "foreign"; readonly version: null }
   | { readonly kind: "absent"; readonly version: null }
   | { readonly kind: "outdated_patchwarden"; readonly version: string }
@@ -19,6 +19,16 @@ export function configIdentity(path: string, platform: string = process.platform
   return createHash("sha256").update(normalized).digest("hex");
 }
 
+export function desktopInstanceIdentity(instanceId: string): string {
+  return createHash("sha256").update(instanceId).digest("hex");
+}
+
+export function hasExpectedDesktopInstance(probe: ProbeResult, instanceId: string): boolean {
+  return probe.kind === "patchwarden"
+    && typeof probe.desktop_instance_sha256 === "string"
+    && probe.desktop_instance_sha256 === desktopInstanceIdentity(instanceId);
+}
+
 export async function probeControlCenter(
   fetchImpl: ProbeFetchImpl,
   baseUrl: string = "http://127.0.0.1:8090",
@@ -29,7 +39,11 @@ export async function probeControlCenter(
     const response = await fetchImpl(`${baseUrl}/api/diagnostics`);
     if (!response || typeof response.ok !== "boolean") return { kind: "foreign", version: null };
     if (!response.ok) return { kind: "foreign", version: null };
-    const body = await response.json() as { server_version?: unknown; config_identity_sha256?: unknown };
+    const body = await response.json() as {
+      server_version?: unknown;
+      config_identity_sha256?: unknown;
+      desktop_instance_sha256?: unknown;
+    };
     if (body && typeof body.server_version === "string" && body.server_version.length > 0) {
       if (expectedConfigPath && body.config_identity_sha256 !== configIdentity(expectedConfigPath)) {
         return { kind: "mismatched_patchwarden", version: body.server_version };
@@ -37,7 +51,11 @@ export async function probeControlCenter(
       if (expectedVersion && body.server_version !== expectedVersion) {
         return { kind: "outdated_patchwarden", version: body.server_version };
       }
-      return { kind: "patchwarden", version: body.server_version };
+      return {
+        kind: "patchwarden",
+        version: body.server_version,
+        ...(typeof body.desktop_instance_sha256 === "string" ? { desktop_instance_sha256: body.desktop_instance_sha256 } : {}),
+      };
     }
     return { kind: "foreign", version: null };
   } catch {

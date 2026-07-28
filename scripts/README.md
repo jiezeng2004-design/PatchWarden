@@ -40,6 +40,11 @@ surface. See `docs/desktop-app.md`.
 - `brand-check.js`: checks public brand strings.
 - `checks/package-manifest-check.js`: verifies package contents.
 - `checks/build-output-check.js`: verifies clean-output confinement and exact recursive unit-test compilation.
+- `checks/release-retention-smoke.js`: verifies preview-first local artifact retention, workspace confinement, and fail-closed deletion.
+- `checks/ui-version-smoke.js`: prevents stale hard-coded Core versions in Control Center shells.
+- `checks/audit-ui-smoke.js`: verifies that the audit page uses one normalized conclusion source with reconciled totals, findings, actions, and structured evidence.
+- `checks/direct-sessions-ui-smoke.js`: verifies that real Direct sessions default to the all-history view and filtered empty states remain recoverable.
+- `checks/logs-ui-smoke.js`: verifies bilingual log controls, per-category cleared views, and last-request-wins category switching.
 - `release/desktop-preflight.js`: builds an isolated Windows directory package and writes a bounded preflight receipt.
 
 ## Release Helpers
@@ -48,6 +53,22 @@ surface. See `docs/desktop-app.md`.
   directory, `patchwarden-release.tar.gz`, and the versioned
   `PatchWarden-v*.zip` artifact. Desktop and preflight siblings under
   `release/` are preserved.
+- `release/prune-local-artifacts.js`: previews local release artifacts older
+  than seven days and removes only recognized candidates when `--apply` is
+  explicitly supplied. The current version, current package staging,
+  `release/desktop/win-unpacked`, checksum manifests, unknown paths, Git
+  history, GitHub Releases, and npm versions are never pruned.
+
+Preview the default seven-day policy before every cleanup:
+
+```powershell
+npm.cmd run release:prune
+npm.cmd run release:prune -- --apply
+```
+
+Use `npm.cmd run release:prune -- --days 14 --apply` for a different positive
+retention window. Any unsafe link, path escape, or deletion error makes the
+command fail closed and leaves later candidates untouched.
 
 ## Compatibility Launchers
 

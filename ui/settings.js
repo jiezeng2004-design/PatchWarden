@@ -24,6 +24,8 @@
   var revalidateCredential = document.getElementById("revalidateCredential");
   var i18n = window.PatchWardenI18n;
   var agentCatalog = [];
+  var agentSettingsDirty = false;
+  var lastAgentLoadAt = 0;
   var agentSettingsList = document.getElementById("agentSettingsList");
   var agentSettingsStatus = document.getElementById("agentSettingsStatus");
 
@@ -46,8 +48,10 @@
       var identity = document.createElement("label"); identity.className = "agent-identity";
       var enabled = document.createElement("input"); enabled.type = "checkbox"; enabled.className = "agent-enabled"; enabled.checked = agent.enabled; enabled.disabled = !agent.available;
       var details = document.createElement("span"); var title = document.createElement("strong"); title.textContent = agent.displayName;
-      var status = document.createElement("small"); status.textContent = agent.available ? (agent.commandLabel || tr("settings.agentAvailable")) : (agent.reason || tr("settings.agentMissing"));
-      details.append(title, status); identity.append(enabled, details);
+      var status = document.createElement("small"); status.textContent = agent.available ? (agent.commandLabel || tr("settings.agentAvailable")) : tr("settings.agentMissing");
+      var modelSource = document.createElement("small"); modelSource.className = "agent-model-source";
+      if ((agent.models || []).length > 0) modelSource.textContent = tr("settings.modelsDiscovered", { count: agent.models.length });
+      details.append(title, status, modelSource); identity.append(enabled, details);
       var controls = document.createElement("div"); controls.className = "agent-controls";
       var model = document.createElement("select"); model.className = "agent-model"; addModelOption(model, "", tr("settings.followAgentDefault"));
       (agent.models || []).forEach(function (item) { addModelOption(model, item.id, item.label); });
@@ -59,18 +63,23 @@
       }
       model.disabled = !agent.available; custom.disabled = !agent.available;
       model.addEventListener("change", function () { custom.classList.toggle("hidden", model.value !== "__custom__"); });
-      var refresh = document.createElement("button"); refresh.type = "button"; refresh.title = tr("settings.refreshModels"); refresh.disabled = !agent.available || !agent.supportsModelRefresh; refresh.innerHTML = '<i data-lucide="refresh-cw"></i>';
+      var refresh = document.createElement("button"); refresh.type = "button"; refresh.title = tr(agent.supportsModelRefresh ? "settings.refreshModels" : "settings.reloadModels"); refresh.disabled = !agent.available; refresh.innerHTML = '<i data-lucide="refresh-cw"></i>';
       refresh.addEventListener("click", async function () {
         refresh.disabled = true; agentSettingsStatus.textContent = tr("settings.refreshingModels", { agent: agent.displayName });
         try {
-          var result = await api.refreshAgentModels(agent.id);
+          var result = await (agent.supportsModelRefresh ? api.refreshAgentModels(agent.id) : api.discoverAgentModels(agent.id));
           var selected = model.value; Array.from(model.options).filter(function (option) { return option.value && option.value !== "__custom__"; }).forEach(function (option) { option.remove(); });
-          (result.models || []).forEach(function (item) { var option = document.createElement("option"); option.value = item.id; option.textContent = item.label; model.insertBefore(option, model.lastElementChild); });
+          var models = (result.models || []).slice();
+          if (selected && selected !== "__custom__" && !models.some(function (item) { return item.id === selected; })) models.push({ id: selected, label: selected });
+          models.sort(function (left, right) { return left.id.localeCompare(right.id); }).forEach(function (item) { var option = document.createElement("option"); option.value = item.id; option.textContent = item.label; model.insertBefore(option, model.lastElementChild); });
           model.value = Array.from(model.options).some(function (option) { return option.value === selected; }) ? selected : "";
-          agentSettingsStatus.textContent = tr("settings.modelsRefreshed", { count: (result.models || []).length });
+          modelSource.textContent = models.length > 0 ? tr("settings.modelsDiscovered", { count: models.length }) : "";
+          agentSettingsStatus.textContent = tr("settings.modelsRefreshed", { count: models.length });
         } catch (error) { agentSettingsStatus.textContent = error.message; }
         finally { refresh.disabled = false; }
       });
+      [enabled, model, custom].forEach(function (control) { control.addEventListener("change", function () { agentSettingsDirty = true; }); });
+      custom.addEventListener("input", function () { agentSettingsDirty = true; });
       controls.append(model, custom, refresh); row.append(identity, controls); agentSettingsList.append(row);
     });
     if (window.lucide) window.lucide.createIcons();
@@ -78,7 +87,7 @@
 
   async function loadAgents(redetect) {
     agentSettingsStatus.textContent = tr(redetect ? "settings.detectingAgents" : "settings.loadingAgents");
-    try { renderAgents(await (redetect ? api.detectAgents() : api.getAgentSettings())); agentSettingsStatus.textContent = ""; }
+    try { renderAgents(await (redetect ? api.detectAgents() : api.getAgentSettings())); agentSettingsStatus.textContent = ""; agentSettingsDirty = false; lastAgentLoadAt = Date.now(); }
     catch (error) { agentSettingsStatus.textContent = error.message; }
   }
 
@@ -140,6 +149,9 @@
   }
   void initializeSettings();
   void loadAgents(false);
+  window.addEventListener("focus", function () {
+    if (!agentSettingsDirty && Date.now() - lastAgentLoadAt > 2000) void loadAgents(false);
+  });
   document.getElementById("detectAgents").addEventListener("click", function () { void loadAgents(true); });
   document.getElementById("saveAgents").addEventListener("click", async function () {
     var agents = Array.from(agentSettingsList.querySelectorAll(".agent-setting-row")).map(function (row) {
@@ -147,7 +159,7 @@
       return { id: row.dataset.agentId, enabled: row.querySelector(".agent-enabled").checked, model: select.value === "__custom__" ? custom.value.trim() : select.value || null };
     });
     agentSettingsStatus.textContent = tr("settings.savingAgents");
-    try { var result = await api.saveAgentSettings({ agents: agents }); agentSettingsStatus.textContent = tr(result.restartRequired ? "settings.savedRestart" : "settings.savedReload"); }
+    try { var result = await api.saveAgentSettings({ agents: agents }); agentSettingsStatus.textContent = tr(result.restartRequired ? "settings.savedRestart" : "settings.savedReload"); agentSettingsDirty = false; }
     catch (error) { agentSettingsStatus.textContent = error.message; }
   });
   theme.addEventListener("change", function () {

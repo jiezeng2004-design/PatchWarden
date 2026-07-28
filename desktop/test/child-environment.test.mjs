@@ -66,6 +66,22 @@ describe("desktop child environment", () => {
     assert.equal(env.CUSTOM_OWNER_TOKEN, undefined);
   });
 
+  it("uses a Desktop instance override instead of inheriting an old instance identifier", () => {
+    const env = buildDesktopChildEnvironment({
+      platform: "win32",
+      sourceEnvironment: {
+        SystemRoot: "C:\\Windows",
+        PATH: "C:\\Windows\\System32",
+        PATCHWARDEN_DESKTOP_INSTANCE_ID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      },
+      overrides: {
+        PATCHWARDEN_DESKTOP_INSTANCE_ID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      },
+    });
+
+    assert.equal(env.PATCHWARDEN_DESKTOP_INSTANCE_ID, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+  });
+
   it("rejects malformed allowlist names", () => {
     assert.throws(
       () => buildDesktopChildEnvironment({ allowedNames: ["SAFE_NAME", "BAD=NAME"] }),

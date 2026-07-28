@@ -1,7 +1,7 @@
 # PatchWarden Code Wiki
 
 > 本文档是对 PatchWarden 仓库的结构化代码导览，覆盖项目整体架构、主要模块职责、关键类与函数说明、依赖关系、运行方式，以及现有缺陷分析。
-> 源码版本：**v1.6.4** · Schema Epoch：`2026-07-26-v16` · 复核日期：2026-07-27 · License：MIT
+> 源码版本：**v1.6.6** · Schema Epoch：`2026-07-26-v16` · 复核日期：2026-07-28 · License：MIT
 
 ## 目录
 
@@ -254,7 +254,7 @@ PatchWarden/
 │   └── release/                  # 发布打包
 ├── docs/                         # 文档
 ├── examples/                     # 配置与 Tunnel 示例
-├── package.json                  # v1.6.4，单一直接运行时依赖
+├── package.json                  # v1.6.6，单一直接运行时依赖
 ├── tsconfig.json
 └── PatchWarden.cmd               # Windows 统一控制入口
 ```
@@ -278,7 +278,7 @@ PatchWarden/
 | --- | --- |
 | [src/config.ts](../src/config.ts) | 加载并校验 `patchwarden.config.json`，提供 `loadConfig`/`getConfig`/`getTasksDir`/`getPlansDir`/`resolveWorkspaceRoot`/`getRepoAllowedTestCommands`/`getRepoDirectAllowedCommands` 等路径解析；严格校验 `workspaceRoot`、`agents`、`allowedTestCommands`、`watcherStaleSeconds`、`toolProfile`、`tunnelProxy`、Direct 数值范围等字段；含 `normalizeRepoKey` 与 `comparablePath` 工具 |
 | [src/errors.ts](../src/errors.ts) | 定义 `PatchWardenError`（含 `reason`/`suggestion`/`blocked`/`details`）与 `errorPayload` 序列化 |
-| [src/version.ts](../src/version.ts) | 导出 `PATCHWARDEN_VERSION = "1.6.4"` 与 `TOOL_SCHEMA_EPOCH = "2026-07-26-v16"` |
+| [src/version.ts](../src/version.ts) | 导出 `PATCHWARDEN_VERSION = "1.6.6"` 与 `TOOL_SCHEMA_EPOCH = "2026-07-26-v16"` |
 | [src/logging.ts](../src/logging.ts) | `Logger` 类输出 stderr JSON 日志，记录 `audit`/`info`/`warn`/`error`；`logToolInvocation` 仅写参数 digest，不写原参数，并通过跨进程锁有界追加到 5 MiB；`installGlobalHandlers` 捕获未处理异常但不吞错 |
 
 ### 4.3 安全模块（src/security/）
@@ -308,7 +308,7 @@ PatchWarden 的纵深防御核心，所有写操作前都会经过这些守卫�
 | [cli.ts](../src/runner/cli.ts) | Runner 子进程入口，从 argv 或 `PATCHWARDEN_TASK_ID` 读取 taskId 并调用 `runTask` |
 | [runTask.ts](../src/runner/runTask.ts) | **执行主循环**：`runTask(taskId)` 编排 preparing → executing_agent → running_tests → collecting_artifacts → done/failed；管理心跳（2s）、超时、cancel/kill；产出 16+ artifact 文件；区分 `failed_scope_violation`/`failed_policy_violation`；通过 `claimPendingTask` 实现单次领取 |
 | [watch.ts](../src/runner/watch.ts) | 常驻 watcher，每 4 秒轮询 `pending` 任务，执行 pre-flight 安全校验后调用 `runTask`；原子写心跳文件；通过 env 注入 `WATCHER_INSTANCE_ID`/`WATCHER_LAUNCHER_PID` 支持所有权判定；单实例排他锁 + stale PID 接管 |
-| [agentInvocation.ts](../src/runner/agentInvocation.ts) | 构建 agent 调用参数与 prompt：`buildAgentInvocation`/`buildExecutionPrompt`/`buildAssessmentPrompt`；占位符 `{repo}`/`{prompt}`/`{prompt_file}` 替换；Windows npm shim 解析为原生 exe 或已验证的 package `bin`，不启用 shell；Agent 必须显式注册，子进程只接收该 Agent 的 `envAllowlist` 环境变量 |
+| [agentInvocation.ts](../src/runner/agentInvocation.ts) | 构建 agent 调用参数与 prompt：`buildAgentInvocation`/`buildExecutionPrompt`/`buildAssessmentPrompt`；占位符 `{repo}`/`{prompt}`/`{prompt_file}` 替换；最终无 shell argv 会反查模型参数与 `effective_model` 是否精确一致，不一致时 fail-closed，证据仅记录核验布尔值和参数名，不记录完整 argv；Windows npm shim 解析为原生 exe 或已验证的 package `bin`；Agent 必须显式注册，子进程只接收该 Agent 的 `envAllowlist` 环境变量 |
 | [changeCapture.ts](../src/runner/changeCapture.ts) | 仓库快照与变更证据：`captureRepoSnapshot` 并行跑 5 个 git 命令；`buildChangeArtifacts` 比对快照生成最多 20 MiB、写前脱敏的 diff；凭据型内容记录 redaction 元数据；`extractExternalDirtyFiles` 建立外部脏文件基线；`buildArtifactManifest` 生成带 sha256 的产物清单；Windows 下使用 `nullDevice` (`NUL` / `/dev/null`) 与小写路径键 |
 | [postTaskCleanup.ts](../src/runner/postTaskCleanup.ts) | 任务后清理：仅删除未被 git 跟踪且被忽略的临时产物（`__pycache__`/`dist`/`*.pyc`），三道闸门保护受控文件；使用 `fs.rmSync` 有界重试，Windows 失败时只清除只读属性后重试，不再启动 `cmd.exe /c rmdir` |
 | [simpleProcess.ts](../src/runner/simpleProcess.ts) | 轻量进程执行器：`runSimpleProcess`/`runSimpleProcessSync`，使用最小子进程环境、受信 PATH 可执行文件绑定、无 shell 的 npm/npx/pnpm 解析，以及有界脱敏日志捕获；异步完成以 child `close` 为准 |
@@ -442,7 +442,7 @@ v1.6.0 引入的 Electron 桌面应用，作为 Control Center 的 Windows GUI �
 | [desktop/src/backend-lifecycle.ts](../desktop/src/backend-lifecycle.ts) | owned backend 停止时等待 `exit` 或有界超时；配置变更触发的 restart 由 generation scheduler 串行化、合并 debounce 请求且不丢活动重启期间的新请求 |
 | [desktop/src/child-environment.ts](../desktop/src/child-environment.ts) | 为 Desktop-owned utility/spawn 子进程构造最小运行环境；provider 变量必须显式 allow-list，Control/Tunnel owner credential 始终阻断；Windows PowerShell 与 `where.exe` 固定解析到仓库外的系统目录 |
 | [desktop/src/config-store.ts](../desktop/src/config-store.ts) | 配置/偏好/运行时设置持久化：`resolveDesktopPaths()`（`%LOCALAPPDATA%\PatchWarden`）；`buildConfig()` 生成 `patchwarden.config.json`；`normalizeProxyEndpoint()` 校验 http/https/socks5 禁止 URL 凭证；`atomicWriteJson()` 带 `.bak-{stamp}` 备份 + `.tmp-{pid}` 原子 rename |
-| [desktop/src/model-discovery.ts](../desktop/src/model-discovery.ts) | `discoverModelsForAgent(id, workspaceRoot)`：读取各 Agent 的 home/工作区配置（TOML/JSONC/YAML），`safeRead()` 拒绝符号链接、>1MB、project-scoped 逃逸（`realpathSync` 比对 workspaceRoot）；`MAX_CONFIG_BYTES=1MB`；按适配器抽取模型字段；只读 |
+| [desktop/src/model-discovery.ts](../desktop/src/model-discovery.ts) | `discoverModelsForAgent(id, workspaceRoot)`：读取各 Agent 的 home/工作区配置（TOML/JSONC/YAML），`safeRead()` 拒绝符号链接、>1MB、project-scoped 逃逸（`realpathSync` 比对 workspaceRoot）；`MAX_CONFIG_BYTES=1MB`；按适配器白名单抽取模型字段且不读取凭据；`mergeDiscoveredModels()` 合并本地目录、手动 CLI 刷新结果与当前选择并按模型 ID 去重；只读 |
 | [desktop/src/runtime-root.ts](../desktop/src/runtime-root.ts) | `resolveCoreRoot()`：打包态 → `resourcesPath/core`，开发态 → `desktopRoot/..`；`utilityProcessOptions()` 提供 cwd/env/stdio/serviceName |
 | [desktop/src/runtime-settings.ts](../desktop/src/runtime-settings.ts) | `validateTunnelClientPath()` 强制绝对路径 + 文件名 `tunnel-client.exe` + 存在；`detectTunnelClient()` 多源查找（config/env/PATH/LOCALAPPDATA/APPDATA/USERPROFILE）；`boundedSiblingSearch()` BFS 深度≤2、≤2000 条目 |
 | [desktop/src/tunnel-provisioner.ts](../desktop/src/tunnel-provisioner.ts) | `getTunnelSetupStatus()` 报告程序/profile/凭证/tunnel_id 掩码/doctor 状态；`provisionTunnelProfile()` spawn PowerShell `scripts/control/provision-patchwarden-tunnel.ps1`，runtimeKey 走 stdin，60s 超时，输出 key 被 `[REDACTED]` 替换，env 剥离 `CONTROL_PLANE_API_KEY`；`revalidateTunnelProfile()`/`forgetTunnelCredential()`/`maskTunnelId()` |
@@ -498,6 +498,9 @@ interface PatchWardenConfig {
   defaultTaskTimeoutSeconds: number;  // 默认任务超时
   maxTaskTimeoutSeconds: number;      // 最大任务超时
   watcherStaleSeconds: number;        // Watcher 心跳过期阈值（5-3600）
+  taskArchiveRetentionDays?: number;  // 已归档终态任务保留天数（默认 30）
+  taskArchiveCleanupIntervalHours?: number; // 清理周期（默认 24 小时）
+  taskArchiveCleanupMaxBatch?: number; // 单轮删除上限（最大 100）
   toolProfile?: "full" | "chatgpt_core" | "chatgpt_direct" | "chatgpt_search";
   enableDirectProfile?: boolean;      // 是否启用 Direct 模式
   enableRunTaskTool?: boolean;        // 是否暴露 run_task 工具
@@ -1029,11 +1032,14 @@ $env:PATCHWARDEN_CONFIG = "D:\path\to\patchwarden.config.json"
   "defaultTaskTimeoutSeconds": 900,
   "maxTaskTimeoutSeconds": 3600,
   "watcherStaleSeconds": 30,
+  "taskArchiveRetentionDays": 30,
+  "taskArchiveCleanupIntervalHours": 24,
+  "taskArchiveCleanupMaxBatch": 100,
   "httpPort": 7331
 }
 ```
 
-`agents` 是显式执行白名单；未登记的 Agent 不可启动。Agent 子进程默认不继承 provider 环境变量，仅转发对应 `envAllowlist` 中明确列出的变量，Tunnel/HTTP owner credential 始终禁止转发。`workspaceRoot` 在配置加载时 fail closed：路径缺失、不可访问、不是目录，或指向盘符根目录、用户主目录、Desktop、Downloads、Documents 时都会拒绝启动。
+`agents` 是显式执行白名单；未登记的 Agent 不可启动。Agent 子进程默认不继承 provider 环境变量，仅转发对应 `envAllowlist` 中明确列出的变量，Tunnel/HTTP owner credential 始终禁止转发。`workspaceRoot` 在配置加载时 fail closed：路径缺失、不可访问、不是目录，或指向盘符根目录、用户主目录、Desktop、Downloads、Documents 时都会拒绝启动。Control Center 启动时会检查一次过期归档任务，之后按 `taskArchiveCleanupIntervalHours` 定时检查；只删除超过保留期的已归档终态任务，并把有界收据写入 `.patchwarden/history-cleanup/`。
 
 ### 8.4 核心命令
 

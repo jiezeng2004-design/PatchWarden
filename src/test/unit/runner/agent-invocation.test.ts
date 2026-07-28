@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import type { PatchWardenConfig } from "../../../config.js";
 import { assertConfiguredNodeLaunch, buildAgentInvocation, resolveAgentExecutable, resolveAgentLaunch, resolveConfiguredNativeAgentLaunch } from "../../../runner/agentInvocation.js";
 import { resolvePackageManagerInvocation } from "../../../runner/processSecurity.js";
+import { runSimpleProcess } from "../../../runner/simpleProcess.js";
 
 describe("agent executable resolution", () => {
   it("resolves an existing OpenCode npm shim to the native Windows executable", () => {
@@ -155,6 +159,64 @@ describe("agent executable resolution", () => {
     } as unknown as PatchWardenConfig;
     const invocation = buildAgentInvocation("custom", process.cwd(), "prompt", config);
     assert.deepEqual(invocation.args, ["-e", "process.exit(0)", "--model", "custom/static", "prompt"]);
+    assert.equal(invocation.runtime.model_argument_verified, true);
+    assert.equal(invocation.runtime.model_argument_name, "--model");
+  });
+
+  it("delivers the selected model to the spawned Agent process and records verified argv evidence", async () => {
+    const root = mkdtempSync(join(tmpdir(), "patchwarden-model-argv-"));
+    const agentScript = join(root, "proof-agent.mjs");
+    writeFileSync(agentScript, `
+      const index = process.argv.indexOf("--model");
+      process.stdout.write(JSON.stringify({ model: index >= 0 ? process.argv[index + 1] : null }));
+    `);
+    const config = {
+      workspaceRoot: root,
+      agents: {
+        opencode: {
+          command: process.execPath,
+          adapter: "opencode",
+          args: [agentScript, "{prompt}"],
+          default_model: "proof/model-v1",
+        },
+      },
+    } as unknown as PatchWardenConfig;
+    const invocation = buildAgentInvocation("opencode", root, "inspect only", config);
+    const result = await runSimpleProcess({
+      command: invocation.command,
+      args: invocation.args,
+      cwd: invocation.cwd,
+      timeoutMs: 10_000,
+      stdoutPath: join(root, "stdout.log"),
+      stderrPath: join(root, "stderr.log"),
+      environmentVariableNames: invocation.environmentVariableNames,
+      blockedEnvironmentVariableNames: invocation.blockedEnvironmentVariableNames,
+      environmentOverrides: invocation.environmentOverrides,
+    });
+    assert.equal(result.exitCode, 0);
+    assert.deepEqual(JSON.parse(result.stdout), { model: "proof/model-v1" });
+    assert.equal(invocation.runtime.effective_model, "proof/model-v1");
+    assert.equal(invocation.runtime.model_argument_present, true);
+    assert.equal(invocation.runtime.model_argument_verified, true);
+    assert.equal(invocation.runtime.model_argument_name, "--model");
+  });
+
+  it("fails closed when a custom Agent's final model argv differs from its metadata", () => {
+    const config = {
+      workspaceRoot: process.cwd(),
+      agents: {
+        custom: {
+          command: process.execPath,
+          adapter: "custom",
+          args: ["-e", "process.exit(0)", "--model", "argv/model", "{prompt}"],
+          default_model: "metadata/model",
+        },
+      },
+    } as unknown as PatchWardenConfig;
+    assert.throws(
+      () => buildAgentInvocation("custom", process.cwd(), "prompt", config),
+      /model metadata does not match its CLI argument|final model argument does not match/,
+    );
   });
 
   it("restores the user's XDG config for OpenCode inherit mode under an owned Watcher", () => {

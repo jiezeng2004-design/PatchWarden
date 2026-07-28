@@ -227,7 +227,7 @@ html.dark {
     <!-- Bottom Section -->
     <div class="px-5 py-4" style="border-top: 1px solid var(--pw-border-subtle);">
       <div class="flex items-center gap-2 mb-3">
-        <span class="text-xs font-medium px-2 py-0.5 rounded-md whitespace-nowrap" style="color: var(--pw-text-tertiary); background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border-subtle); font-family: var(--pw-font-mono);">Core v0.6.0</span>
+        <span data-core-version class="text-xs font-medium px-2 py-0.5 rounded-md whitespace-nowrap" style="color: var(--pw-text-tertiary); background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border-subtle); font-family: var(--pw-font-mono);">Core</span>
       </div>
       <div class="flex items-center gap-2">
         <span class="shrink-0 w-2 h-2 rounded-full" style="background-color: var(--pw-state-success);"></span>
@@ -263,10 +263,10 @@ html.dark {
       <div class="rounded-lg mb-5 p-4" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
         <div class="flex flex-wrap items-end gap-3">
           <div class="flex flex-col gap-1">
-            <label class="text-xs font-medium" style="color: var(--pw-text-tertiary);">历史视图</label>
+            <label class="text-xs font-medium" style="color: var(--pw-text-tertiary);" data-i18n="tasks.historyView">历史视图</label>
             <div class="inline-flex rounded-md overflow-hidden" style="border: 1px solid var(--pw-border-subtle);">
-              <button id="historyActiveBtn" type="button" class="px-3 py-1.5 text-xs font-semibold" style="background-color: var(--pw-accent-muted); color: var(--pw-accent);">当前</button>
-              <button id="historyArchivedBtn" type="button" class="px-3 py-1.5 text-xs font-semibold" style="background-color: var(--pw-bg-elevated); color: var(--pw-text-secondary);">已归档</button>
+              <button id="historyActiveBtn" type="button" class="px-3 py-1.5 text-xs font-semibold" style="background-color: var(--pw-accent-muted); color: var(--pw-accent);" data-i18n="tasks.current">当前</button>
+              <button id="historyArchivedBtn" type="button" class="px-3 py-1.5 text-xs font-semibold" style="background-color: var(--pw-bg-elevated); color: var(--pw-text-secondary);" data-i18n="tasks.archived">已归档</button>
             </div>
           </div>
           <!-- Repo Path Filter -->
@@ -288,16 +288,16 @@ html.dark {
             <div class="relative">
               <select id="statusFilter" class="appearance-none pl-3 pr-8 py-1.5 rounded-lg text-xs font-medium outline-none cursor-pointer transition-colors" style="background-color: var(--pw-bg-elevated); border: 1px solid var(--pw-border-subtle); color: var(--pw-text-primary); font-family: var(--pw-font-sans); min-width: 140px;">
                 <option value="" data-zh="全部状态" data-en="All Status">全部状态</option>
-                <option value="running">Running</option>
-                <option value="pending">Pending</option>
-                <option value="done">Done</option>
-                <option value="failed">Failed</option>
-                <option value="failed_verification">Failed Verification</option>
-                <option value="failed_policy_violation">Failed Policy Violation</option>
-                <option value="failed_scope_violation">Failed Scope Violation</option>
-                <option value="needs_fix">Needs Fix</option>
-                <option value="ready_for_review">Ready For Review</option>
-                <option value="done_by_agent">Done By Agent</option>
+                <option value="running" data-zh="运行中" data-en="Running">运行中</option>
+                <option value="pending" data-zh="等待中" data-en="Pending">等待中</option>
+                <option value="done" data-zh="已完成" data-en="Done">已完成</option>
+                <option value="failed" data-zh="失败" data-en="Failed">失败</option>
+                <option value="failed_verification" data-zh="验证失败" data-en="Failed Verification">验证失败</option>
+                <option value="failed_policy_violation" data-zh="策略违规" data-en="Failed Policy Violation">策略违规</option>
+                <option value="failed_scope_violation" data-zh="范围违规" data-en="Failed Scope Violation">范围违规</option>
+                <option value="needs_fix" data-zh="需修复" data-en="Needs Fix">需修复</option>
+                <option value="ready_for_review" data-zh="待审核" data-en="Ready For Review">待审核</option>
+                <option value="done_by_agent" data-zh="Agent 已执行" data-en="Agent Finished">Agent 已执行</option>
               </select>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--pw-text-tertiary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
                 <polyline points="6 9 12 15 18 9"/>
@@ -311,12 +311,11 @@ html.dark {
             <div class="relative">
               <select id="acceptanceFilter" class="appearance-none pl-3 pr-8 py-1.5 rounded-lg text-xs font-medium outline-none cursor-pointer transition-colors" style="background-color: var(--pw-bg-elevated); border: 1px solid var(--pw-border-subtle); color: var(--pw-text-primary); font-family: var(--pw-font-sans); min-width: 160px;">
                 <option value="" data-zh="全部验收" data-en="All Acceptance">全部验收</option>
-                <option value="ready_for_review">Ready For Review</option>
-                <option value="done_by_agent">Done By Agent</option>
-                <option value="needs_fix">Needs Fix</option>
-                <option value="failed_verification">Failed Verification</option>
-                <option value="failed_policy_violation">Failed Policy Violation</option>
-                <option value="failed_scope_violation">Failed Scope Violation</option>
+                                                                <option value="pending" data-zh="待验收" data-en="Pending acceptance">待验收</option>
+                <option value="accepted" data-zh="已通过" data-en="Accepted">已通过</option>
+                <option value="rejected" data-zh="未通过" data-en="Rejected">未通过</option>
+                <option value="needs_fix" data-zh="需修复" data-en="Needs fix">需修复</option>
+                <option value="blocked" data-zh="待人工确认" data-en="Manual verification required">待人工确认</option>
               </select>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--pw-text-tertiary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
                 <polyline points="6 9 12 15 18 9"/>
@@ -330,13 +329,13 @@ html.dark {
             <div class="relative">
               <select id="warningTypeFilter" class="appearance-none pl-3 pr-8 py-1.5 rounded-lg text-xs font-medium outline-none cursor-pointer transition-colors" style="background-color: var(--pw-bg-elevated); border: 1px solid var(--pw-border-subtle); color: var(--pw-text-primary); font-family: var(--pw-font-sans); min-width: 180px;">
                 <option value="" data-zh="全部警告" data-en="All Warnings">全部警告</option>
-                <option value="unrecorded_command_execution">Unrecorded Command Execution</option>
-                <option value="artifact_hygiene">Artifact Hygiene</option>
-                <option value="scope_changes">Scope Changes</option>
-                <option value="release_publish_claim">Release Publish Claim</option>
-                <option value="manual_verification_required">Manual Verification Required</option>
-                <option value="stale_task">Stale Task</option>
-                <option value="failed_verification">Failed Verification</option>
+                <option value="unrecorded_command_execution" data-zh="未记录的命令执行" data-en="Unrecorded Command Execution">未记录的命令执行</option>
+                <option value="artifact_hygiene" data-zh="产物规范" data-en="Artifact Hygiene">产物规范</option>
+                <option value="scope_changes" data-zh="范围变更" data-en="Scope Changes">范围变更</option>
+                <option value="release_publish_claim" data-zh="发布声明" data-en="Release Publish Claim">发布声明</option>
+                <option value="manual_verification_required" data-zh="需要人工验证" data-en="Manual Verification Required">需要人工验证</option>
+                <option value="stale_task" data-zh="过期任务" data-en="Stale Task">过期任务</option>
+                <option value="failed_verification" data-zh="验证失败" data-en="Failed Verification">验证失败</option>
               </select>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--pw-text-tertiary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
                 <polyline points="6 9 12 15 18 9"/>
@@ -394,8 +393,8 @@ html.dark {
         <div class="flex items-center justify-between mt-3 pt-3" style="border-top: 1px solid var(--pw-border-subtle);">
           <div id="filterStatusText" class="text-xs" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);">—</div>
           <div class="flex items-center gap-2">
-            <button id="archiveSelectedBtn" type="button" class="px-3 py-1.5 rounded-md text-xs font-semibold" style="background-color: var(--pw-state-warning-bg); color: var(--pw-state-warning); border: 1px solid var(--pw-state-warning);">归档所选</button>
-            <button id="restoreSelectedBtn" type="button" class="hidden px-3 py-1.5 rounded-md text-xs font-semibold" style="background-color: var(--pw-state-info-bg); color: var(--pw-state-info); border: 1px solid var(--pw-state-info);">恢复所选</button>
+            <button id="archiveSelectedBtn" type="button" class="px-3 py-1.5 rounded-md text-xs font-semibold" style="background-color: var(--pw-state-warning-bg); color: var(--pw-state-warning); border: 1px solid var(--pw-state-warning);" data-i18n="tasks.archiveSelected">归档所选</button>
+            <button id="restoreSelectedBtn" type="button" class="hidden px-3 py-1.5 rounded-md text-xs font-semibold" style="background-color: var(--pw-state-info-bg); color: var(--pw-state-info); border: 1px solid var(--pw-state-info);" data-i18n="tasks.restoreSelected">恢复所选</button>
           </div>
           <div id="countSummary" class="text-xs" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);">--</div>
         </div>
@@ -589,6 +588,11 @@ html.dark {
       -webkit-box-orient: vertical;
       overflow: hidden;
     }
+    @media (min-width: 1101px) and (max-width: 1400px) {
+      #tableWrapper table { min-width: 900px !important; }
+      #tableWrapper th:nth-child(7), #tableWrapper th:nth-child(8), #tableWrapper th:nth-child(9),
+      #taskTableBody td:nth-child(7), #taskTableBody td:nth-child(8), #taskTableBody td:nth-child(9) { display: none; }
+    }
     @media (max-width: 1100px) {
       #tableWrapper { overflow-x: visible; padding: 10px; }
       #tableWrapper table { min-width: 0 !important; display: block; }
@@ -596,7 +600,7 @@ html.dark {
       #taskTableBody, #taskTableBody tr { display: block; }
       #taskTableBody tr { margin-bottom: 10px; padding: 12px; border: 1px solid var(--pw-border-subtle); border-radius: 6px; }
       #taskTableBody td { display: block; padding: 4px 0 !important; text-align: left !important; max-width: none !important; }
-      #taskTableBody td:nth-child(6), #taskTableBody td:nth-child(7), #taskTableBody td:nth-child(8), #taskTableBody td:nth-child(10) { display: none; }
+      #taskTableBody td:nth-child(7), #taskTableBody td:nth-child(8), #taskTableBody td:nth-child(9) { display: none; }
       #taskTableBody td:nth-child(11) > div { display: flex; justify-content: flex-start; flex-wrap: wrap; }
     }
   </style>
@@ -619,23 +623,61 @@ html.dark {
         failed_verification:     { color: 'error',   text: '验证失败' },
         needs_fix:               { color: 'warning', text: '需修复' },
         ready_for_review:        { color: 'info',    text: '待审核' },
-        done_by_agent:           { color: 'success', text: 'Agent 完成' },
+        done_by_agent:           { color: 'success', text: 'Agent 已执行' },
+        accepted:                { color: 'success', text: '已通过' },
+        rejected:                { color: 'error',   text: '未通过' },
+        blocked:                 { color: 'error',   text: '已阻止' },
         canceled:                { color: 'muted',   text: '已取消' },
         timeout:                 { color: 'muted',   text: '超时' }
+      };
+      var STATUS_EN = {
+        pending: 'Pending', running: 'Running', done: 'Completed', failed: 'Failed',
+        failed_scope_violation: 'Scope violation', failed_policy_violation: 'Policy violation',
+        failed_verification: 'Failed verification', needs_fix: 'Needs fix', ready_for_review: 'Ready for review',
+        done_by_agent: 'Agent finished', accepted: 'Passed', rejected: 'Rejected', blocked: 'Blocked',
+        canceled: 'Canceled', timeout: 'Timed out'
       };
 
       var PHASE_LABELS = {
         queued:                '排队中',
         preparing:             '准备中',
+        executing_agent:       'Agent 执行中',
+        running_tests:         '验证中',
         running:               '运行中',
         verifying:             '验证中',
         collecting_artifacts:  '收集产物',
-        completed:             '已完成'
+        canceling:             '正在取消',
+        terminating:           '正在终止',
+        completed:             '已完成',
+        failed:                '失败',
+        failed_verification:   '验证失败',
+        failed_scope_violation:'范围违规',
+        failed_policy_violation:'策略违规',
+        failed_stale:          '已过期',
+        orphaned:              '孤立任务',
+        timeout:               '超时',
+        done_by_agent:         'Agent 已执行',
+        accepted:              '已通过',
+        rejected:              '未通过',
+        needs_fix:             '需修复',
+        blocked:               '已阻止',
+        canceled:              '已取消'
+      };
+      var PHASE_EN = {
+        queued: 'Queued', preparing: 'Preparing', executing_agent: 'Agent running', running_tests: 'Verifying',
+        running: 'Running', verifying: 'Verifying', collecting_artifacts: 'Collecting artifacts',
+        canceling: 'Canceling', terminating: 'Stopping', completed: 'Completed', failed: 'Failed',
+        failed_verification: 'Failed verification', failed_scope_violation: 'Scope violation',
+        failed_policy_violation: 'Policy violation', failed_stale: 'Expired', orphaned: 'Orphaned',
+        timeout: 'Timed out', done_by_agent: 'Agent finished', accepted: 'Passed', rejected: 'Rejected',
+        needs_fix: 'Needs fix', blocked: 'Blocked', canceled: 'Canceled'
       };
 
       var allTasks = [];
       var nextCursor = null;
       var totalTasks = 0;
+      var activeTaskRequest = null;
+      var taskRequestSerial = 0;
       var historyState = 'active';
       var selectedTaskIds = new Set();
       var TERMINAL_STATUSES = new Set([
@@ -660,6 +702,9 @@ html.dark {
       function $(id) { return document.getElementById(id); }
       function show(el) { el && el.classList.remove('hidden'); }
       function hide(el) { el && el.classList.add('hidden'); }
+      function uiText(zh, en) {
+        return window.PatchWardenI18n && window.PatchWardenI18n.getLanguage() === 'en' ? en : zh;
+      }
 
       function escapeHtml(s) {
         if (s === null || s === undefined) return '';
@@ -687,11 +732,13 @@ html.dark {
       }
 
       function getStatusMeta(status) {
-        return STATUS_META[status] || { color: 'muted', text: status || '—' };
+        var meta = STATUS_META[status];
+        if (!meta) return { color: 'muted', text: status || '—' };
+        return { color: meta.color, text: uiText(meta.text, STATUS_EN[status] || meta.text) };
       }
 
       function getPhaseLabel(phase) {
-        return PHASE_LABELS[phase] || phase || '—';
+        return uiText(PHASE_LABELS[phase] || phase || '—', PHASE_EN[phase] || phase || '—');
       }
 
       function shortId(id) {
@@ -830,6 +877,22 @@ html.dark {
         return '—';
       }
 
+      // Keep implementation-oriented next_action values out of the normal
+      // task table. The raw value remains available in the detail evidence.
+      function nextActionLabel(value) {
+        var labels = {
+          run_audit: ['运行验收', 'Run acceptance'],
+          audit_task: ['运行验收', 'Run acceptance'],
+          review_audit: ['查看验收证据', 'Review acceptance evidence'],
+          fix_and_reaudit: ['修复后重新验收', 'Fix and run acceptance again'],
+          reconcile: ['核对任务状态', 'Reconcile task state'],
+          create_followup_task: ['创建后续修复任务', 'Create a follow-up repair task'],
+          review_lineage_and_create_manual_followup: ['查看执行记录并创建后续任务', 'Review execution history and create a follow-up task']
+        };
+        var entry = labels[String(value || '').toLowerCase()];
+        return entry ? uiText(entry[0], entry[1]) : uiText('查看任务详情中的下一步建议', 'Review the next-step guidance in task details');
+      }
+
       // ---- State rendering ----
       function showLoading() {
         show($('loadingState'));
@@ -906,7 +969,12 @@ html.dark {
         if (task.acceptance_status) {
           var accMeta = getStatusMeta(task.acceptance_status);
           var accStyle = badgeStyle(accMeta.color);
-          accCell = '<span class="inline-flex items-center gap-1.5 pw-acceptance-badge rounded-md whitespace-nowrap" style="' + accStyle + ' font-family: var(--pw-font-sans); border-color: ' + getAccentColor(accMeta.color) + ';">'
+          var accTitle = task.acceptance_status === 'needs_fix'
+            ? uiText('Agent 已执行完成，但验收发现警告项；请查看修复项后重新运行验收。', 'The Agent finished, but acceptance found issues. Review fixes and run acceptance again.')
+            : task.acceptance_status === 'pending'
+              ? uiText('Agent 已执行完成，等待用户运行验收。', 'The Agent finished and is waiting for acceptance.')
+              : uiText('验收状态：', 'Acceptance: ') + accMeta.text;
+          accCell = '<span class="inline-flex items-center gap-1.5 pw-acceptance-badge rounded-md whitespace-nowrap" title="' + escapeAttr(accTitle) + '" style="' + accStyle + ' font-family: var(--pw-font-sans); border-color: ' + getAccentColor(accMeta.color) + ';">'
                   + '<span class="shrink-0 w-1.5 h-1.5 rounded-full" style="background-color: currentColor;"></span>'
                   + escapeHtml(accMeta.text)
                   + '</span>';
@@ -920,8 +988,19 @@ html.dark {
 
         // Next action cell
         var nextActionCell;
-        if (task.next_action) {
-          nextActionCell = '<span class="inline-block truncate" style="max-width: 160px; color: var(--pw-text-secondary); font-family: var(--pw-font-sans);" title="' + escapeAttr(task.next_action) + '">' + escapeHtml(truncate(task.next_action, 28)) + '</span>';
+        if (task.acceptance_status === 'needs_fix') {
+          nextActionCell = '<a href="' + detailHref + '#safeAuditSection" class="font-medium" style="color: var(--pw-state-warning);">' + escapeHtml(uiText('查看修复项并重新验收', 'Review fixes and re-run acceptance')) + '</a>';
+        } else if (task.acceptance_status === 'rejected') {
+          nextActionCell = '<a href="' + detailHref + '#safeAuditSection" class="font-medium" style="color: var(--pw-state-error);">' + escapeHtml(uiText('查看失败项并重新验收', 'Review failed checks and run acceptance again')) + '</a>';
+        } else if (task.acceptance_status === 'blocked') {
+          nextActionCell = '<a href="' + detailHref + '#safeAuditSection" class="font-medium" style="color: var(--pw-state-warning);">' + escapeHtml(uiText('查看人工确认项并重新验收', 'Review manual checks and run acceptance again')) + '</a>';
+        } else if (task.acceptance_status === 'accepted') {
+          nextActionCell = '<a href="' + detailHref + '#safeAuditSection" class="font-medium" style="color: var(--pw-state-success);">' + escapeHtml(uiText('查看验收证据', 'View acceptance evidence')) + '</a>';
+        } else if ((task.status === 'done_by_agent' || task.status === 'done') && task.acceptance_status === 'pending') {
+          nextActionCell = '<a href="' + detailHref + '#acceptanceGuide" class="font-medium" style="color: var(--pw-accent);">' + escapeHtml(uiText('打开详情运行验收', 'Open details to run acceptance')) + '</a>';
+        } else if (task.next_action) {
+          var nextActionText = nextActionLabel(task.next_action);
+          nextActionCell = '<span class="inline-block truncate" style="max-width: 160px; color: var(--pw-text-secondary); font-family: var(--pw-font-sans);" title="' + escapeAttr(nextActionText) + '">' + escapeHtml(truncate(nextActionText, 28)) + '</span>';
         } else if (task.pending_reason) {
           nextActionCell = '<span class="inline-block truncate" style="max-width: 160px; color: var(--pw-state-warning); font-family: var(--pw-font-sans);" title="' + escapeAttr(task.pending_reason) + '">' + escapeHtml(truncate(task.pending_reason, 28)) + '</span>';
         } else {
@@ -941,20 +1020,20 @@ html.dark {
 
         // Quick action buttons
         var quickActions =
-            '<button class="pw-quick-btn" data-safe-action="safe-result" data-task-id="' + escapeAttr(taskId) + '" title="查看安全结果" aria-label="查看安全结果" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></button>'
-          + '<button class="pw-quick-btn" data-safe-action="safe-audit" data-task-id="' + escapeAttr(taskId) + '" title="查看安全审计" aria-label="查看安全审计" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></button>'
-          + '<button class="pw-quick-btn" data-safe-action="safe-test-summary" data-task-id="' + escapeAttr(taskId) + '" title="safe test summary" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></button>'
-          + '<button class="pw-quick-btn" data-safe-action="safe-diff-summary" data-task-id="' + escapeAttr(taskId) + '" title="safe diff summary" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg></button>'
-          + '<button class="pw-quick-btn" data-copy-id="' + escapeAttr(taskId) + '" title="复制 task_id" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>'
-          + '<a href="' + detailHref + '" class="pw-quick-btn" title="查看详情"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></a>';
+            '<button class="pw-quick-btn" data-safe-action="safe-result" data-task-id="' + escapeAttr(taskId) + '" title="' + escapeAttr(uiText('查看安全结果', 'View safe result')) + '" aria-label="' + escapeAttr(uiText('查看安全结果', 'View safe result')) + '" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></button>'
+          + '<button class="pw-quick-btn" data-safe-action="safe-audit" data-task-id="' + escapeAttr(taskId) + '" title="' + escapeAttr(uiText('查看安全审计', 'View safe audit')) + '" aria-label="' + escapeAttr(uiText('查看安全审计', 'View safe audit')) + '" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></button>'
+          + '<button class="pw-quick-btn" data-safe-action="safe-test-summary" data-task-id="' + escapeAttr(taskId) + '" title="' + escapeAttr(uiText('查看安全测试摘要', 'View safe test summary')) + '" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></button>'
+          + '<button class="pw-quick-btn" data-safe-action="safe-diff-summary" data-task-id="' + escapeAttr(taskId) + '" title="' + escapeAttr(uiText('查看安全差异摘要', 'View safe diff summary')) + '" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg></button>'
+          + '<button class="pw-quick-btn" data-copy-id="' + escapeAttr(taskId) + '" title="' + escapeAttr(uiText('复制 task_id', 'Copy task ID')) + '" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>'
+          + '<a href="' + detailHref + '" class="pw-quick-btn" title="' + escapeAttr(uiText('查看详情', 'View details')) + '"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></a>';
 
         return ''
           + '<tr class="transition-colors" style="border-bottom: 1px solid var(--pw-border-subtle);' + altBg + '">'
-          +   '<td class="px-3 py-3"><input type="checkbox" data-select-task="' + escapeAttr(taskId) + '"' + checked + disabled + ' aria-label="选择任务 ' + escapeAttr(taskId) + '" /></td>'
+          +   '<td class="px-3 py-3"><input type="checkbox" data-select-task="' + escapeAttr(taskId) + '"' + checked + disabled + ' aria-label="' + escapeAttr(uiText('选择任务 ', 'Select task ') + taskId) + '" /></td>'
           +   '<td class="px-4 py-3 whitespace-nowrap">'
           +     '<div class="flex items-center gap-1">'
           +       '<span class="text-xs" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);" title="' + escapeAttr(taskId) + '">' + escapeHtml(truncatedId) + '</span>'
-          +       '<button class="pw-quick-btn" data-copy-id="' + escapeAttr(taskId) + '" title="复制 task_id" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>'
+          +       '<button class="pw-quick-btn" data-copy-id="' + escapeAttr(taskId) + '" title="' + escapeAttr(uiText('复制 task_id', 'Copy task ID')) + '" type="button"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>'
           +     '</div>'
           +   '</td>'
           +   '<td class="px-4 py-3 text-sm" style="color: var(--pw-text-primary); font-family: var(--pw-font-sans); max-width: 280px;">' + escapeHtml(task.title || '—') + '</td>'
@@ -1039,6 +1118,7 @@ html.dark {
 
       function renderTasks() {
         var filtered = applyClientSideFilters(allTasks);
+        $('selectAllTasks').setAttribute('aria-label', uiText('选择全部可操作任务', 'Select all actionable tasks'));
 
         // Sort by created_at desc (newest first). Falls back gracefully if missing.
         filtered.sort(function (a, b) {
@@ -1067,9 +1147,9 @@ html.dark {
         var hasFilters = currentFilters.repo_path || currentFilters.status || currentFilters.acceptance_status ||
                          currentFilters.agent || currentFilters.warning_type || currentFilters.date_from || currentFilters.date_to;
         if (hasFilters) {
-          $('countSummary').textContent = '显示 ' + filtered.length + ' / ' + totalTasks + ' 条';
+          $('countSummary').textContent = uiText('显示 ' + filtered.length + ' / ' + totalTasks + ' 条', 'Showing ' + filtered.length + ' / ' + totalTasks);
         } else {
-          $('countSummary').textContent = '已加载 ' + filtered.length + ' / ' + totalTasks + ' 条';
+          $('countSummary').textContent = uiText('已加载 ' + filtered.length + ' / ' + totalTasks + ' 条', 'Loaded ' + filtered.length + ' / ' + totalTasks);
         }
       }
 
@@ -1155,7 +1235,7 @@ html.dark {
         if (currentFilters.warning_type) params.push('warning_type=' + encodeURIComponent(currentFilters.warning_type));
         if (currentFilters.date_from) params.push('date_from=' + encodeURIComponent(currentFilters.date_from));
         if (currentFilters.date_to) params.push('date_to=' + encodeURIComponent(currentFilters.date_to));
-        params.push('limit=50');
+        params.push('limit=20');
         return params.length ? ('?' + params.join('&')) : '';
       }
 
@@ -1210,6 +1290,12 @@ html.dark {
       }
 
       function fetchTasks(cursor, append) {
+        cursor = typeof cursor === 'string' ? cursor : '';
+        append = append === true;
+        if (activeTaskRequest) activeTaskRequest.abort();
+        var controller = new AbortController();
+        activeTaskRequest = controller;
+        var requestSerial = ++taskRequestSerial;
         if (!append) showLoading();
         if (!append) selectedTaskIds.clear();
         setRefreshing(true);
@@ -1218,7 +1304,8 @@ html.dark {
         fetch(url, {
           method: 'GET',
           headers: { 'Accept': 'application/json' },
-          cache: 'no-store'
+          cache: 'no-store',
+          signal: controller.signal
         })
           .then(function (res) {
             if (!res.ok) {
@@ -1229,6 +1316,7 @@ html.dark {
             return res.json();
           })
           .then(function (data) {
+            if (requestSerial !== taskRequestSerial) return;
             var page = (data && Array.isArray(data.tasks)) ? data.tasks : [];
             allTasks = append ? allTasks.concat(page) : page;
             nextCursor = data && (data.nextCursor || data.next_cursor) ? (data.nextCursor || data.next_cursor) : null;
@@ -1238,6 +1326,8 @@ html.dark {
             updateFilterStatusText();
           })
           .catch(function (err) {
+            if (err && err.name === 'AbortError') return;
+            if (requestSerial !== taskRequestSerial) return;
             var msg = (err && err.message) ? err.message : '未知错误';
             // Mask fetch network errors that expose no useful detail
             if (err && err.name === 'TypeError' && /fetch/i.test(msg)) {
@@ -1246,7 +1336,10 @@ html.dark {
             showError(msg);
           })
           .finally(function () {
-            setRefreshing(false);
+            if (requestSerial === taskRequestSerial) {
+              activeTaskRequest = null;
+              setRefreshing(false);
+            }
           });
       }
 
@@ -1308,12 +1401,12 @@ html.dark {
         fetchTasks();
       });
 
-      $('refreshBtn').addEventListener('click', fetchTasks);
+      $('refreshBtn').addEventListener('click', function () { fetchTasks(); });
       $('loadMoreBtn').addEventListener('click', function () { if (nextCursor) fetchTasks(nextCursor, true); });
 
       var retryBtn = $('retryBtn');
       if (retryBtn) {
-        retryBtn.addEventListener('click', fetchTasks);
+        retryBtn.addEventListener('click', function () { fetchTasks(); });
       }
 
       // Safe modal close handlers
@@ -1376,6 +1469,10 @@ html.dark {
       });
       $('archiveSelectedBtn').addEventListener('click', archiveSelectedTasks);
       $('restoreSelectedBtn').addEventListener('click', restoreSelectedTasks);
+      window.addEventListener('patchwarden:languagechange', function () {
+        $('selectAllTasks').setAttribute('aria-label', uiText('选择全部可操作任务', 'Select all actionable tasks'));
+        renderTasks();
+      });
       $('selectAllTasks').addEventListener('change', function (event) {
         var checked = event.target.checked;
         document.querySelectorAll('[data-select-task]:not(:disabled)').forEach(function (input) {

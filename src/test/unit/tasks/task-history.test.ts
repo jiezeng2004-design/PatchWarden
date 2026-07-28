@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { reloadConfig, type PatchWardenConfig } from "../../../config.js";
-import { listTasks } from "../../../tools/tasks/listTasks.js";
+import { listAllTasks, listTasks } from "../../../tools/tasks/listTasks.js";
 import { archiveTasks, restoreTask } from "../../../tools/tasks/taskHistory.js";
 
 describe("task history archive", () => {
@@ -53,6 +53,22 @@ describe("task history archive", () => {
     writeTask(legacyId, "failed");
     assert.deepEqual(archiveTasks([legacyId], config).archived, [legacyId]);
     assert.throws(() => archiveTasks(["task_../outside"], config), /invalid task id/);
+  });
+
+  it("keeps the public list_tasks response bounded while internal consumers can scan all candidates", () => {
+    for (let index = 0; index < 125; index += 1) {
+      writeTask(`task-page-${String(index).padStart(3, "0")}`, "done_by_agent");
+    }
+
+    const publicList = listTasks({ history_state: "active", limit: 250 });
+    const completeList = listAllTasks({ history_state: "active" });
+
+    assert.equal(publicList.total, 125);
+    assert.equal(publicList.tasks.length, 100);
+    assert.equal(publicList.returned, 100);
+    assert.equal(completeList.total, 125);
+    assert.equal(completeList.tasks.length, 125);
+    assert.equal(completeList.returned, 125);
   });
 
   function taskDir(taskId: string): string {
