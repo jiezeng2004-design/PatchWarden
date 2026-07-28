@@ -230,7 +230,9 @@ function safeCatalog(): SafeEvidencePack["catalog"] {
 }
 
 function buildNextAction(lineage: SafeTaskLineage): string {
-  if (lineage.stop_reason === "success") return "Use this evidence pack for review or release readiness.";
+  if (lineage.stop_reason === "success" || lineage.stop_reason === "audit_accepted") {
+    return "Use this evidence pack for review or release readiness.";
+  }
   return lineage.next_action || "Review lineage before exporting release evidence.";
 }
 

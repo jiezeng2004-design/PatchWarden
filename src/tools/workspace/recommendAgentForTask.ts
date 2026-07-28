@@ -60,7 +60,7 @@ function normalizeScope(value: string[] | undefined): string[] | undefined {
 function buildRiskNotes(goal: string, riskHint: string | undefined): string[] {
   const text = `${goal} ${riskHint || ""}`.toLowerCase();
   const notes: string[] = [];
-  if (/release|publish|push|tag|npm/.test(text)) {
+  if (hasReleaseOrRemoteWriteIntent(text)) {
     notes.push("release_or_remote_write_language_detected");
   }
   if (/secret|token|cookie|\.env|ssh/.test(text)) {
@@ -70,6 +70,23 @@ function buildRiskNotes(goal: string, riskHint: string | undefined): string[] {
     notes.push("broad_change_language_detected");
   }
   return notes.slice(0, 8);
+}
+
+function hasReleaseOrRemoteWriteIntent(text: string): boolean {
+  const explicitPatterns = [
+    /\bnpm(?:\.cmd)?\s+publish\b/i,
+    /\bgit\s+push\b/i,
+    /\bgit\s+tag\b/i,
+    /\bgh\s+release\s+create\b/i,
+    /\b(?:create|publish|upload)\s+(?:a\s+)?github\s+release\b/i,
+    /\bdeploy(?:ment|ed|ing)?\b[^.\n]{0,40}\b(?:production|prod)\b/i,
+    /(?:发布到?|上传到?)\s*(?:npm|github|远程服务|远程仓库|制品库|registry)/i,
+    /创建\s*(?:github\s*)?release\b/i,
+    /(?:创建|打|生成)\s*(?:git\s*)?tag\b/i,
+    /(?:推送|上传)[^。；;\n]{0,30}(?:远程|github|registry|服务器|服务)/i,
+    /部署[^。；;\n]{0,20}(?:生产环境|线上环境|线上|production|prod)/i,
+  ];
+  return explicitPatterns.some((pattern) => pattern.test(text));
 }
 
 function suggestVerifyCommands(commands: string[]): string[] {

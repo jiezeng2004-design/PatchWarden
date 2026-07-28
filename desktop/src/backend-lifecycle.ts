@@ -9,6 +9,17 @@ export interface QuitCleanupCoordinator {
   run(): Promise<void>;
 }
 
+/** Keep bounded child-process diagnostics useful without persisting credentials. */
+export function sanitizeStartupDiagnostic(value: string): string {
+  return value
+    .replace(/\bBearer\s+[^\s"']+/gi, "Bearer [REDACTED]")
+    .replace(/([?&](?:token|key|secret|password|cookie)=)[^&\s"']+/gi, "$1[REDACTED]")
+    .replace(/\b(token|api[_-]?key|password|secret|cookie|authorization)(\s*[:=]\s*)[^\s,"']+/gi, "$1$2[REDACTED]")
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function mayStopOwnedServices(
   ownedChild: unknown,
   capturedChild: unknown,

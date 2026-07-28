@@ -33,15 +33,18 @@ import {
 import type { AgentDetection, AgentDetectionInput, AgentRegistration, DiscoveredModel } from "./agent-adapters.js";
 import type { AgentSelection, DesktopPaths, DesktopPreferences } from "./config-store.js";
 import {
+  DEFAULT_BACKEND_START_TIMEOUT_MS,
   hasExpectedDesktopInstance,
   mayStopBackend,
   probeControlCenter,
+  waitForBackendStartup,
   type ProbeFetchImpl,
 } from "./backend-probe.js";
 import {
   createQuitCleanupCoordinator,
   createSerializedRestartScheduler,
   mayStopOwnedServices,
+  sanitizeStartupDiagnostic,
   stopBackendChild,
 } from "./backend-lifecycle.js";
 import { detectTunnelClient, validateTunnelClientPath } from "./runtime-settings.js";
@@ -84,6 +87,7 @@ let desktopPaths: DesktopPaths | null = null;
 let preferences: DesktopPreferences | null = null;
 let activeConfigPath: string | null = null;
 let desktopLogPath: string | null = null;
+let backendStartupDiagnostics: { child: ReturnType<typeof utilityProcess.fork>; flush: () => void } | null = null;
 
 const quitCleanup = createQuitCleanupCoordinator(async () => {
   const capturedBackend = ownedBackend;
@@ -358,17 +362,43 @@ async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutM
 
 const probeFetch: ProbeFetchImpl = (url) => fetchWithTimeout(url);
 
-async function waitForBackend(timeoutMs: number = 15000): Promise<{ kind: string; version: string | null }> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const result = await probeControlCenter(probeFetch, CONTROL_URL, activeConfigPath, readCoreVersion());
-    if (result.kind === "patchwarden") return result;
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 350));
-  }
-  return { kind: "absent", version: null };
+function flushBackendStartupDiagnostics(child: ReturnType<typeof utilityProcess.fork>): void {
+  if (!backendStartupDiagnostics || backendStartupDiagnostics.child !== child) return;
+  const { flush } = backendStartupDiagnostics;
+  backendStartupDiagnostics = null;
+  flush();
 }
 
-function spawnBackend(): void {
+function captureBackendStartupStderr(child: ReturnType<typeof utilityProcess.fork>): () => void {
+  const stderr = child.stderr;
+  if (!stderr) return () => undefined;
+  const maxBytes = 16 * 1024;
+  const chunks: Buffer[] = [];
+  let capturedBytes = 0;
+  let truncated = false;
+  let flushed = false;
+  const onData = (chunk: Buffer | string) => {
+    if (capturedBytes >= maxBytes) {
+      truncated = true;
+      return;
+    }
+    const source = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
+    const bounded = source.subarray(0, maxBytes - capturedBytes);
+    chunks.push(bounded);
+    capturedBytes += bounded.length;
+    if (bounded.length < source.length) truncated = true;
+  };
+  stderr.on("data", onData);
+  return () => {
+    if (flushed) return;
+    flushed = true;
+    stderr.removeListener("data", onData);
+    const diagnostic = sanitizeStartupDiagnostic(Buffer.concat(chunks).toString("utf8"));
+    if (diagnostic) writeAppLog(`Control Center startup stderr${truncated ? " (truncated)" : ""}: ${diagnostic}`);
+  };
+}
+
+function spawnBackend(): ReturnType<typeof utilityProcess.fork> {
   const entry = join(coreRoot, "dist", "controlCenter.js");
   const detectedTunnel = detectTunnelClient({ config: tunnelDetectionConfig(readJson(activeConfigPath!)), env: process.env });
   const backendEnv: NodeJS.ProcessEnv = {
@@ -385,10 +415,19 @@ function spawnBackend(): void {
     configuredAgentEnvironmentPolicy(),
   ));
   const child = ownedBackend;
+  if (backendStartupDiagnostics) {
+    backendStartupDiagnostics.flush();
+    backendStartupDiagnostics = null;
+  }
+  backendStartupDiagnostics = { child, flush: captureBackendStartupStderr(child) };
   writeAppLog(`Started owned Control Center child pid=${child?.pid || "unknown"}.`);
-  child?.on("exit", () => {
+  child.on("exit", (code) => {
+    const exitedDuringStartup = backendStartupDiagnostics?.child === child;
+    writeAppLog(`Owned Control Center child exited code=${code} during_startup=${exitedDuringStartup}.`);
+    flushBackendStartupDiagnostics(child);
     if (mayStopBackend(ownedBackend, child)) ownedBackend = null;
   });
+  return child;
 }
 
 async function ensureBackend(): Promise<boolean> {
@@ -413,11 +452,28 @@ async function ensureBackend(): Promise<boolean> {
     blockReason = `Port 8090 is serving PatchWarden ${probe.version}, but this Desktop bundles ${readCoreVersion()}. Stop the old Core and reopen PatchWarden.`;
     return false;
   }
-  spawnBackend();
-  const ready = await waitForBackend();
-  if (ready.kind !== "patchwarden") {
+  const child = spawnBackend();
+  const startup = await waitForBackendStartup({
+    probe: () => probeControlCenter(probeFetch, CONTROL_URL, activeConfigPath, readCoreVersion()),
+    shouldContinue: () => ownedBackend === child,
+  });
+  flushBackendStartupDiagnostics(child);
+  writeAppLog(
+    `Control Center startup probe finished kind=${startup.probe.kind} elapsed_ms=${startup.elapsedMs} attempts=${startup.attempts} final_probe=${startup.finalProbeUsed} stopped_early=${startup.stoppedEarly}.`,
+  );
+  if (startup.probe.kind !== "patchwarden") {
     appMode = "blocked";
-    blockReason = "Control Center 未能在 15 秒内启动，请查看桌面日志。";
+    if (startup.stoppedEarly) {
+      blockReason = "Control Center 进程在启动完成前退出，请查看桌面日志。";
+    } else if (startup.probe.kind === "foreign") {
+      blockReason = "端口 8090 已被其他程序占用，PatchWarden 没有抢占该端口。";
+    } else if (startup.probe.kind === "mismatched_patchwarden") {
+      blockReason = "端口 8090 上已有使用其他配置的 PatchWarden Control Center。请先退出该实例，再重新打开桌面应用。";
+    } else if (startup.probe.kind === "outdated_patchwarden") {
+      blockReason = `Port 8090 is serving PatchWarden ${startup.probe.version}, but this Desktop bundles ${readCoreVersion()}. Stop the old Core and reopen PatchWarden.`;
+    } else {
+      blockReason = `Control Center 未能在 ${DEFAULT_BACKEND_START_TIMEOUT_MS / 1000} 秒内启动，请查看桌面日志。`;
+    }
     await stopOwnedBackend();
     return false;
   }

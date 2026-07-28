@@ -143,6 +143,8 @@ export interface CreateTaskInput {
     selected_agent: string;
     fallback_used: boolean;
   };
+  /** Internal lineage link supplied by run_task_loop; not exposed in MCP schemas. */
+  lineage_id?: string;
 }
 
 export interface AssessOnlyOutput {
@@ -800,6 +802,7 @@ async function createTaskInternal(input: CreateTaskInput): Promise<CreateTaskRes
     // v0.8.0: Goal Session 关联
     goal_id: effectiveInput.goal_id ?? null,
     subgoal_id: effectiveInput.subgoal_id ?? null,
+    lineage_id: effectiveInput.lineage_id ?? null,
     // v1.0.0: Agent routing decision (only present when agent was auto-routed)
     ...(agentSelectionReason ? { agent_selection_reason: agentSelectionReason } : {}),
   };

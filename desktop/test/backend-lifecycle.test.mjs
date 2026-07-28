@@ -6,6 +6,7 @@ import {
   createQuitCleanupCoordinator,
   createSerializedRestartScheduler,
   mayStopOwnedServices,
+  sanitizeStartupDiagnostic,
   stopBackendChild,
 } from "../dist/backend-lifecycle.js";
 
@@ -76,5 +77,13 @@ describe("desktop backend lifecycle", () => {
     await Promise.all([first, second]);
     assert.equal(coordinator.isComplete(), true);
     assert.equal(cleanups, 1);
+  });
+
+  it("redacts credentials from bounded startup diagnostics", () => {
+    const output = sanitizeStartupDiagnostic("Authorization=Bearer abc123\napi_key=secret-value cookie=session-value");
+    assert.equal(output.includes("abc123"), false);
+    assert.equal(output.includes("secret-value"), false);
+    assert.equal(output.includes("session-value"), false);
+    assert.match(output, /\[REDACTED\]/);
   });
 });

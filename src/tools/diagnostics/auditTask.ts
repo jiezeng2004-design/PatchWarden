@@ -44,6 +44,7 @@ import { renderAcceptanceMarkdown } from "../../goal/acceptanceTemplate.js";
 import type { ChangedFile } from "../../runner/changeCapture.js";
 import { atomicWriteFileSync, atomicWriteJsonFileSync } from "../../utils/atomicFile.js";
 import { mutateTaskStatus } from "../../runner/taskStatusStore.js";
+import { syncTaskAuditToLineages } from "../tasks/taskLineage.js";
 import {
   readTextFilePrefixSync,
   readTextFileTailLinesSync,
@@ -75,6 +76,7 @@ interface TaskStatusData {
   provider_error_reference?: string;
   acceptance_status?: string;
   updated_at?: string;
+  lineage_id?: string;
 }
 
 interface ChangedFilesEvidence {
@@ -1037,5 +1039,6 @@ export function auditTask(taskId: string): AuditTaskOutput {
         recommended_next_actions: actions,
     };
     atomicWriteJsonFileSync(join(taskDir, "audit.json"), output);
+    syncTaskAuditToLineages(taskId, output, statusData.lineage_id);
     return output;
 }
