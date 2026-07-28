@@ -25,7 +25,7 @@ PatchWarden 负责把计划保存成工作区内任务，再由预先配置的�
 
 <sub>PatchWarden Desktop 真实首启界面，来自隐私安全的桌面 smoke 验收；截图未使用真实工作区、账号或凭据。</sub>
 
-当前源码版本：**v1.6.6**；最新 Windows Release：**v1.6.4**。npm `latest` 由维护者独立手动发布，
+当前源码版本：**v1.6.7**；最新 Windows Release：**v1.6.4**。npm `latest` 由维护者独立手动发布，
 请以页面顶部的 npm 徽章和注册表查询结果为准。Windows 首次体验推荐上面的安装版；查看
 [CHANGELOG](CHANGELOG.md)、[贡献名单](CONTRIBUTORS.md)、[迁移指南](docs/migration-from-safe-bifrost.md)和
 [发布检查清单](docs/release-checklist.md)。

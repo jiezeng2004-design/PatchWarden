@@ -29,7 +29,7 @@ independent verification evidence.
 
 <sub>Real PatchWarden Desktop first-run UI from a privacy-safe smoke run; no real workspace, account, or credential data is shown.</sub>
 
-Current source version: **v1.6.6**; latest Windows Release: **v1.6.4**. npm `latest` is
+Current source version: **v1.6.7**; latest Windows Release: **v1.6.4**. npm `latest` is
 published separately by the maintainer; use the npm badge above or query the
 registry for its current value. Use the installer above for the first Windows experience. See the
 [CHANGELOG](CHANGELOG.md), [contributors](CONTRIBUTORS.md), [migration guide](docs/migration-from-safe-bifrost.md), and
