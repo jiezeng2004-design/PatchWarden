@@ -37,6 +37,7 @@ describe("desktop UI contracts", () => {
   it("keeps Settings static and dynamic copy on translation keys", () => {
     const settingsPage = read("ui/pages/settings.html");
     const settingsClient = read("ui/settings.js");
+    const desktopMain = read("desktop/src/main.ts");
     assert.doesNotMatch(settingsPage, />[^<]*\p{Script=Han}[^<]*</u);
     assert.doesNotMatch(settingsClient, /[\p{Script=Han}]/u);
     for (const key of [
@@ -54,6 +55,11 @@ describe("desktop UI contracts", () => {
     assert.match(settingsClient, /state\.workspaceRoot \|\| tr\("settings\.workspaceHelp"\)/);
     assert.match(settingsClient, /state\.tunnelClient && state\.tunnelClient\.available/);
     assert.match(settingsClient, /tr\("settings\.loadFailed"\)/);
+    assert.match(settingsClient, /agent\.supportsModelRefresh \? api\.refreshAgentModels\(agent\.id\) : api\.discoverAgentModels\(agent\.id\)/);
+    assert.match(settingsClient, /refresh\.disabled = !agent\.available/);
+    assert.match(settingsClient, /if \(!agentSettingsDirty && Date\.now\(\) - lastAgentLoadAt > 2000\) void loadAgents\(false\)/);
+    assert.match(desktopMain, /discoverModelsForAgent\(agent\.id, workspaceRoot\)/);
+    assert.doesNotMatch(desktopMain, /refreshDetectedModels/);
     for (const id of ["tunnelClientPath", "configPath", "workspacePath"]) {
       assert.doesNotMatch(settingsPage, new RegExp(`id="${id}"[^>]*data-i18n=`), id);
     }
@@ -80,15 +86,16 @@ describe("desktop UI contracts", () => {
     const sessions = read("ui/pages/direct-sessions.html");
     const workspace = read("ui/pages/workspace.html");
     const logs = read("ui/pages/logs.html");
-    assert.match(tasks, /limit=50/);
+    assert.match(tasks, /limit=20/);
+    assert.doesNotMatch(tasks, /limit=50/);
     assert.match(tasks, /nextCursor \|\| data\.next_cursor/);
     assert.match(sessions, /session-state/);
     for (const id of ["session-repo", "session-date-from", "session-date-to", "direct-disabled", "sessions-more"]) assert.ok(sessions.includes(`id="${id}"`), id);
     assert.match(sessions, /data\.nextCursor \|\| data\.next_cursor/);
     assert.match(workspace, /internal_directories/);
     assert.match(workspace, /搜索 Git 项目/);
-    assert.match(logs, /仅清空当前显示，不删除日志文件/);
-    for (const marker of ["parseLogEntries", "log-row", "copy-log-line", "historical_snapshot"]) assert.ok(logs.includes(marker), marker);
+    assert.match(logs, /仅清空当前分类的显示，不删除日志文件/);
+    for (const marker of ["parseLogEntries", "log-row", "copy-log-line", "historical_snapshot", "clearedViews[currentCategory]", "logAbortController.abort()", "category !== currentCategory"]) assert.ok(logs.includes(marker), marker);
     assert.doesNotMatch(logs, /stderr[^]*stroke="var\(--pw-state-error\)"[^]*<h2[^>]*>stderr<\/h2>/);
   });
 
@@ -152,5 +159,17 @@ describe("desktop UI contracts", () => {
     assert.match(smoke, /PATCHWARDEN_CONFIG: isolatedConfig/);
     assert.match(smoke, /second instance must exit successfully/);
     assert.doesNotMatch(smoke, /taskkill|Stop-Process|kill all/i);
+  });
+
+  it("destroys the tray before asynchronous quit cleanup begins", () => {
+    const desktopMain = read("desktop/src/main.ts");
+    const start = desktopMain.indexOf('app.on("before-quit"');
+    const end = desktopMain.indexOf("function writeAppLog", start);
+    assert.ok(start >= 0 && end > start);
+    const quitHandler = desktopMain.slice(start, end);
+    assert.match(quitHandler, /quitting = true;\s+destroyTrayImmediately\(\);\s+if \(!gotLock/);
+    assert.match(quitHandler, /const activeTray = tray;\s+tray = null;/);
+    assert.match(quitHandler, /activeTray\.destroy\(\)/);
+    assert.ok(quitHandler.indexOf("destroyTrayImmediately();") < quitHandler.indexOf("quitCleanup.run()"));
   });
 });

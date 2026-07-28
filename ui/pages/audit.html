@@ -231,7 +231,7 @@ html.dark {
     <!-- Bottom Section -->
     <div class="px-5 py-4" style="border-top: 1px solid var(--pw-border-subtle);">
       <div class="flex items-center gap-2 mb-3">
-        <span class="text-xs font-medium px-2 py-0.5 rounded-md whitespace-nowrap" style="color: var(--pw-text-tertiary); background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border-subtle); font-family: var(--pw-font-mono);">Core v0.6.0</span>
+        <span data-core-version class="text-xs font-medium px-2 py-0.5 rounded-md whitespace-nowrap" style="color: var(--pw-text-tertiary); background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border-subtle); font-family: var(--pw-font-mono);">Core</span>
       </div>
       <div class="flex items-center gap-2">
         <span class="shrink-0 w-2 h-2 rounded-full" style="background-color: var(--pw-state-success);"></span>
@@ -270,7 +270,7 @@ html.dark {
     <main class="flex-1 overflow-y-auto p-6" style="background-color: var(--pw-bg-elevated);">
 
       <!-- ===== 1. Summary Stats Row ===== -->
-      <section class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+      <section class="grid grid-cols-2 xl:grid-cols-4 gap-3 mb-4">
         <!-- 总审计 -->
         <div class="flex items-center gap-3 px-4 py-3 rounded-lg" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
           <div class="shrink-0 w-9 h-9 rounded-lg flex items-center justify-center" style="background-color: var(--pw-accent-subtle);">
@@ -291,15 +291,33 @@ html.dark {
             <div id="statPass" class="text-xl font-bold whitespace-nowrap" style="color: var(--pw-state-success); font-variant-numeric: tabular-nums;">--</div>
           </div>
         </div>
-        <!-- 失败 -->
+        <!-- 需要处理 -->
         <div class="flex items-center gap-3 px-4 py-3 rounded-lg" style="background-color: var(--pw-bg-surface); border-left: 3px solid var(--pw-state-error);">
           <div class="shrink-0 w-9 h-9 rounded-lg flex items-center justify-center" style="background-color: var(--pw-state-error-bg);">
             <i data-lucide="x-circle" class="w-4 h-4" style="color: var(--pw-state-error);"></i>
           </div>
           <div class="min-w-0">
-            <div class="text-xs truncate" style="color: var(--pw-text-tertiary);" data-zh="失败" data-en="Failed">失败</div>
+            <div class="text-xs truncate" style="color: var(--pw-text-tertiary);" data-zh="需要处理" data-en="Needs attention">需要处理</div>
             <div id="statFail" class="text-xl font-bold whitespace-nowrap" style="color: var(--pw-state-error); font-variant-numeric: tabular-nums;">--</div>
           </div>
+        </div>
+        <!-- 未形成结论 -->
+        <div class="flex items-center gap-3 px-4 py-3 rounded-lg" style="background-color: var(--pw-bg-surface); border-left: 3px solid var(--pw-state-info);">
+          <div class="shrink-0 w-9 h-9 rounded-lg flex items-center justify-center" style="background-color: var(--pw-state-info-bg);">
+            <i data-lucide="circle-help" class="w-4 h-4" style="color: var(--pw-state-info);"></i>
+          </div>
+          <div class="min-w-0">
+            <div class="text-xs truncate" style="color: var(--pw-text-tertiary);" data-zh="未形成结论" data-en="No conclusion">未形成结论</div>
+            <div id="statUnknown" class="text-xl font-bold whitespace-nowrap" style="color: var(--pw-state-info); font-variant-numeric: tabular-nums;">--</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="auditOverview" class="rounded-lg mb-4 px-5 py-4 flex items-start gap-3" style="background-color: var(--pw-bg-surface); border: 1px solid var(--pw-border);">
+        <i id="overviewIcon" data-lucide="shield-check" class="w-5 h-5 shrink-0 mt-0.5" style="color: var(--pw-accent);"></i>
+        <div class="min-w-0">
+          <h2 id="overviewTitle" class="text-sm font-semibold" style="color: var(--pw-text-primary);">正在汇总审计结论</h2>
+          <p id="overviewText" class="text-xs mt-1" style="color: var(--pw-text-secondary);">请稍候…</p>
         </div>
       </section>
 
@@ -308,7 +326,7 @@ html.dark {
         <div class="flex items-center justify-between px-5 py-4" style="border-bottom: 1px solid var(--pw-border-subtle);">
           <div class="flex items-center gap-2 flex-wrap">
             <i data-lucide="alert-triangle" class="w-4 h-4 shrink-0" style="color: var(--pw-state-warning);"></i>
-            <h2 class="text-sm font-semibold" style="color: var(--pw-text-primary);" data-zh="警告聚合" data-en="Warnings Aggregation">警告聚合</h2>
+            <h2 class="text-sm font-semibold" style="color: var(--pw-text-primary);" data-zh="风险与下一步" data-en="Risks and next steps">风险与下一步</h2>
             <span id="warnings-count" class="text-xs px-2 py-0.5 rounded-md whitespace-nowrap" style="font-family: var(--pw-font-mono); color: var(--pw-text-tertiary); background-color: var(--pw-bg-hover);">—</span>
           </div>
         </div>
@@ -325,7 +343,7 @@ html.dark {
             <line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/>
             <line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/>
           </svg>
-          <p class="text-xs" style="color: var(--pw-text-tertiary);" data-zh="加载警告中..." data-en="Loading warnings...">加载警告中...</p>
+          <p class="text-xs" style="color: var(--pw-text-tertiary);" data-zh="正在整理风险..." data-en="Loading risks...">正在整理风险...</p>
         </div>
 
         <!-- Warnings Error State -->
@@ -345,7 +363,7 @@ html.dark {
             <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
             <polyline points="22 4 12 14.01 9 11.01"/>
           </svg>
-          <p class="text-xs" style="color: var(--pw-text-tertiary);" data-zh="暂无警告" data-en="No Warnings">暂无警告</p>
+          <p class="text-xs" style="color: var(--pw-text-tertiary);" data-zh="当前审计没有待处理风险" data-en="No audit risks require attention">当前审计没有待处理风险</p>
         </div>
 
         <!-- Warnings Cards Container -->
@@ -394,12 +412,13 @@ html.dark {
 
         <!-- Table -->
         <div id="tableWrapper" class="hidden overflow-x-auto">
-          <table class="w-full text-sm" style="min-width: 640px;">
+          <table class="w-full text-sm" style="min-width: 980px;">
             <thead>
               <tr style="border-bottom: 1px solid var(--pw-border);">
-                <th class="px-4 py-3 text-left text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary);" data-zh="任务ID" data-en="Task ID">任务ID</th>
-                <th class="px-4 py-3 text-left text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary);" data-zh="裁定" data-en="Verdict">裁定</th>
-                <th class="px-4 py-3 text-left text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary);" data-zh="范围变更" data-en="Scope Changes">范围变更</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary);" data-zh="审计对象" data-en="Subject">审计对象</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary);" data-zh="结论" data-en="Conclusion">结论</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary);" data-zh="关键发现" data-en="Key findings">关键发现</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary);" data-zh="下一步" data-en="Next step">下一步</th>
                 <th class="px-4 py-3 text-right text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary);" data-zh="审计时间" data-en="Audit Time">审计时间</th>
               </tr>
             </thead>
@@ -419,8 +438,26 @@ html.dark {
             <span id="evidenceTaskId" class="text-xs px-2 py-0.5 rounded-md whitespace-nowrap" style="font-family: var(--pw-font-mono); color: var(--pw-text-accent); background-color: var(--pw-accent-subtle);"></span>
           </div>
         </div>
-        <div class="px-5 py-4">
-          <pre id="evidenceJson" class="text-xs overflow-auto" style="font-family: var(--pw-font-mono); color: var(--pw-text-secondary); line-height: var(--pw-leading-relaxed); max-height: 480px; white-space: pre-wrap; word-break: break-word;"></pre>
+        <div class="px-5 py-4 space-y-4">
+          <div id="evidenceConclusion" class="rounded-md p-3" style="background-color: var(--pw-bg-hover);"></div>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div class="rounded-md p-2 text-center" style="background-color: var(--pw-state-success-bg);"><div class="text-xs" style="color: var(--pw-text-tertiary);" data-zh="通过检查" data-en="Passed checks">通过检查</div><div id="evidencePass" class="text-lg font-semibold" style="color: var(--pw-state-success);">0</div></div>
+            <div class="rounded-md p-2 text-center" style="background-color: var(--pw-state-warning-bg);"><div class="text-xs" style="color: var(--pw-text-tertiary);" data-zh="警告检查" data-en="Warning checks">警告检查</div><div id="evidenceWarn" class="text-lg font-semibold" style="color: var(--pw-state-warning);">0</div></div>
+            <div class="rounded-md p-2 text-center" style="background-color: var(--pw-state-error-bg);"><div class="text-xs" style="color: var(--pw-text-tertiary);" data-zh="失败检查" data-en="Failed checks">失败检查</div><div id="evidenceFail" class="text-lg font-semibold" style="color: var(--pw-state-error);">0</div></div>
+            <div class="rounded-md p-2 text-center" style="background-color: var(--pw-state-info-bg);"><div class="text-xs" style="color: var(--pw-text-tertiary);" data-zh="人工确认" data-en="Manual verification">人工确认</div><div id="evidenceManual" class="text-lg font-semibold" style="color: var(--pw-state-info);">否</div></div>
+          </div>
+          <div>
+            <h3 class="text-xs font-semibold mb-2" style="color: var(--pw-text-primary);" data-zh="需要关注" data-en="Findings">需要关注</h3>
+            <div id="evidenceFindings" class="space-y-1 text-xs" style="color: var(--pw-text-secondary);"></div>
+          </div>
+          <div>
+            <h3 class="text-xs font-semibold mb-2" style="color: var(--pw-text-primary);" data-zh="建议下一步" data-en="Recommended next steps">建议下一步</h3>
+            <div id="evidenceActions" class="space-y-1 text-xs" style="color: var(--pw-text-secondary);"></div>
+          </div>
+          <details class="rounded-md" style="border: 1px solid var(--pw-border-subtle);">
+            <summary class="cursor-pointer px-3 py-2 text-xs font-medium" style="color: var(--pw-text-tertiary);" data-zh="查看结构化证据" data-en="View structured evidence">查看结构化证据</summary>
+            <pre id="evidenceJson" class="text-xs overflow-auto px-3 pb-3" style="font-family: var(--pw-font-mono); color: var(--pw-text-secondary); line-height: var(--pw-leading-relaxed); max-height: 360px; white-space: pre-wrap; word-break: break-word;"></pre>
+          </details>
         </div>
       </section>
 
@@ -492,9 +529,11 @@ html.dark {
     }
   </style>
 
+  <script src="/pages/audit-v2.js"></script>
   <script>
     (function () {
       'use strict';
+      if (window.PatchWardenAuditV2) return;
 
       var API_URL = '/api/audit';
       var WARNINGS_URL = '/api/warnings';

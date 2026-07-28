@@ -67,5 +67,8 @@
   "maxReadFileBytes": 200000,
   "defaultTaskTimeoutSeconds": 900,
   "maxTaskTimeoutSeconds": 3600,
-  "watcherStaleSeconds": 30
+  "watcherStaleSeconds": 30,
+  "taskArchiveRetentionDays": 30,
+  "taskArchiveCleanupIntervalHours": 24,
+  "taskArchiveCleanupMaxBatch": 100
 }

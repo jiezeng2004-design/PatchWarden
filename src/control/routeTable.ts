@@ -54,7 +54,7 @@ import {
   handleWorkspaceRepos,
   handleWorkspaceRepoStatus,
 } from "./routes/workspace.js";
-import { handleManageAction, handleOpenLogsFolder } from "./routes/process.js";
+import { handleManageAction, handleOpenLogsFolder, handleStopOwnedServices } from "./routes/process.js";
 import {
   handleStatus,
   handleControlCenterStatus,
@@ -243,6 +243,7 @@ export function buildRoutes(parsedUrl: URL, requestBody: unknown | null = null):
   const postRoutes: Route[] = [
     { method: "POST", pattern: /^\/api\/start-all$/, requiresToken: true, handler: (res) => handleManageAction(res, "start", "all") },
     { method: "POST", pattern: /^\/api\/stop-all$/, requiresToken: true, handler: (res) => handleManageAction(res, "stop", "all") },
+    { method: "POST", pattern: /^\/api\/desktop\/stop-owned$/, requiresToken: true, handler: (res) => handleStopOwnedServices(res) },
     { method: "POST", pattern: /^\/api\/restart-all$/, requiresToken: true, handler: (res) => handleManageAction(res, "restart", "all") },
     { method: "POST", pattern: /^\/api\/core\/start$/, requiresToken: true, handler: (res) => handleManageAction(res, "start", "core") },
     { method: "POST", pattern: /^\/api\/core\/stop$/, requiresToken: true, handler: (res) => handleManageAction(res, "stop", "core") },

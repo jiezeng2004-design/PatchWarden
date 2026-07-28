@@ -1,10 +1,10 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import { strict as assert } from "node:assert";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { reloadConfig } from "../../../config.js";
-import { safeDirectSummary, safeAuditDirectSession, safeDiffSummary, safeResult, safeTestSummary } from "../../../tools/diagnostics/safeViews.js";
+import { safeAudit, safeDirectSummary, safeAuditDirectSession, safeDiffSummary, safeResult, safeTestSummary } from "../../../tools/diagnostics/safeViews.js";
 
 let tempDir: string;
 let prevConfigEnv: string | undefined;
@@ -51,6 +51,7 @@ describe("safeViews", () => {
     writeFileSync(join(taskDir, "status.json"), JSON.stringify({
       task_id: taskId,
       status: "done_by_agent",
+      acceptance_status: "needs_fix",
       phase: "done_by_agent",
       repo_path: "repo",
       resolved_repo_path: join(tempDir, "repo"),
@@ -93,6 +94,12 @@ describe("safeViews", () => {
     writeFileSync(join(taskDir, "test.log"), "SECRET_TEST_LOG", "utf-8");
 
     const result = safeResult(taskId);
+    assert.equal(result.acceptance_status, "needs_fix");
+    const statusBeforeSafeAudit = readFileSync(join(taskDir, "status.json"), "utf-8");
+    const audit = safeAudit(taskId);
+    assert.equal(audit.verdict, "not_run");
+    assert.equal(audit.acceptance.status, "needs_fix");
+    assert.equal(readFileSync(join(taskDir, "status.json"), "utf-8"), statusBeforeSafeAudit, "GET-safe audit view must not mutate acceptance");
     const payload = JSON.stringify({
       result,
       tests: safeTestSummary(taskId),

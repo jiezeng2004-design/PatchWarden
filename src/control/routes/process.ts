@@ -54,7 +54,19 @@ const MANAGE_ALLOWED_ENVIRONMENT = [
   "NO_PROXY",
 ] as const;
 
-function runManageAction(action: string, mode: string): Promise<ManageResult> {
+const DESKTOP_INSTANCE_ID_PATTERN = /^[a-f0-9]{32}$/iu;
+
+interface ManageRunOptions {
+  readonly ownerInstanceId?: string | null;
+  readonly ownedOnly?: boolean;
+}
+
+export function readDesktopOwnerInstanceId(environment: NodeJS.ProcessEnv = process.env): string | null {
+  const value = environment.PATCHWARDEN_DESKTOP_INSTANCE_ID;
+  return typeof value === "string" && DESKTOP_INSTANCE_ID_PATTERN.test(value) ? value.toLowerCase() : null;
+}
+
+function runManageAction(action: string, mode: string, options: ManageRunOptions = {}): Promise<ManageResult> {
   return new Promise((resolveP, rejectP) => {
     let child;
     let exactValues: string[] = [];
@@ -62,9 +74,12 @@ function runManageAction(action: string, mode: string): Promise<ManageResult> {
       const env = buildManageEnvironment();
       exactValues = manageSensitiveValues(env);
       const command = resolveTrustedExecutable("powershell.exe", projectRoot, { pathValue: env.PATH });
+      const ownerInstanceId = options.ownerInstanceId === undefined
+        ? readDesktopOwnerInstanceId()
+        : options.ownerInstanceId;
       child = spawn(
         command,
-        buildManageArguments(action, mode),
+        buildManageArguments(action, mode, ownerInstanceId, options.ownedOnly === true),
         { cwd: projectRoot, windowsHide: true, env }
       );
     } catch (err) {
@@ -105,8 +120,13 @@ function runManageAction(action: string, mode: string): Promise<ManageResult> {
   });
 }
 
-export function buildManageArguments(action: string, mode: string): string[] {
-  return [
+export function buildManageArguments(
+  action: string,
+  mode: string,
+  ownerInstanceId: string | null = null,
+  ownedOnly: boolean = false,
+): string[] {
+  const args = [
     "-NoProfile",
     "-ExecutionPolicy",
     "Bypass",
@@ -119,6 +139,11 @@ export function buildManageArguments(action: string, mode: string): string[] {
     // restart fails in packaged Desktop because devDependencies are absent.
     "-SkipBuild",
   ];
+  if (ownerInstanceId && DESKTOP_INSTANCE_ID_PATTERN.test(ownerInstanceId)) {
+    args.push("-OwnerInstanceId", ownerInstanceId.toLowerCase());
+  }
+  if (ownedOnly) args.push("-OwnedOnly");
+  return args;
 }
 
 export function resolveManageProfiles(mode: string, action: string, directEnabled: boolean): { selected: ControlMode[]; skipped: ControlMode[] } {
@@ -473,6 +498,41 @@ export async function handleManageAction(res: ServerResponse, action: string, mo
   } catch (err) {
     recordEvent("manage." + mode + "." + action + ".failed", { error: errorMessage(err) });
     sendJson(res, 500, { error: errorMessage(err) });
+  }
+}
+
+/** Stop only services whose receipts and live process tree belong to this Desktop instance. */
+export async function handleStopOwnedServices(res: ServerResponse): Promise<void> {
+  const ownerInstanceId = readDesktopOwnerInstanceId();
+  if (!ownerInstanceId) {
+    sendJson(res, 409, {
+      ok: false,
+      error_code: "desktop_owner_unavailable",
+      error: "This Control Center was not started by a verified PatchWarden Desktop instance.",
+    });
+    return;
+  }
+  try {
+    const result = await runManageAction("stop", "all", { ownerInstanceId, ownedOnly: true });
+    if (result.exitCode !== 0) {
+      recordEvent("manage.desktop.stop_owned", { exit_code: result.exitCode, ok: false });
+      sendJson(res, 500, {
+        ok: false,
+        error_code: "owned_stop_failed",
+        error: result.stderr.trim() || result.stdout.trim() || "Owner-scoped service stop failed.",
+      });
+      return;
+    }
+    recordEvent("manage.desktop.stop_owned", { exit_code: result.exitCode, ok: true });
+    sendJson(res, 200, {
+      ok: true,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      owner_scoped: true,
+    });
+  } catch (err) {
+    recordEvent("manage.desktop.stop_owned.failed", { error: errorMessage(err) });
+    sendJson(res, 500, { ok: false, error_code: "owned_stop_failed", error: errorMessage(err) });
   }
 }
 

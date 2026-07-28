@@ -20,10 +20,15 @@
   [switch]$SkipWatcher,
   [switch]$ForgetSavedApiKey,
   [switch]$NoTunnelWebUi,
-  [string]$HealthListenAddr = ""
+  [string]$HealthListenAddr = "",
+  [ValidatePattern('^[A-Fa-f0-9]{32}$')]
+  [string]$OwnerInstanceId = "",
+  [ValidateRange(0, 2147483647)]
+  [int]$SupervisorProcessId = 0
 )
 
 $ErrorActionPreference = "Stop"
+if ($OwnerInstanceId) { $OwnerInstanceId = $OwnerInstanceId.ToLowerInvariant() }
 
 if ([string]::IsNullOrWhiteSpace($ProxyMode)) {
   $ProxyMode = if ($ToolProfile -eq "chatgpt_direct" -and $env:PATCHWARDEN_DIRECT_PROXY_MODE) {
@@ -306,6 +311,9 @@ function Write-TunnelStatus {
     watcher_entry_path = $WatcherEntryPath
     validator_module_path = (Join-Path $ProjectRoot "dist\assessments\assessmentStore.js")
     runtime_build_layout = $RuntimeBuildLayout
+    owner_instance_id = if ($OwnerInstanceId) { $OwnerInstanceId } else { $null }
+    supervisor_pid = if ($SupervisorProcessId -gt 0) { $SupervisorProcessId } else { $null }
+    launcher_pid = $PID
   }
   $temporary = "$StatusFile.tmp"
   $payload | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $temporary -Encoding UTF8
@@ -410,6 +418,8 @@ function Write-WatcherStatus {
     watcher_entry_path = $WatcherEntryPath
     validator_module_path = (Join-Path $ProjectRoot "dist\assessments\assessmentStore.js")
     runtime_build_layout = $RuntimeBuildLayout
+    owner_instance_id = if ($OwnerInstanceId) { $OwnerInstanceId } else { $null }
+    supervisor_pid = if ($SupervisorProcessId -gt 0) { $SupervisorProcessId } else { $null }
   }
   $temporary = "$WatcherStatusFile.tmp"
   $payload | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $temporary -Encoding UTF8

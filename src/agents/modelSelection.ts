@@ -27,6 +27,12 @@ export interface ModelSelectionEvidence {
   model_fallback_used: boolean;
 }
 
+export interface ModelArgumentInspection {
+  present: boolean;
+  verified: boolean;
+  flag: string | null;
+}
+
 export interface AdapterDescriptor {
   id: string;
   supports_model_override: boolean;
@@ -242,6 +248,36 @@ export function applyAdapterInvocationArgs(
     ? promptIndex - 1
     : promptIndex;
   return [...output.slice(0, insertionIndex), ...additions, ...output.slice(insertionIndex)];
+}
+
+/** Verify the final shell-free argv without retaining any arguments beyond the model flag name. */
+export function inspectModelArgument(
+  agentName: string,
+  agent: AgentConfig,
+  args: readonly string[],
+  effectiveModel: string | null,
+): ModelArgumentInspection {
+  const flags = getAdapterDescriptor(agentName, agent)?.model_flags || ["--model", "-m"];
+  const occurrences: Array<{ flag: string; value: string | null }> = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    const flag = flags.find((candidate) => arg === candidate || arg.startsWith(`${candidate}=`));
+    if (!flag) continue;
+    if (arg === flag) {
+      occurrences.push({ flag, value: typeof args[index + 1] === "string" ? args[index + 1] : null });
+      index += 1;
+    } else {
+      occurrences.push({ flag, value: arg.slice(flag.length + 1) });
+    }
+  }
+  const verified = effectiveModel === null
+    ? occurrences.length === 0
+    : occurrences.length === 1 && occurrences[0].value === effectiveModel;
+  return {
+    present: occurrences.length > 0,
+    verified,
+    flag: occurrences.length === 1 ? occurrences[0].flag : null,
+  };
 }
 
 export function sanitizeModelSelectionEvidence(value: unknown): ModelSelectionEvidence | null {

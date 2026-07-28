@@ -10,7 +10,7 @@
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { type ServerResponse } from "node:http";
-import { listTasks } from "../../tools/tasks/listTasks.js";
+import { listAllTasks, listTasks } from "../../tools/tasks/listTasks.js";
 import { safeAudit, safeDiffSummary, safeResult, safeTestSummary } from "../../tools/diagnostics/safeViews.js";
 import { getTasksDir } from "../../config.js";
 import {
@@ -45,7 +45,9 @@ export function handleTasks(res: ServerResponse, filters?: TaskFilters): void {
     const historyState: TaskHistoryState | "all" = filters?.history_state === "archived" || filters?.history_state === "all"
       ? filters.history_state
       : "active";
-    const result = listTasks({ limit: 100, history_state: historyState });
+    // Control Center filters and cursor pagination must operate on the entire
+    // history. The public MCP list_tasks response remains separately bounded.
+    const result = listAllTasks({ history_state: historyState });
     const watcher = result.watcher;
     const now = Date.now();
     let augmented = result.tasks.map((t) => augmentTaskWithStale(t, watcher, now));

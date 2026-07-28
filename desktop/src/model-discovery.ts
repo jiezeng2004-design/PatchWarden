@@ -24,6 +24,24 @@ export interface ModelDiscoveryResult {
   readonly sources: readonly string[];
 }
 
+/** Merge trusted local discovery, an optional manual CLI refresh, and the saved selection. */
+export function mergeDiscoveredModels(
+  localModels: readonly DiscoveredModel[],
+  refreshedModels: readonly DiscoveredModel[],
+  selectedModel: string | null | undefined,
+): DiscoveredModel[] {
+  const merged = new Map<string, DiscoveredModel>();
+  for (const model of [...localModels, ...refreshedModels]) merged.set(model.id, model);
+  if (selectedModel && !merged.has(selectedModel)) {
+    merged.set(selectedModel, {
+      id: selectedModel,
+      label: selectedModel,
+      source: "Current PatchWarden selection",
+    });
+  }
+  return [...merged.values()].sort((left, right) => left.id.localeCompare(right.id));
+}
+
 function safeRead(path: string, workspaceRoot: string, projectScoped: boolean = false): string | null {
   try {
     const resolved = resolve(path);
@@ -101,6 +119,18 @@ function extract(id: string, value: unknown, source: string, output: Map<string,
       const models = isRecord(provider) ? asRecord(provider.models) : {};
       Object.keys(models).forEach((modelId) => addModel(output, `${providerId}/${modelId}`, source));
     });
+  } else if (id === "claude") {
+    addModel(output, value.model, source);
+    const env = asRecord(value.env);
+    for (const name of [
+      "ANTHROPIC_MODEL",
+      "ANTHROPIC_DEFAULT_OPUS_MODEL",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL",
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+      "ANTHROPIC_SMALL_FAST_MODEL",
+    ]) {
+      addModel(output, env[name], source);
+    }
   } else if (id === "gemini" || id === "qwen") {
     const model = isRecord(value.model) ? value.model.name : value.model;
     addModel(output, model, source);

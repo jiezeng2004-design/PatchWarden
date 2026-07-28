@@ -13,10 +13,12 @@ export function mayStopOwnedServices(
   ownedChild: unknown,
   capturedChild: unknown,
   probeKind: string,
+  hasMatchingDesktopInstance: boolean,
 ): boolean {
   return Boolean(ownedChild)
     && ownedChild === capturedChild
-    && probeKind === "patchwarden";
+    && probeKind === "patchwarden"
+    && hasMatchingDesktopInstance;
 }
 
 export function createQuitCleanupCoordinator(

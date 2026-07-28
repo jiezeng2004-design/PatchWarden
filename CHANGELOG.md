@@ -1,5 +1,53 @@
 # PatchWarden CHANGELOG
 
+## v1.6.6 (2026-07-28)
+
+> Local worktree version. This entry does not assert that v1.6.6 has been published to GitHub or npm.
+
+### Correctness and safety follow-up
+
+- Fail closed when archived-task cleanup encounters linked or unreadable ancestor paths, before any receipt directory can be created outside the workspace.
+- Restrict Desktop shutdown cleanup to a verified per-instance Core/Direct/Tunnel/Watcher process tree; explicit Stop All remains intentionally global.
+- Make audit and Direct-session read failures explicit, preserve complete Control Center task pagination beyond the MCP 100-item cap, and prevent stale log-category responses from changing the active view.
+- Use Core's canonical Agent configuration revision, show actionable warning/manual acceptance evidence, and keep ordinary task details free of internal status codes.
+
+### Everyday task usability
+
+- Replaced internal acceptance and phase codes with complete bilingual labels,
+  including dynamic action text, counts, tooltips, and accessible names.
+- Limited the initial task page to 20 records while retaining cursor-based
+  loading for longer histories.
+- Removed internal dot/underscore directories and ordinary folders from project
+  selectors; only visible Git or package repositories are listed.
+- Added responsive task layouts that keep acceptance, next action, and controls
+  visible without horizontal scrolling in common desktop windows.
+
+## v1.6.5 (2026-07-28)
+
+### Control Center clarity and retention
+
+- Made task filters last-request-wins, separated Agent completion from
+  acceptance, and added bounded cleanup for old archived task evidence.
+- Reworked audit, Direct-session, and log views around actionable conclusions,
+  accurate history filters, bilingual labels, and category-local clear state.
+- Added runtime-backed UI version badges and kept task/detail navigation state
+  synchronized after actions.
+
+### Agent model discovery and evidence
+
+- Automatically reads allow-listed model fields from local Agent configuration
+  without reading credentials; CLI model listing remains explicitly manual and
+  merges with local results while preserving the saved selection.
+- Verifies the final shell-free Agent argv against the selected effective model,
+  fails closed on mismatch, and records bounded proof without storing complete
+  arguments, prompts, or environment values.
+
+### Desktop shutdown
+
+- Destroys the Desktop tray synchronously when quit begins, before bounded
+  cleanup of Desktop-owned services, so the icon no longer lingers during
+  shutdown.
+
 ## v1.6.4 (2026-07-27)
 
 ### Per-task Agent model selection

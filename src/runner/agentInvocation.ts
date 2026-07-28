@@ -7,7 +7,7 @@ import {
   type AgentRuntimeMetadata,
   type PatchWardenConfig,
 } from "../config.js";
-import { applyAdapterInvocationArgs } from "../agents/modelSelection.js";
+import { applyAdapterInvocationArgs, inspectModelArgument } from "../agents/modelSelection.js";
 import { guardAgentCommand, sanitizePromptArg, type AllowedCommand } from "../security/commandGuard.js";
 import { resolveTrustedExecutable, sanitizeTrustedPath } from "./processSecurity.js";
 
@@ -188,7 +188,7 @@ export function buildAgentInvocation(
 ): AgentInvocation {
   const runtimeConfig = refreshAgentConfigIfActive(config);
   const agentCmd = guardAgentCommand(agentName, runtimeConfig);
-  const runtime = getAgentRuntimeMetadata(agentName, runtimeConfig, { repo_path: repoPath, ...runtimeContext });
+  let runtime: AgentRuntimeMetadata = getAgentRuntimeMetadata(agentName, runtimeConfig, { repo_path: repoPath, ...runtimeContext });
   const agentConfig = runtimeConfig.agents[agentName];
   const invocationArgs = applyAdapterInvocationArgs(
     agentName,
@@ -230,6 +230,16 @@ export function buildAgentInvocation(
     if (arg === "{prompt_file}" && promptMode === "file" && promptFilePath) return promptFilePath;
     return arg;
   });
+  const modelArgument = inspectModelArgument(agentName, agentConfig, resolvedArgs, runtime.effective_model);
+  if (!modelArgument.verified) {
+    throw new Error(`Agent "${agentName}" final model argument does not match the selected model.`);
+  }
+  runtime = {
+    ...runtime,
+    model_argument_present: modelArgument.present,
+    model_argument_verified: true,
+    model_argument_name: modelArgument.flag,
+  };
 
   return {
     command: launch.command,
