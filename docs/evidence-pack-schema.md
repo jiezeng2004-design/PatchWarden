@@ -161,7 +161,7 @@ lineage 的有界摘要，不含完整 rounds 详情或 warnings/errors 原文�
   "node_version": "v20.11.0",
   "os": { "platform": "win32", "arch": "x64" },
   "tool_profile": "full",
-  "schema_epoch": "2026-07-19-v15",
+  "schema_epoch": "2026-07-26-v16",
   "generated_at": "2026-07-09T12:00:00.000Z"
 }
 ```
@@ -213,3 +213,9 @@ lineage 的有界摘要，不含完整 rounds 详情或 warnings/errors 原文�
 - `verify.json` 只存状态摘要，不含 stdout/stderr tail。
 - `.patchwarden/evidence-packs/` 不进入 npm 包（package.json `files` 已排除）。
 - MCP 工具 `export_task_evidence_pack` 的输入参数无破坏性变更，只是输出多了文件。
+
+## 模型与失败证据（schema epoch 2026-07-26-v16）
+
+Lineage 和 `evidence.json` 包含冻结的 `model_selection`：requested/selected Agent、requested/configured/effective model、model source、非敏感 provider、配置 revision、模型参数是否存在，以及 Agent/model fallback 标志。旧任务没有该字段时兼容返回 `null` 或 `agent_default_unobserved`，不会反推 CLI/settings 中未观测到的模型。
+
+失败证据使用 `failure_category`，并保留同值的旧字段 `agent_failure_category`。安全格式的 `err_*` 引用可记录为 `provider_error_reference`；原始凭据和完整输出不会进入证据包。验证字段区分配置命令与实际执行命令：`verify_commands`/`configured_commands` 是配置，`executed_verify_commands`/`commands` 是执行事实。Agent 在验证前失败时写入 `not_run` 和 `agent_failed_before_verification`，而不是误报为未配置验证。

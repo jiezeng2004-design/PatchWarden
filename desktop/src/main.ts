@@ -11,11 +11,12 @@ import {
   utilityProcess,
   type IpcMainInvokeEvent,
 } from "electron";
+import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { detectAgents, getAgentAdapter, refreshAgentModels } from "./agent-detection.js";
-import { discoverModelsForAgent } from "./model-discovery.js";
+import { discoverModelsForAgent, mergeDiscoveredModels } from "./model-discovery.js";
 import {
   atomicWriteJson,
   buildConfig,
@@ -31,20 +32,24 @@ import {
 } from "./config-store.js";
 import type { AgentDetection, AgentDetectionInput, AgentRegistration, DiscoveredModel } from "./agent-adapters.js";
 import type { AgentSelection, DesktopPaths, DesktopPreferences } from "./config-store.js";
-import { mayStopBackend, probeControlCenter, type ProbeFetchImpl } from "./backend-probe.js";
+import {
+  DEFAULT_BACKEND_START_TIMEOUT_MS,
+  hasExpectedDesktopInstance,
+  mayStopBackend,
+  probeControlCenter,
+  waitForBackendStartup,
+  type ProbeFetchImpl,
+} from "./backend-probe.js";
 import {
   createQuitCleanupCoordinator,
   createSerializedRestartScheduler,
   mayStopOwnedServices,
+  sanitizeStartupDiagnostic,
   stopBackendChild,
 } from "./backend-lifecycle.js";
 import { detectTunnelClient, validateTunnelClientPath } from "./runtime-settings.js";
 import { resolveCoreRoot, utilityProcessOptions } from "./runtime-root.js";
-import {
-  computeAgentConfigRevision,
-  evaluateAgentSettingsApplication,
-  type AgentSettingsApplication,
-} from "./agent-settings-apply.js";
+import { evaluateAgentSettingsApplication, type AgentSettingsApplication } from "./agent-settings-apply.js";
 import {
   forgetTunnelCredential,
   getTunnelSetupStatus,
@@ -54,10 +59,13 @@ import {
 
 const CONTROL_URL = "http://127.0.0.1:8090";
 const smokeMode = process.env.PATCHWARDEN_DESKTOP_SMOKE === "1";
+// This value is passed only to the Control Center child created by this process.
+const desktopInstanceId = randomUUID().replace(/-/g, "");
 const ALLOWED_CONTROL_ACTIONS = new Map<string, string>([
   ["start", "/api/start-all"],
   ["stop", "/api/stop-all"],
   ["restart", "/api/restart-all"],
+  ["stop-owned", "/api/desktop/stop-owned"],
 ]);
 
 const desktopRoot = resolve(import.meta.dirname, "..");
@@ -79,17 +87,19 @@ let desktopPaths: DesktopPaths | null = null;
 let preferences: DesktopPreferences | null = null;
 let activeConfigPath: string | null = null;
 let desktopLogPath: string | null = null;
+let backendStartupDiagnostics: { child: ReturnType<typeof utilityProcess.fork>; flush: () => void } | null = null;
 
 const quitCleanup = createQuitCleanupCoordinator(async () => {
   const capturedBackend = ownedBackend;
   if (capturedBackend && activeConfigPath && configIsUsable(activeConfigPath)) {
     try {
       const probe = await probeControlCenter(probeFetch, CONTROL_URL, activeConfigPath, readCoreVersion());
-      if (mayStopOwnedServices(ownedBackend, capturedBackend, probe.kind)) {
+      const hasMatchingDesktopInstance = hasExpectedDesktopInstance(probe, desktopInstanceId);
+      if (mayStopOwnedServices(ownedBackend, capturedBackend, probe.kind, hasMatchingDesktopInstance)) {
         writeAppLog("Stopping services owned by this PatchWarden Desktop instance before exit.");
-        await controlAction("stop");
+        await controlAction("stop-owned");
       } else {
-        writeAppLog(`Skipping service stop during Desktop exit because ownership was not verified (${probe.kind}).`);
+        writeAppLog(`Skipping service stop during Desktop exit because ownership was not verified (${probe.kind}, desktop_instance_match=${hasMatchingDesktopInstance}).`);
       }
     } catch (error) {
       writeAppLog("Desktop exit could not verify or stop its owned PatchWarden services through Control Center.", error);
@@ -165,10 +175,22 @@ app.on("window-all-closed", () => {
 });
 app.on("before-quit", (event) => {
   quitting = true;
+  destroyTrayImmediately();
   if (!gotLock || smokeMode || quitCleanup.isComplete()) return;
   event.preventDefault();
   void quitCleanup.run().finally(() => app.quit());
 });
+
+function destroyTrayImmediately(): void {
+  const activeTray = tray;
+  tray = null;
+  if (!activeTray) return;
+  try {
+    activeTray.destroy();
+  } catch (error) {
+    writeAppLog("Desktop tray could not be destroyed during quit.", error);
+  }
+}
 
 function writeAppLog(message: string, error: unknown = null): void {
   if (!desktopLogPath) return;
@@ -277,10 +299,6 @@ function publicAgentCatalog() {
   const workspaceRoot = configuredWorkspaceRoot();
   return detectedAgents.map((agent) => {
     const local = discoverModelsForAgent(agent.id, workspaceRoot);
-    const mergedModels = new Map<string, DiscoveredModel>();
-    for (const model of [...local.models, ...(refreshedAgentModels.get(agent.id) || [])]) {
-      mergedModels.set(model.id, model);
-    }
     const setting = configured.get(agent.id);
     return {
       id: agent.id,
@@ -289,7 +307,7 @@ function publicAgentCatalog() {
       available: agent.available,
       enabled: setting ? true : false,
       selectedModel: setting?.model || null,
-      models: [...mergedModels.values()].sort((left, right) => left.id.localeCompare(right.id)),
+      models: mergeDiscoveredModels(local.models, refreshedAgentModels.get(agent.id) || [], setting?.model),
       modelSources: [
         ...local.sources,
         ...(refreshedAgentModels.has(agent.id) ? ["Agent CLI"] : []),
@@ -297,27 +315,10 @@ function publicAgentCatalog() {
       commandLabel: agent.command ? `${agent.displayName} (${agent.source})` : null,
       supportsModelOverride: agent.supportsModelOverride,
       supportsModelRefresh: agent.supportsModelRefresh,
+      supportsLocalModelDiscovery: true,
       reason: agent.reason,
     };
   });
-}
-
-async function refreshDetectedModels(force = false): Promise<void> {
-  await Promise.all(detectedAgents.map(async (detection) => {
-    if (!detection.available || !detection.supportsModelRefresh) return;
-    if (!force && refreshedAgentModels.has(detection.id)) return;
-    try {
-      const environmentPolicy = configuredAgentEnvironmentPolicy(detection.id);
-      const models = await refreshAgentModels(detection.id, detection, {
-        cwd: coreRoot,
-        envAllowlist: environmentPolicy.allowedNames,
-        blockedEnvNames: environmentPolicy.blockedNames,
-      });
-      refreshedAgentModels.set(detection.id, models);
-    } catch (error) {
-      writeAppLog(`Agent model discovery failed for ${detection.id}.`, error);
-    }
-  }));
 }
 
 function resolveLanguage(language: string | undefined): "zh-CN" | "en" {
@@ -361,23 +362,50 @@ async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutM
 
 const probeFetch: ProbeFetchImpl = (url) => fetchWithTimeout(url);
 
-async function waitForBackend(timeoutMs: number = 15000): Promise<{ kind: string; version: string | null }> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const result = await probeControlCenter(probeFetch, CONTROL_URL, activeConfigPath, readCoreVersion());
-    if (result.kind === "patchwarden") return result;
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 350));
-  }
-  return { kind: "absent", version: null };
+function flushBackendStartupDiagnostics(child: ReturnType<typeof utilityProcess.fork>): void {
+  if (!backendStartupDiagnostics || backendStartupDiagnostics.child !== child) return;
+  const { flush } = backendStartupDiagnostics;
+  backendStartupDiagnostics = null;
+  flush();
 }
 
-function spawnBackend(): void {
+function captureBackendStartupStderr(child: ReturnType<typeof utilityProcess.fork>): () => void {
+  const stderr = child.stderr;
+  if (!stderr) return () => undefined;
+  const maxBytes = 16 * 1024;
+  const chunks: Buffer[] = [];
+  let capturedBytes = 0;
+  let truncated = false;
+  let flushed = false;
+  const onData = (chunk: Buffer | string) => {
+    if (capturedBytes >= maxBytes) {
+      truncated = true;
+      return;
+    }
+    const source = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
+    const bounded = source.subarray(0, maxBytes - capturedBytes);
+    chunks.push(bounded);
+    capturedBytes += bounded.length;
+    if (bounded.length < source.length) truncated = true;
+  };
+  stderr.on("data", onData);
+  return () => {
+    if (flushed) return;
+    flushed = true;
+    stderr.removeListener("data", onData);
+    const diagnostic = sanitizeStartupDiagnostic(Buffer.concat(chunks).toString("utf8"));
+    if (diagnostic) writeAppLog(`Control Center startup stderr${truncated ? " (truncated)" : ""}: ${diagnostic}`);
+  };
+}
+
+function spawnBackend(): ReturnType<typeof utilityProcess.fork> {
   const entry = join(coreRoot, "dist", "controlCenter.js");
   const detectedTunnel = detectTunnelClient({ config: tunnelDetectionConfig(readJson(activeConfigPath!)), env: process.env });
   const backendEnv: NodeJS.ProcessEnv = {
     PATCHWARDEN_CONFIG: activeConfigPath || "",
     PATCHWARDEN_CONTROL_PORT: "8090",
     PATCHWARDEN_DESKTOP_RUNTIME: "1",
+    PATCHWARDEN_DESKTOP_INSTANCE_ID: desktopInstanceId,
   };
   if (detectedTunnel.available) backendEnv.PATCHWARDEN_TUNNEL_CLIENT_EXE = detectedTunnel.path as string;
   ownedBackend = utilityProcess.fork(entry, ["--port", "8090"], utilityProcessOptions(
@@ -387,10 +415,19 @@ function spawnBackend(): void {
     configuredAgentEnvironmentPolicy(),
   ));
   const child = ownedBackend;
+  if (backendStartupDiagnostics) {
+    backendStartupDiagnostics.flush();
+    backendStartupDiagnostics = null;
+  }
+  backendStartupDiagnostics = { child, flush: captureBackendStartupStderr(child) };
   writeAppLog(`Started owned Control Center child pid=${child?.pid || "unknown"}.`);
-  child?.on("exit", () => {
+  child.on("exit", (code) => {
+    const exitedDuringStartup = backendStartupDiagnostics?.child === child;
+    writeAppLog(`Owned Control Center child exited code=${code} during_startup=${exitedDuringStartup}.`);
+    flushBackendStartupDiagnostics(child);
     if (mayStopBackend(ownedBackend, child)) ownedBackend = null;
   });
+  return child;
 }
 
 async function ensureBackend(): Promise<boolean> {
@@ -415,11 +452,28 @@ async function ensureBackend(): Promise<boolean> {
     blockReason = `Port 8090 is serving PatchWarden ${probe.version}, but this Desktop bundles ${readCoreVersion()}. Stop the old Core and reopen PatchWarden.`;
     return false;
   }
-  spawnBackend();
-  const ready = await waitForBackend();
-  if (ready.kind !== "patchwarden") {
+  const child = spawnBackend();
+  const startup = await waitForBackendStartup({
+    probe: () => probeControlCenter(probeFetch, CONTROL_URL, activeConfigPath, readCoreVersion()),
+    shouldContinue: () => ownedBackend === child,
+  });
+  flushBackendStartupDiagnostics(child);
+  writeAppLog(
+    `Control Center startup probe finished kind=${startup.probe.kind} elapsed_ms=${startup.elapsedMs} attempts=${startup.attempts} final_probe=${startup.finalProbeUsed} stopped_early=${startup.stoppedEarly}.`,
+  );
+  if (startup.probe.kind !== "patchwarden") {
     appMode = "blocked";
-    blockReason = "Control Center 未能在 15 秒内启动，请查看桌面日志。";
+    if (startup.stoppedEarly) {
+      blockReason = "Control Center 进程在启动完成前退出，请查看桌面日志。";
+    } else if (startup.probe.kind === "foreign") {
+      blockReason = "端口 8090 已被其他程序占用，PatchWarden 没有抢占该端口。";
+    } else if (startup.probe.kind === "mismatched_patchwarden") {
+      blockReason = "端口 8090 上已有使用其他配置的 PatchWarden Control Center。请先退出该实例，再重新打开桌面应用。";
+    } else if (startup.probe.kind === "outdated_patchwarden") {
+      blockReason = `Port 8090 is serving PatchWarden ${startup.probe.version}, but this Desktop bundles ${readCoreVersion()}. Stop the old Core and reopen PatchWarden.`;
+    } else {
+      blockReason = `Control Center 未能在 ${DEFAULT_BACKEND_START_TIMEOUT_MS / 1000} 秒内启动，请查看桌面日志。`;
+    }
     await stopOwnedBackend();
     return false;
   }
@@ -700,12 +754,10 @@ function registerDesktopIpc(): void {
   });
   registerIpc("desktop:detect-agents", async () => {
     detectedAgents = await detectAgents();
-    await refreshDetectedModels();
     return publicAgentCatalog();
   });
   registerIpc("desktop:get-agent-settings", async () => {
     if (detectedAgents.length === 0) detectedAgents = await detectAgents();
-    await refreshDetectedModels();
     return publicAgentCatalog();
   });
   registerIpc("desktop:discover-agent-models", async (value) => {
@@ -723,9 +775,11 @@ function registerDesktopIpc(): void {
       blockedEnvNames: environmentPolicy.blockedNames,
     });
     refreshedAgentModels.set(id, models);
+    const catalog = publicAgentCatalog().find((agent) => agent.id === id);
     return {
       agentId: id,
-      models,
+      models: catalog?.models || models,
+      sources: catalog?.modelSources || ["Agent CLI"],
     };
   });
   registerIpc("desktop:save-setup", async (value) => {
@@ -782,12 +836,11 @@ function registerDesktopIpc(): void {
     const selections = parseAgentSelections(asRecord(value).agents);
     if (detectedAgents.length === 0) detectedAgents = await detectAgents();
     const settings = updateAgentSettings(activeConfigPath!, detectedAgents as readonly AgentDetectionInput[], selections);
-    const expectedRevision = computeAgentConfigRevision(asRecord(readJson(activeConfigPath!)).agents);
     let application: AgentSettingsApplication = { applied: false, reason: "backend_unavailable" };
     if (appMode === "ready") {
       try {
         const response = await fetchWithTimeout(`${CONTROL_URL}/api/workspace`, { headers: { Accept: "application/json" } });
-        application = evaluateAgentSettingsApplication(selections, expectedRevision, response.ok ? await response.json() : null);
+        application = evaluateAgentSettingsApplication(selections, response.ok ? await response.json() : null);
       } catch {
         application = { applied: false, reason: "backend_unavailable" };
       }

@@ -424,6 +424,19 @@ export function reconstructTaskEntry(
     plan_id: String(statusData.plan_id || ""),
     title: "",
     agent: String(statusData.agent || ""),
+    requested_model: typeof statusData.requested_model === "string" ? statusData.requested_model : null,
+    model_selection: statusData.model_selection && typeof statusData.model_selection === "object"
+      ? statusData.model_selection as Record<string, unknown>
+      : null,
+    failure_category: statusData.failure_category
+      ? String(statusData.failure_category)
+      : statusData.agent_failure_category
+        ? String(statusData.agent_failure_category)
+        : null,
+    provider_error_reference: typeof statusData.provider_error_reference === "string"
+      && /^err_[A-Za-z0-9_-]{4,120}$/.test(statusData.provider_error_reference)
+      ? statusData.provider_error_reference
+      : null,
     status: taskStatus as TaskEntry["status"],
     phase: String(runtimeData.phase || statusData.phase || "queued") as TaskEntry["phase"],
     acceptance_status: acceptanceStatus as TaskEntry["acceptance_status"],

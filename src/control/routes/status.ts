@@ -7,6 +7,7 @@
  * activity timeline. The remaining endpoints expose the control-center status
  * file, the event timeline, diagnostics (redacted), and tunnel UI URLs.
  */
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { type ServerResponse } from "node:http";
 import { type AgentAvailability } from "../../tools/workspace/listAgents.js";
@@ -41,6 +42,14 @@ import {
   readJsonFileSafe,
   sendJson,
 } from "../shared.js";
+
+const DESKTOP_INSTANCE_ID_PATTERN = /^[a-f0-9]{32}$/iu;
+
+/** Expose only a one-way Desktop instance identity in local diagnostics. */
+export function desktopInstanceIdentitySha256(instanceId: unknown): string | null {
+  if (typeof instanceId !== "string" || !DESKTOP_INSTANCE_ID_PATTERN.test(instanceId)) return null;
+  return createHash("sha256").update(instanceId).digest("hex");
+}
 
 // ── Health suggestions ────────────────────────────────────────────
 
@@ -431,6 +440,7 @@ export async function handleDiagnostics(res: ServerResponse): Promise<void> {
       recent_failures: recentFailures,
       direct_profile_enabled: config.enableDirectProfile ?? false,
       config_identity_sha256: configIdentitySha256,
+      desktop_instance_sha256: desktopInstanceIdentitySha256(process.env.PATCHWARDEN_DESKTOP_INSTANCE_ID),
     };
 
     // Redact any sensitive content that may have leaked into string fields.

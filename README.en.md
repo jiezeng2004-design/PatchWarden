@@ -19,9 +19,9 @@ PatchWarden stores that plan as a workspace-scoped task, lets a preconfigured
 local agent execute it, and returns results, diffs, artifact manifests, and
 independent verification evidence.
 
-[Download Windows installer v1.6.3](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Setup-1.6.3-x64.exe)
-· [Portable ZIP](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Portable-1.6.3-x64.zip)
-· [Checksums](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Desktop-SHA256SUMS.txt)
+[Download Windows installer v1.6.4](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.4/PatchWarden-Setup-1.6.4-x64.exe)
+· [Portable ZIP](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.4/PatchWarden-Portable-1.6.4-x64.zip)
+· [Checksums](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.4/PatchWarden-Desktop-SHA256SUMS.txt)
 · [Three-minute quick start](#three-minute-quick-start)
 · [Discussions](https://github.com/jiezeng2004-design/PatchWarden/discussions)
 
@@ -29,7 +29,7 @@ independent verification evidence.
 
 <sub>Real PatchWarden Desktop first-run UI from a privacy-safe smoke run; no real workspace, account, or credential data is shown.</sub>
 
-Current source version and Windows Release: **v1.6.3**. npm `latest` is
+Current source version: **v1.6.7**; latest Windows Release: **v1.6.4**. npm `latest` is
 published separately by the maintainer; use the npm badge above or query the
 registry for its current value. Use the installer above for the first Windows experience. See the
 [CHANGELOG](CHANGELOG.md), [contributors](CONTRIBUTORS.md), [migration guide](docs/migration-from-safe-bifrost.md), and
@@ -245,12 +245,12 @@ three minutes. A ChatGPT Tunnel is not required for this first run.
 
 ### Option A: Windows installer (recommended for a first run)
 
-1. Download the [Windows installer v1.6.3](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Setup-1.6.3-x64.exe)
-   and its [SHA256 checksum file](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.3/PatchWarden-Desktop-SHA256SUMS.txt).
+1. Download the [Windows installer v1.6.4](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.4/PatchWarden-Setup-1.6.4-x64.exe)
+   and its [SHA256 checksum file](https://github.com/jiezeng2004-design/PatchWarden/releases/download/v1.6.4/PatchWarden-Desktop-SHA256SUMS.txt).
 2. Verify the installer in PowerShell:
 
 ```powershell
-Get-FileHash .\PatchWarden-Setup-1.6.3-x64.exe -Algorithm SHA256
+Get-FileHash .\PatchWarden-Setup-1.6.4-x64.exe -Algorithm SHA256
 ```
 
 Always use the checksum file from the same Release. The installer is not
@@ -1094,10 +1094,12 @@ Desktop Agent model settings control the local Codex, OpenCode, Claude, and
 other CLI `--model` arguments. They cannot change the model selected for the
 current ChatGPT conversation. Runtime evidence stores only the adapter,
 effective model, provider, requested/selected Agent, configuration revision,
-model-argument presence, fallback, and exit code. It never stores complete
-arguments, prompts, or environment values. CLI failures are classified as
-`invalid_arguments`, `authentication`, `rate_limit`, `insufficient_balance`,
-`model_not_found`, `network`, `cli_startup`, or `unknown`.
+model-argument presence, Agent/model fallback, and exit code. It never stores
+complete arguments, prompts, or environment values. CLI failures are classified
+as `model_not_found`, `provider_authentication_failed`, `provider_permission_denied`,
+`provider_insufficient_balance`, `provider_rate_limited`, `provider_server_error`,
+`provider_unavailable`, `provider_timeout`, `network_error`, `cli_configuration_error`,
+`invalid_model_argument`, `agent_process_error`, or `unknown`.
 
 `run_task_loop` is the v1.2 safe orchestration entrypoint. It only composes
 existing `create_task`, `wait_for_task`, safe summary, and `audit_task`
@@ -1330,6 +1332,14 @@ and release-asset checksums independently.
 - [x] Worktree isolation
 - [x] Multi-agent routing
 - [x] Local dashboard
+
+## Per-task Agent model selection
+
+`create_task`, `run_task_loop`, and subgoal task creation accept an optional `requested_model`. Precedence is fixed: task override > repository default in `repoAgentDefaults` > Agent `default_model` (including legacy `model` or static `--model`) > the CLI/settings default. A model override requires an explicit non-`auto` Agent, is passed as one shell-free argv value, and never falls back to another model.
+
+Agent registrations may set `provider`, `default_model`, `available_models`, `allow_unlisted_model_override`, and `settings_policy`. Claude defaults to `settings_policy: "inherit"`, so existing user/project settings and relay configurations continue to work. Set `isolated` explicitly to pass `--setting-sources ""`. OpenCode inherit-mode launches restore the user's pre-Watcher `XDG_CONFIG_HOME` instead of using the Watcher's private empty configuration directory. PatchWarden does not read, migrate, or persist Claude/OpenCode tokens. See [examples/config.example.json](examples/config.example.json).
+
+`request_id` makes `create_task` and `run_task_loop` idempotent. Identical parameters reuse the original task or lineage; changed parameters return `request_id_parameter_mismatch` with `changed_fields`. Frozen model evidence is projected into task status, lineage, audit, safe views, and Evidence Packs. In verification evidence, `verify_commands` means configured commands and `executed_verify_commands` means commands that actually ran; an Agent failure before verification is recorded as `not_run/agent_failed_before_verification`.
 
 ## License
 

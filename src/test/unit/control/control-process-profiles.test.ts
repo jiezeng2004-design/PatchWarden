@@ -1,7 +1,20 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildManageArguments, buildManageEnvironment, classifySupervisorFailure, resolveManageProfiles } from "../../../control/routes/process.js";
-import { buildConnectionSummary, buildExperienceStatus, buildSuggestions, reconcileTunnelStatus } from "../../../control/routes/status.js";
+import {
+  buildManageArguments,
+  buildManageEnvironment,
+  classifySupervisorFailure,
+  readDesktopOwnerInstanceId,
+  resolveManageProfiles,
+} from "../../../control/routes/process.js";
+import {
+  buildConnectionSummary,
+  buildExperienceStatus,
+  buildSuggestions,
+  desktopInstanceIdentitySha256,
+  reconcileTunnelStatus,
+} from "../../../control/routes/status.js";
+import { buildRoutes } from "../../../control/routeTable.js";
 import { config } from "../../../control/shared.js";
 
 describe("Control Center profile selection", () => {
@@ -50,6 +63,26 @@ describe("Control Center supervisor failure classification", () => {
 });
 
 describe("Control Center manager environment", () => {
+  it("exposes only a hash for a valid Desktop instance identifier", () => {
+    const instanceId = "0123456789abcdef0123456789abcdef";
+    assert.match(desktopInstanceIdentitySha256(instanceId) || "", /^[a-f0-9]{64}$/);
+    assert.equal(desktopInstanceIdentitySha256("invalid"), null);
+  });
+
+  it("passes a verified Desktop owner only to the manager's owner-scoped action", () => {
+    const owner = "0123456789abcdef0123456789abcdef";
+    const args = buildManageArguments("stop", "all", owner, true);
+    assert.deepEqual(args.slice(-3), ["-OwnerInstanceId", owner, "-OwnedOnly"]);
+    assert.equal(readDesktopOwnerInstanceId({ PATCHWARDEN_DESKTOP_INSTANCE_ID: owner }), owner);
+    assert.equal(readDesktopOwnerInstanceId({ PATCHWARDEN_DESKTOP_INSTANCE_ID: "not-an-instance" }), null);
+  });
+
+  it("requires the control token for the Desktop owner-scoped stop endpoint", () => {
+    const route = buildRoutes(new URL("http://127.0.0.1:18090/api/desktop/stop-owned"))
+      .find((entry) => entry.method === "POST" && entry.pattern.test("/api/desktop/stop-owned"));
+    assert.equal(route?.requiresToken, true);
+  });
+
   it("drops ambient credentials while preserving explicit lifecycle inputs", () => {
     const names = [
       "CONTROL_PLANE_API_KEY",

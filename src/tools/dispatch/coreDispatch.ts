@@ -91,6 +91,8 @@ export const coreHandlers: ToolHandlerMap = {
         goal: args?.goal ? String(args.goal) : undefined,
         source_task_id: args?.source_task_id ? String(args.source_task_id) : undefined,
         agent: String(args?.agent ?? ""),
+        requested_model: args?.requested_model as string | undefined,
+        request_id: args?.request_id ? String(args.request_id) : undefined,
         repo_path: args?.repo_path ? String(args.repo_path) : undefined,
         test_command: args?.test_command ? String(args.test_command) : undefined,
         verify_commands: Array.isArray(args?.verify_commands)
@@ -113,6 +115,7 @@ export const coreHandlers: ToolHandlerMap = {
           ? args.verify_commands.map((command) => String(command))
           : [],
         agent: args?.agent ? String(args.agent) : undefined,
+        requested_model: args?.requested_model as string | undefined,
         template:
           args?.template === "inspect_only" || args?.template === "release_check"
             ? args.template

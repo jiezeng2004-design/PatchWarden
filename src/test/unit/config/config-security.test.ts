@@ -53,4 +53,24 @@ describe("configuration security defaults", () => {
       );
     }
   });
+
+  it("defaults and bounds archived task retention settings", () => {
+    writeFileSync(configPath, JSON.stringify({ workspaceRoot: root }), "utf-8");
+    const config = reloadConfig(configPath);
+    assert.equal(config.taskArchiveRetentionDays, 30);
+    assert.equal(config.taskArchiveCleanupIntervalHours, 24);
+    assert.equal(config.taskArchiveCleanupMaxBatch, 100);
+
+    for (const invalid of [
+      { taskArchiveRetentionDays: 0 },
+      { taskArchiveRetentionDays: 3651 },
+      { taskArchiveCleanupIntervalHours: 0 },
+      { taskArchiveCleanupIntervalHours: 169 },
+      { taskArchiveCleanupMaxBatch: 0 },
+      { taskArchiveCleanupMaxBatch: 101 },
+    ]) {
+      writeFileSync(configPath, JSON.stringify({ workspaceRoot: root, ...invalid }), "utf-8");
+      assert.throws(() => reloadConfig(configPath), /taskArchive/);
+    }
+  });
 });

@@ -11,4 +11,21 @@ PatchWarden releases remain confirmation-gated. Creating a tag or GitHub Release
 7. Verify `gh release view`, the remote tag, `npm.cmd view patchwarden version`, and `dist-tags.latest`.
 8. Update or close the associated issue only after remote verification succeeds.
 
+## Local artifact retention
+
+Local release and preflight outputs are reproducible working artifacts, not a
+replacement for GitHub Releases. Keep a rolling seven-day local window while
+always preserving the current project version.
+
+1. Confirm `package.json`, the local tag, GitHub Latest, and npm `latest` agree.
+2. Confirm official GitHub Releases still exist for any expired versions whose
+   local artifacts will be removed.
+3. Run `npm.cmd run release:prune` and review every candidate and byte total.
+4. Run `npm.cmd run release:prune -- --apply` only after the preview is correct.
+5. Run the preview again; it must report zero expired candidates, while the
+   current staging directory and Desktop `win-unpacked` runtime remain present.
+
+The retention command is local-only. It must not delete Git commits, tags,
+GitHub Releases, npm versions, unknown paths, or the active Desktop runtime.
+
 Do not publish new versions under the frozen pre-rename package name.

@@ -1,5 +1,105 @@
 # PatchWarden CHANGELOG
 
+## v1.6.7 (2026-07-28)
+
+> Release preparation only. This entry does not assert that v1.6.7 has been published to GitHub or npm.
+
+### Task lineage and audit correctness
+
+- Keep verified terminal tasks ready for audit instead of misclassifying them as verification failures.
+- Synchronize completed task audits into linked lineage rounds and final state, including legacy lineage reconciliation.
+- Treat blocked acceptance decisions as authoritative even when the audit summary passes, so unverified release claims still require approval.
+- Detect remote-write risk only for explicit publish, push, release, upload, or production-deployment actions without leaking risk notes between requests.
+
+### Desktop cold-start reliability
+
+- Allow 45 seconds for cold Control Center startup and perform a final grace probe at the deadline.
+- Record bounded startup timing and child-exit diagnostics while redacting quoted and unquoted credential values before logging.
+
+## v1.6.6 (2026-07-28)
+
+> Local worktree version. This entry does not assert that v1.6.6 has been published to GitHub or npm.
+
+### Correctness and safety follow-up
+
+- Fail closed when archived-task cleanup encounters linked or unreadable ancestor paths, before any receipt directory can be created outside the workspace.
+- Restrict Desktop shutdown cleanup to a verified per-instance Core/Direct/Tunnel/Watcher process tree; explicit Stop All remains intentionally global.
+- Make audit and Direct-session read failures explicit, preserve complete Control Center task pagination beyond the MCP 100-item cap, and prevent stale log-category responses from changing the active view.
+- Use Core's canonical Agent configuration revision, show actionable warning/manual acceptance evidence, and keep ordinary task details free of internal status codes.
+
+### Everyday task usability
+
+- Replaced internal acceptance and phase codes with complete bilingual labels,
+  including dynamic action text, counts, tooltips, and accessible names.
+- Limited the initial task page to 20 records while retaining cursor-based
+  loading for longer histories.
+- Removed internal dot/underscore directories and ordinary folders from project
+  selectors; only visible Git or package repositories are listed.
+- Added responsive task layouts that keep acceptance, next action, and controls
+  visible without horizontal scrolling in common desktop windows.
+
+## v1.6.5 (2026-07-28)
+
+### Control Center clarity and retention
+
+- Made task filters last-request-wins, separated Agent completion from
+  acceptance, and added bounded cleanup for old archived task evidence.
+- Reworked audit, Direct-session, and log views around actionable conclusions,
+  accurate history filters, bilingual labels, and category-local clear state.
+- Added runtime-backed UI version badges and kept task/detail navigation state
+  synchronized after actions.
+
+### Agent model discovery and evidence
+
+- Automatically reads allow-listed model fields from local Agent configuration
+  without reading credentials; CLI model listing remains explicitly manual and
+  merges with local results while preserving the saved selection.
+- Verifies the final shell-free Agent argv against the selected effective model,
+  fails closed on mismatch, and records bounded proof without storing complete
+  arguments, prompts, or environment values.
+
+### Desktop shutdown
+
+- Destroys the Desktop tray synchronously when quit begins, before bounded
+  cleanup of Desktop-owned services, so the icon no longer lingers during
+  shutdown.
+
+## v1.6.4 (2026-07-27)
+
+### Per-task Agent model selection
+
+- Added guarded `requested_model` support across task creation, task loops,
+  retries, repair rounds, and Assessment execution, with repository defaults,
+  deterministic configuration revisions, and immutable model evidence.
+- Added model allowlists, adapter-specific argument normalization, request
+  idempotency, and compatibility projections across summaries, lineage,
+  audits, safe views, and evidence packs.
+- Preserved prompt option/value adjacency for supported CLIs, retained static
+  model arguments for custom adapters, and applied source-repository defaults
+  consistently inside generated worktrees.
+- Preserved Claude relay configuration by default with optional settings
+  isolation, and restored inherited OpenCode configuration when the Watcher
+  owns a private XDG override.
+
+### Failure and verification evidence
+
+- Expanded provider and Agent failure categories, safely retained bounded
+  provider error references, and kept configured verification commands visible
+  when an Agent fails before verification starts.
+- Refreshed Agent configuration once before task model selection and reused the
+  same instance through Assessment creation while preserving fail-closed stale
+  checks for genuine later configuration changes.
+- Restricted command auditing to structured command-bearing evidence and made
+  zero-diff Direct verification explicit through `expected_changes`.
+
+### Windows packaging
+
+- Added an idempotent Desktop shortcut refresh after successful packaging.
+- Regenerated the unsigned Windows installer and portable ZIP, with isolated
+  packaged-runtime and three-viewport Desktop smoke validation.
+- Acknowledged ChatGPT (OpenAI Codex) engineering collaboration in the project
+  contributor record and release notes.
+
 ## v1.6.3 (2026-07-26)
 
 ### Agent model enforcement and evidence

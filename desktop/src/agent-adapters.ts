@@ -61,6 +61,11 @@ export interface AgentRegistration {
   readonly args: readonly string[];
   readonly adapter?: string;
   readonly model?: string;
+  readonly provider?: string;
+  readonly default_model?: string | null;
+  readonly available_models?: readonly string[];
+  readonly allow_unlisted_model_override?: boolean;
+  readonly settings_policy?: "inherit" | "isolated";
   readonly envAllowlist?: readonly string[];
 }
 
@@ -199,6 +204,10 @@ export function buildAgentRegistration(
     args: [...(detection.prefixArgs || []), ...adapter.buildArgs(model)],
     adapter: id,
     ...(model ? { model } : {}),
+    default_model: model,
+    available_models: model ? [model] : [],
+    allow_unlisted_model_override: true,
+    settings_policy: "inherit",
   };
 }
 

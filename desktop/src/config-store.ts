@@ -205,7 +205,9 @@ export function readAgentSettings(configPath: string): AgentSetting[] {
       adapter: adapterId,
       managed: Boolean(adapterId),
       enabled: true,
-      model: typeof agent.model === "string" ? agent.model : inferredModel || null,
+      model: typeof agent.default_model === "string"
+        ? agent.default_model
+        : typeof agent.model === "string" ? agent.model : inferredModel || null,
     };
   });
 }
@@ -229,9 +231,16 @@ export function updateAgentSettings(configPath: string, detections: readonly Age
       continue;
     }
     const previousEnvAllowlist = nextAgents[adapter.id]?.envAllowlist;
+    const previous = nextAgents[adapter.id];
     nextAgents[adapter.id] = {
       ...buildAgentRegistration(adapter.id, detection, selection.model),
       ...(Array.isArray(previousEnvAllowlist) ? { envAllowlist: [...previousEnvAllowlist] } : {}),
+      ...(previous?.provider ? { provider: previous.provider } : {}),
+      ...(previous?.settings_policy ? { settings_policy: previous.settings_policy } : {}),
+      ...(Array.isArray(previous?.available_models) ? { available_models: [...previous.available_models] } : {}),
+      ...(typeof previous?.allow_unlisted_model_override === "boolean"
+        ? { allow_unlisted_model_override: previous.allow_unlisted_model_override }
+        : {}),
     };
   }
   const updated = { ...config, agents: nextAgents };

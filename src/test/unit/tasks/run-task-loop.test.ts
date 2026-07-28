@@ -8,7 +8,9 @@ import {
   runTaskLoopCoordinatedWithDeps,
   runTaskLoopWithDeps,
 } from "../../../tools/tasks/runTaskLoop.js";
+import { MODEL_SELECTION_REPO_PATH } from "../../../tools/tasks/createTask.js";
 import { createLineageId, getTaskLineage, writeTaskLineage } from "../../../tools/tasks/taskLineage.js";
+import { PatchWardenError } from "../../../errors.js";
 
 let tempDir: string;
 let prevConfigEnv: string | undefined;
@@ -51,10 +53,14 @@ function depsFor(options: {
   const decisions = [...(options.decisions || ["allow"])];
   const tasks = [...(options.tasks || ["task-main"])];
   const calls: string[] = [];
+  const inputs: any[] = [];
+  let lastRequestedModel: string | null = null;
   const deps = {
     createTask: ((input: any) => {
+      inputs.push(input);
       calls.push(input.execution_mode === "assess_only" ? "assess" : "execute");
       if (input.execution_mode === "assess_only") {
+        lastRequestedModel = input.requested_model ?? null;
         const decision = decisions.shift() || "allow";
         return {
           assessment_id: `assessment-${calls.length}`,
@@ -62,7 +68,24 @@ function depsFor(options: {
           reason_codes: decision === "allow" ? ["repo_scoped"] : ["release_template_needs_confirm"],
         };
       }
-      return { task_id: tasks.shift() || `task-${calls.length}`, status: "pending" };
+      return {
+        task_id: tasks.shift() || `task-${calls.length}`,
+        status: "pending",
+        model_selection: {
+          requested_agent: "fake",
+          selected_agent: "fake",
+          requested_model: lastRequestedModel,
+          configured_default_model: null,
+          effective_model: lastRequestedModel,
+          model_source: lastRequestedModel ? "task_override" : "agent_default_unobserved",
+          provider: null,
+          model_argument_present: lastRequestedModel !== null,
+          agent_config_revision: "a".repeat(64),
+          fallback_used: false,
+          agent_fallback_used: false,
+          model_fallback_used: false,
+        },
+      };
     }) as any,
     waitForTask: (async (taskId: string) => ({
       task_id: taskId,
@@ -94,15 +117,19 @@ function depsFor(options: {
         recommended_next_actions: ["accept"],
       };
     }) as any,
-    createDirectSession: ((input: any) => ({
-      session_id: "direct-test",
-      repo_path: input.repo_path,
-      resolved_repo_path: tempDir,
-      workspace_clean: true,
-      allowed_commands: ["npm test", "npm run build"],
-      expires_at: "2026-07-04T13:00:00.000Z",
-      next_action: "run_verification",
-    })) as any,
+    createDirectSession: ((input: any) => {
+      calls.push(`direct-session:${String(input.expected_changes)}`);
+      return {
+        session_id: "direct-test",
+        repo_path: input.repo_path,
+        resolved_repo_path: tempDir,
+        workspace_clean: true,
+        allowed_commands: ["npm test", "npm run build"],
+        expected_changes: input.expected_changes !== false,
+        expires_at: "2026-07-04T13:00:00.000Z",
+        next_action: "run_verification",
+      };
+    }) as any,
     runDirectVerificationBundle: (async () => ({
       session_id: "direct-test",
       status: options.directBundleStatus || "passed",
@@ -162,7 +189,7 @@ function depsFor(options: {
     now: () => new Date("2026-07-04T12:00:00.000Z"),
     sleep: async () => {},
   };
-  return { deps, calls };
+  return { deps, calls, inputs };
 }
 
 describe("runTaskLoop", () => {
@@ -187,13 +214,36 @@ describe("runTaskLoop", () => {
       verify_commands: ["npm test"],
     }, deps);
 
-    assert.equal(result.stop_reason, "success");
+    assert.equal(result.stop_reason, "audit_accepted");
     assert.equal(result.final_status, "accepted");
     assert.equal(result.tasks.main, "task-main");
     const payload = JSON.stringify(result);
     assert.ok(!payload.includes("stdout"));
     assert.ok(!payload.includes("stderr"));
     assert.ok(!payload.includes("diff.patch"));
+  });
+
+  it("keeps verified terminal work ready for audit when no audit has run", async () => {
+    const { deps } = depsFor({
+      audits: { "task-main": { verdict: "not_run" } },
+    });
+    const result = await runTaskLoopWithDeps({
+      repo_path: ".",
+      goal: "Inspect files without changing them",
+      agent: "fake",
+      template: "inspect_only",
+      verify_commands: ["npm test"],
+      max_iterations: 1,
+      auto_fix_tests: false,
+    }, deps);
+
+    assert.equal(result.final_status, "ready_for_audit");
+    assert.notEqual(result.final_status, "needs_fix");
+    assert.equal(result.stop_reason, "verification_passed");
+    assert.notEqual(result.stop_reason, "verification_failed");
+    assert.equal(result.next_action, "audit_task");
+    assert.equal(result.verification.latest_status, "passed");
+    assert.equal(result.verification.passed, true);
   });
 
   it("emits lineage and main task evidence before waiting for completion", async () => {
@@ -319,7 +369,7 @@ describe("runTaskLoop", () => {
       direct_verify: false,
     }, deps);
 
-    assert.equal(result.stop_reason, "success");
+    assert.equal(result.stop_reason, "audit_accepted");
     assert.equal(result.direct_verify, false);
     assert.deepEqual(result.tasks.direct_sessions, []);
     assert.equal(result.isolation_mode, "current_repo");
@@ -336,14 +386,81 @@ describe("runTaskLoop", () => {
       scope_files: ["src/index.ts"],
     }, deps);
 
-    assert.equal(result.stop_reason, "success");
+    assert.equal(result.stop_reason, "audit_accepted");
     assert.equal(result.agent_routing?.requested_agent, "auto");
     assert.equal(result.agent_routing?.selected_agent, "fake");
     assert.equal(result.agent_routing?.reason, "test route");
   });
 
-  it("uses worktree isolation for task execution and records worktree evidence", async () => {
+  it("inherits requested_model through assessment and every repair round", async () => {
+    const { deps, inputs } = depsFor({
+      tasks: ["task-main", "task-fix"],
+      statuses: { "task-main": "failed_verification", "task-fix": "done_by_agent" },
+      verifications: { "task-main": "failed", "task-fix": "passed" },
+      audits: {
+        "task-main": { verdict: "warn", warn: ["test_exit_code"] },
+        "task-fix": { verdict: "pass" },
+      },
+    });
+    const result = await runTaskLoopWithDeps({
+      repo_path: ".",
+      goal: "Repair with one fixed model",
+      agent: "fake",
+      requested_model: "agnes/agnes-2.0-flash",
+      verify_commands: ["npm test"],
+      max_iterations: 2,
+    }, deps);
+
+    assert.deepEqual(inputs.filter((input) => input.execution_mode === "assess_only").map((input) => input.requested_model), [
+      "agnes/agnes-2.0-flash",
+      "agnes/agnes-2.0-flash",
+    ]);
+    assert.equal(result.model_selection?.requested_model, "agnes/agnes-2.0-flash");
+    assert.equal(result.model_selection?.model_fallback_used, false);
+  });
+
+  it("reports requested_model as the only changed idempotency field", async () => {
     const { deps, calls } = depsFor({});
+    const input = {
+      repo_path: ".",
+      goal: "Stable model request",
+      agent: "fake",
+      requested_model: "agnes/model-a",
+      verify_commands: ["npm test"],
+      request_id: "request-model-conflict-001",
+      wait_for_completion: true,
+    };
+    await runTaskLoopCoordinatedWithDeps(input, deps);
+    await assert.rejects(
+      runTaskLoopCoordinatedWithDeps({ ...input, requested_model: "agnes/model-b" }, deps),
+      (error: unknown) => {
+        assert.ok(error instanceof PatchWardenError);
+        assert.equal(error.reason, "request_id_parameter_mismatch");
+        assert.deepEqual(error.details.changed_fields, ["requested_model"]);
+        return true;
+      },
+    );
+  });
+
+  it("rejects requested_model with automatic Agent routing", async () => {
+    const { deps } = depsFor({});
+    for (const agent of [undefined, "auto"] as const) {
+      await assert.rejects(
+        runTaskLoopWithDeps({
+          repo_path: ".",
+          goal: "Do not auto-route a model override",
+          ...(agent === undefined ? {} : { agent }),
+          requested_model: "agnes/model-a",
+          verify_commands: ["npm test"],
+        }, deps),
+        (error: unknown) => error instanceof PatchWardenError
+          && error.reason === "requested_model_requires_explicit_agent",
+      );
+    }
+  });
+
+  it("uses worktree isolation for task execution and records worktree evidence", async () => {
+    const { deps, calls, inputs } = depsFor({});
     const result = await runTaskLoopWithDeps({
       repo_path: "child-repo",
       goal: "Run in a worktree",
@@ -353,16 +470,19 @@ describe("runTaskLoop", () => {
       worktree_cleanup: "keep",
     }, deps);
 
-    assert.equal(result.stop_reason, "success");
+    assert.equal(result.stop_reason, "audit_accepted");
     assert.equal(result.isolation_mode, "worktree");
     assert.equal(result.worktree.worktree_id, "wt-test");
     assert.equal(result.worktree.branch, "pw-test");
     assert.equal(result.worktree.status, "active");
-    assert.ok(calls.includes(`worktree:${normalize(join(tempDir, "child-repo"))}`));
+    const sourceRepo = normalize(join(tempDir, "child-repo"));
+    assert.ok(calls.includes(`worktree:${sourceRepo}`));
+    assert.equal(inputs[0][MODEL_SELECTION_REPO_PATH], sourceRepo);
+    assert.equal(inputs[1][MODEL_SELECTION_REPO_PATH], sourceRepo);
   });
 
   it("records Direct verification evidence when direct_verify succeeds", async () => {
-    const { deps } = depsFor({});
+    const { deps, calls } = depsFor({});
     const result = await runTaskLoopWithDeps({
       repo_path: ".",
       goal: "Run with Direct verification",
@@ -371,16 +491,36 @@ describe("runTaskLoop", () => {
       direct_verify: true,
     }, deps);
 
-    assert.equal(result.stop_reason, "success");
+    assert.equal(result.stop_reason, "audit_accepted");
     assert.equal(result.direct_verify, true);
     assert.equal(result.tasks.direct_sessions.length, 1);
     assert.equal(result.tasks.direct_sessions[0].session_id, "direct-test");
     assert.equal(result.tasks.direct_sessions[0].status, "passed");
     assert.equal(result.tasks.direct_sessions[0].audit_decision, "pass");
+    assert.ok(calls.includes("direct-session:false"));
     const payload = JSON.stringify(result);
     assert.ok(!payload.includes("stdout_tail"));
     assert.ok(!payload.includes("stderr_tail"));
     assert.ok(!payload.includes("diff.patch"));
+  });
+
+  it("runs Direct verification before returning a verified task as ready for audit", async () => {
+    const { deps, calls } = depsFor({
+      audits: { "task-main": { verdict: "not_run" } },
+    });
+    const result = await runTaskLoopWithDeps({
+      repo_path: ".",
+      goal: "Verify read-only work with Direct",
+      agent: "fake",
+      verify_commands: ["npm test"],
+      direct_verify: true,
+      auto_fix_tests: false,
+    }, deps);
+
+    assert.equal(result.final_status, "ready_for_audit");
+    assert.equal(result.stop_reason, "verification_passed");
+    assert.equal(result.tasks.direct_sessions[0].status, "passed");
+    assert.ok(calls.includes("direct-session:false"));
   });
 
   it("stops clearly when direct_verify is requested but Direct profile is disabled", async () => {
@@ -457,7 +597,7 @@ describe("runTaskLoop", () => {
       max_iterations: 2,
     }, deps);
 
-    assert.equal(result.stop_reason, "success");
+    assert.equal(result.stop_reason, "audit_accepted");
     assert.equal(result.tasks.main, "task-main");
     assert.deepEqual(result.tasks.fix, ["task-fix"]);
     assert.equal(result.rounds.length, 2);

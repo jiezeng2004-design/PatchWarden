@@ -12,6 +12,9 @@ param(
   [switch]$WhatIf,
   [switch]$Json,
   [switch]$Background,
+  [ValidatePattern('^[A-Fa-f0-9]{32}$')]
+  [string]$OwnerInstanceId = "",
+  [switch]$OwnedOnly,
   [int]$KillTimeoutSeconds = 10
 )
 
@@ -21,6 +24,14 @@ $ProjectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $LauncherDirectory = Join-Path $ProjectRoot "scripts\launchers"
 $LocalLauncherDirectory = Join-Path $ProjectRoot ".local\launchers"
 $PatchWardenRuntimeRoot = Join-Path $env:LOCALAPPDATA "patchwarden"
+
+if ($OwnedOnly -and $Action -ne "stop") {
+  throw "-OwnedOnly is supported only for the stop action."
+}
+if ($OwnedOnly -and [string]::IsNullOrWhiteSpace($OwnerInstanceId)) {
+  throw "-OwnedOnly requires a verified -OwnerInstanceId."
+}
+if ($OwnerInstanceId) { $OwnerInstanceId = $OwnerInstanceId.ToLowerInvariant() }
 
 $ModeDefinitions = [ordered]@{
   core = [pscustomobject]@{
@@ -124,6 +135,7 @@ function Write-BackgroundStartingState {
     tool_manifest_sha256 = if ($previous) { $previous.tool_manifest_sha256 } else { $null }
     tools_ready = [bool]($previous -and $previous.tools_ready)
     core_tools_ready = [bool]($Definition.Key -eq "core" -and $previous -and $previous.core_tools_ready)
+    owner_instance_id = if ($OwnerInstanceId) { $OwnerInstanceId } else { $null }
   }
   Write-JsonFileAtomic -Path $statusPath -Payload $payload
 }
@@ -137,6 +149,7 @@ function Write-BackgroundSupervisorState {
     checked_at = (Get-Date).ToUniversalTime().ToString("o")
     stdout_log = Join-Path $Definition.RuntimeDirectory "supervisor.stdout.log"
     stderr_log = Join-Path $Definition.RuntimeDirectory "supervisor.stderr.log"
+    owner_instance_id = if ($OwnerInstanceId) { $OwnerInstanceId } else { $null }
   }
   Write-JsonFileAtomic -Path (Join-Path $Definition.RuntimeDirectory "supervisor-status.json") -Payload $payload
 }
@@ -477,6 +490,7 @@ function Set-StoppedRuntimeState {
   $state | Add-Member -NotePropertyName last_exit_code -NotePropertyValue $null -Force
   $state | Add-Member -NotePropertyName stdout_tail -NotePropertyValue @() -Force
   $state | Add-Member -NotePropertyName stderr_tail -NotePropertyValue @() -Force
+  $state | Add-Member -NotePropertyName owner_instance_id -NotePropertyValue $null -Force
   $state | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $statusPath -Encoding UTF8
 
   foreach ($name in @("tunnel-health-url.txt", "tunnel-client.pid", "watcher-status.json")) {
@@ -538,6 +552,166 @@ function Stop-Mode {
   Set-StoppedRuntimeState -Definition $Definition
 }
 
+function Get-ReceiptProcessId {
+  param($State, [string]$Property)
+  if (-not $State) { return $null }
+  $entry = $State.PSObject.Properties[$Property]
+  if (-not $entry) { return $null }
+  $parsed = 0
+  if (-not [int]::TryParse([string]$entry.Value, [ref]$parsed) -or $parsed -le 0) { return $null }
+  return $parsed
+}
+
+function Test-ProcessDescendsFrom {
+  param($ByPid, [int]$ProcessId, [int]$AncestorId)
+  $currentId = $ProcessId
+  $visited = [System.Collections.Generic.HashSet[int]]::new()
+  while ($currentId -gt 0) {
+    if ($currentId -eq $AncestorId) { return $true }
+    if (-not $visited.Add($currentId)) { return $false }
+    $current = $ByPid[$currentId]
+    if (-not $current) { return $false }
+    $currentId = [int]$current.ParentProcessId
+  }
+  return $false
+}
+
+function Test-BackgroundSupervisorProcess {
+  param($Process, $Definition)
+  if (-not $Process) { return $false }
+  $commandLine = [string]$Process.CommandLine
+  if (-not (Test-ProjectCommandLine -CommandLine $commandLine)) { return $false }
+  $toolProfilePattern = '(?i)"?-ToolProfile"?(?:=|\s+)"?' + [Regex]::Escape($Definition.ToolProfile) + '(?:"|\s|$)'
+  $profilePattern = '(?i)"?-Profile"?(?:=|\s+)"?' + [Regex]::Escape($Definition.Profile) + '(?:"|\s|$)'
+  return $commandLine -match '(?i)run-background-supervisor\.ps1' -and $commandLine -match $toolProfilePattern -and $commandLine -match $profilePattern -and (Test-OwnerInstanceArgument -CommandLine $commandLine)
+}
+
+function Test-TunnelLauncherProcess {
+  param($Process, $Definition)
+  if (-not $Process) { return $false }
+  $commandLine = [string]$Process.CommandLine
+  if (-not (Test-ProjectCommandLine -CommandLine $commandLine)) { return $false }
+  $toolProfilePattern = '(?i)"?-ToolProfile"?(?:=|\s+)"?' + [Regex]::Escape($Definition.ToolProfile) + '(?:"|\s|$)'
+  $profilePattern = '(?i)"?-Profile"?(?:=|\s+)"?' + [Regex]::Escape($Definition.Profile) + '(?:"|\s|$)'
+  return $commandLine -match '(?i)start-patchwarden-tunnel\.ps1' -and $commandLine -match $toolProfilePattern -and $commandLine -match $profilePattern -and (Test-OwnerInstanceArgument -CommandLine $commandLine)
+}
+
+function Test-OwnerInstanceArgument {
+  param([string]$CommandLine)
+  if (-not $CommandLine -or -not $OwnerInstanceId) { return $false }
+  $ownerPattern = '(?i)"?-OwnerInstanceId"?(?:=|\s+)"?' + [Regex]::Escape($OwnerInstanceId) + '(?:"|\s|$)'
+  return $CommandLine -match $ownerPattern
+}
+
+function Test-WatcherProcessForDefinition {
+  param($Process)
+  if (-not $Process) { return $false }
+  $commandLine = [string]$Process.CommandLine
+  return (Test-ProjectCommandLine -CommandLine $commandLine) -and $commandLine -match '(?i)dist[\\/]runner[\\/]watch\.js'
+}
+
+function Get-OwnedRuntimeReceipt {
+  param($Definition)
+  $tunnelState = Read-JsonFileSafe -Path (Join-Path $Definition.RuntimeDirectory "tunnel-status.json")
+  $supervisorState = Read-JsonFileSafe -Path (Join-Path $Definition.RuntimeDirectory "supervisor-status.json")
+  $watcherState = if ($Definition.HasWatcher) { Read-JsonFileSafe -Path (Join-Path $Definition.RuntimeDirectory "watcher-status.json") } else { $null }
+  $requiredStates = @($tunnelState, $supervisorState)
+  if ($Definition.HasWatcher) { $requiredStates += $watcherState }
+  foreach ($state in $requiredStates) {
+    if (-not $state -or [string]$state.owner_instance_id -cne $OwnerInstanceId) {
+      return [pscustomobject]@{ Valid = $false; Reason = "owner_receipt_mismatch"; Processes = @() }
+    }
+  }
+
+  $allProcesses = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+  $byPid = @{}
+  foreach ($process in $allProcesses) { $byPid[[int]$process.ProcessId] = $process }
+  $supervisorPid = Get-ReceiptProcessId -State $supervisorState -Property "pid"
+  $launcherPid = Get-ReceiptProcessId -State $tunnelState -Property "launcher_pid"
+  $tunnelPid = Get-ReceiptProcessId -State $tunnelState -Property "pid"
+  if (-not $supervisorPid -or -not $launcherPid -or -not $tunnelPid) {
+    return [pscustomobject]@{ Valid = $false; Reason = "owner_receipt_missing_process"; Processes = @() }
+  }
+  if ((Get-ReceiptProcessId -State $tunnelState -Property "supervisor_pid") -ne $supervisorPid) {
+    return [pscustomobject]@{ Valid = $false; Reason = "owner_receipt_supervisor_mismatch"; Processes = @() }
+  }
+  $supervisor = $byPid[$supervisorPid]
+  $launcher = $byPid[$launcherPid]
+  $tunnel = $byPid[$tunnelPid]
+  if (-not $supervisor) {
+    return [pscustomobject]@{ Valid = $false; Reason = "owner_supervisor_process_missing"; Processes = @() }
+  }
+  if (-not (Test-BackgroundSupervisorProcess -Process $supervisor -Definition $Definition)) {
+    return [pscustomobject]@{ Valid = $false; Reason = "owner_supervisor_process_mismatch"; Processes = @() }
+  }
+  if (-not (Test-TunnelLauncherProcess -Process $launcher -Definition $Definition) -or -not (Test-ProcessDescendsFrom -ByPid $byPid -ProcessId $launcherPid -AncestorId $supervisorPid)) {
+    return [pscustomobject]@{ Valid = $false; Reason = "owner_launcher_process_mismatch"; Processes = @() }
+  }
+  if (-not (Test-TunnelProcessForMode -Process $tunnel -Definition $Definition) -or -not (Test-ProcessDescendsFrom -ByPid $byPid -ProcessId $tunnelPid -AncestorId $launcherPid)) {
+    return [pscustomobject]@{ Valid = $false; Reason = "owner_tunnel_process_mismatch"; Processes = @() }
+  }
+
+  $processes = @(
+    [pscustomobject]@{ role = "supervisor"; pid = $supervisorPid; process = $supervisor },
+    [pscustomobject]@{ role = "launcher"; pid = $launcherPid; process = $launcher },
+    [pscustomobject]@{ role = "tunnel"; pid = $tunnelPid; process = $tunnel }
+  )
+  if ($Definition.HasWatcher) {
+    $watcherPid = Get-ReceiptProcessId -State $watcherState -Property "pid"
+    $watcherLauncherPid = Get-ReceiptProcessId -State $watcherState -Property "launcher_pid"
+    $watcherSupervisorPid = Get-ReceiptProcessId -State $watcherState -Property "supervisor_pid"
+    $watcher = if ($watcherPid) { $byPid[$watcherPid] } else { $null }
+    if (-not $watcherPid -or $watcherLauncherPid -ne $launcherPid -or $watcherSupervisorPid -ne $supervisorPid -or -not (Test-WatcherProcessForDefinition -Process $watcher) -or -not (Test-ProcessDescendsFrom -ByPid $byPid -ProcessId $watcherPid -AncestorId $launcherPid)) {
+      return [pscustomobject]@{ Valid = $false; Reason = "owner_watcher_process_mismatch"; Processes = @() }
+    }
+    $processes += [pscustomobject]@{ role = "watcher"; pid = $watcherPid; process = $watcher }
+  }
+  return [pscustomobject]@{ Valid = $true; Reason = $null; Processes = $processes }
+}
+
+function Stop-OwnedMode {
+  param($Definition)
+  $receipt = Get-OwnedRuntimeReceipt -Definition $Definition
+  if (-not $receipt.Valid) {
+    Write-Host "[stop-owned:$($Definition.Key)] Skipped because ownership could not be verified ($($receipt.Reason))." -ForegroundColor Yellow
+    return $false
+  }
+
+  $rank = @{ supervisor = 0; launcher = 1; tunnel = 2; watcher = 2 }
+  $stopped = $true
+  foreach ($entry in @($receipt.Processes | Sort-Object @{ Expression = { $rank[$_.role] }; Descending = $true }, pid)) {
+    if ($WhatIf) {
+      Write-Host "  WHAT-IF: stop owned $($entry.role) PID $($entry.pid)" -ForegroundColor Magenta
+      continue
+    }
+    try {
+      $process = Get-Process -Id $entry.pid -ErrorAction Stop
+      $process.Kill()
+      Write-Host "  Signaled owned $($entry.role) PID $($entry.pid)." -ForegroundColor Green
+    } catch {
+      Write-Host "  Owned $($entry.role) PID $($entry.pid) already exited after receipt verification." -ForegroundColor DarkGray
+    }
+  }
+  if (-not $WhatIf) {
+    foreach ($entry in $receipt.Processes) {
+      try {
+        $process = Get-Process -Id $entry.pid -ErrorAction Stop
+        [void]$process.WaitForExit($KillTimeoutSeconds * 1000)
+        if (-not $process.HasExited) { $stopped = $false }
+      } catch {
+        # A descendant can exit while its parent is being stopped; it was
+        # verified before any signal was sent, so its absence is safe.
+      }
+    }
+  }
+  if (-not $stopped) {
+    Write-Host "[stop-owned:$($Definition.Key)] Runtime receipts were retained because not every owned process stopped." -ForegroundColor Yellow
+    return $false
+  }
+  Set-StoppedRuntimeState -Definition $Definition
+  return $true
+}
+
 function Invoke-Build {
   if ($SkipBuild) {
     Write-Host "[build] Skipped." -ForegroundColor DarkYellow
@@ -583,6 +757,7 @@ function Start-Mode {
       "-Profile", $Definition.Profile,
       "-HealthListenAddr", $healthListenAddr
     )
+    if ($OwnerInstanceId) { $arguments += @("-OwnerInstanceId", $OwnerInstanceId) }
     if (-not $Definition.HasWatcher) { $arguments += "-SkipWatcher" }
     if ($WhatIf) {
       Write-Host "[start:$($Definition.Key)] WHAT-IF: start hidden supervisor for $($Definition.Profile)" -ForegroundColor Magenta
@@ -655,7 +830,21 @@ function Invoke-ControlAction {
       Assert-NoUnsafePortConflicts -Definitions $definitions
       foreach ($definition in $definitions) { Start-Mode -Definition $definition }
     }
-    "stop" { foreach ($definition in $definitions) { Stop-Mode -Definition $definition } }
+    "stop" {
+      if ($OwnedOnly) {
+        $unverifiedModes = @()
+        foreach ($definition in $definitions) {
+          if (-not (Stop-OwnedMode -Definition $definition)) {
+            $unverifiedModes += $definition.Key
+          }
+        }
+        if ($unverifiedModes.Count -gt 0) {
+          throw "Owner-scoped stop was skipped because ownership could not be verified for: $($unverifiedModes -join ', ')."
+        }
+      } else {
+        foreach ($definition in $definitions) { Stop-Mode -Definition $definition }
+      }
+    }
     "kill" { foreach ($definition in $definitions) { Stop-Mode -Definition $definition -ForceCleanup } }
     "restart" {
       Assert-NoUnsafePortConflicts -Definitions $definitions

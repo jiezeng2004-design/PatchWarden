@@ -66,6 +66,7 @@ export interface ChildEnvironmentOptions {
   cwd: string;
   allowedNames?: readonly string[];
   blockedNames?: readonly string[];
+  overrides?: Readonly<Record<string, string | null>>;
   sourceEnvironment?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
 }
@@ -114,6 +115,23 @@ export function buildChildEnvironment(options: ChildEnvironmentOptions): NodeJS.
     if (entry && entry[1] !== undefined) environment[entry[0]] = entry[1];
   }
 
+  for (const [name, value] of Object.entries(options.overrides ?? {})) {
+    if (!isEnvironmentVariableName(name)) {
+      throw new Error(`Invalid child environment override name: "${name}"`);
+    }
+    if (blocked.has(name.toUpperCase())) {
+      throw new Error(`Blocked child environment variable cannot be overridden: "${name}"`);
+    }
+    for (const existingName of Object.keys(environment)) {
+      if (environmentNamesEqual(existingName, name, platform)) delete environment[existingName];
+    }
+    if (value === null) continue;
+    if (value.includes("\0")) {
+      throw new Error(`Invalid child environment override value for "${name}"`);
+    }
+    environment[name] = value;
+  }
+
   if (platform === "win32") {
     // The MCP SDK's safe default environment includes SystemRoot and PATH but
     // intentionally omits ComSpec and PATHEXT. npm 10 can start in that
@@ -136,6 +154,10 @@ export function buildChildEnvironment(options: ChildEnvironmentOptions): NodeJS.
     environment[pathEntry[0]] = sanitizeTrustedPath(pathEntry[1] || "", options.cwd, platform);
   }
   return environment;
+}
+
+function environmentNamesEqual(left: string, right: string, platform: NodeJS.Platform): boolean {
+  return platform === "win32" ? left.toUpperCase() === right.toUpperCase() : left === right;
 }
 
 /** Build a non-interactive Git environment that disables repo-defined hooks and fsmonitor. */

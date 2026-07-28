@@ -11,6 +11,9 @@ interface AuditRisk {
 
 export interface AuditTaskOutput {
   task_id: string;
+  model_selection: Record<string, unknown> | null;
+  failure_category: string | null;
+  provider_error_reference: string | null;
   verdict: "pass" | "warn" | "fail";
   acceptance: {
     verdict: string;
@@ -33,14 +36,15 @@ export interface AuditTaskOutput {
 }
 import { readFileSync, existsSync, opendirSync, statSync } from "node:fs";
 import { join, resolve, relative, basename, sep, isAbsolute } from "node:path";
-import { getTasksDir, getConfig } from "../../config.js";
+import { getTasksDir, getConfig, sanitizeAgentRuntimeMetadata } from "../../config.js";
 import { guardReadPath, guardWorkspacePath } from "../../security/pathGuard.js";
 import { guardSensitivePath, isSensitivePath } from "../../security/sensitiveGuard.js";
 import { evaluateAcceptance } from "../../goal/acceptanceEngine.js";
 import { renderAcceptanceMarkdown } from "../../goal/acceptanceTemplate.js";
 import type { ChangedFile } from "../../runner/changeCapture.js";
-import { atomicWriteFileSync } from "../../utils/atomicFile.js";
+import { atomicWriteFileSync, atomicWriteJsonFileSync } from "../../utils/atomicFile.js";
 import { mutateTaskStatus } from "../../runner/taskStatusStore.js";
+import { syncTaskAuditToLineages } from "../tasks/taskLineage.js";
 import {
   readTextFilePrefixSync,
   readTextFileTailLinesSync,
@@ -65,8 +69,14 @@ interface TaskStatusData {
   verification?: string[];
   goal?: string;
   artifact_status?: string;
+  model_selection?: Record<string, unknown>;
+  agent_runtime?: Record<string, unknown>;
+  failure_category?: string;
+  agent_failure_category?: string;
+  provider_error_reference?: string;
   acceptance_status?: string;
   updated_at?: string;
+  lineage_id?: string;
 }
 
 interface ChangedFilesEvidence {
@@ -394,18 +404,29 @@ const HIGH_RISK_COMMAND_PATTERNS = [
 ];
 function extractCommands(text: string): ExtractedCommand[] {
     const found: ExtractedCommand[] = [];
+    const evidence = extractCommandEvidence(text);
     const runRe = /npm(?:\.cmd)?\s+run\s+([a-zA-Z0-9:_-]+)/gi;
     let m;
-    while ((m = runRe.exec(text)) !== null) found.push({ type: "npm-run", name: m[1] });
+    while ((m = runRe.exec(evidence)) !== null) found.push({ type: "npm-run", name: m[1] });
     const bareRe = /npm(?:\.cmd)?\s+(?!run\b)([a-zA-Z]+)/gi;
-    while ((m = bareRe.exec(text)) !== null) found.push({ type: "npm-bare", name: m[1] });
+    while ((m = bareRe.exec(evidence)) !== null) found.push({ type: "npm-bare", name: m[1] });
     const nodeRe = /node\s+([a-zA-Z0-9_./\\-]+)/gi;
-    while ((m = nodeRe.exec(text)) !== null) found.push({ type: "node", name: normalizeCommandName(m[1]) });
+    while ((m = nodeRe.exec(evidence)) !== null) found.push({ type: "node", name: normalizeCommandName(m[1]) });
     const npxRe = /npx\s+([a-zA-Z0-9_./\\@-]+)/gi;
-    while ((m = npxRe.exec(text)) !== null) found.push({ type: "npx", name: normalizeCommandName(m[1]) });
+    while ((m = npxRe.exec(evidence)) !== null) found.push({ type: "npx", name: normalizeCommandName(m[1]) });
     const pythonRe = /python(?:3|\.exe)?\s+([a-zA-Z0-9_./\\-]+)/gi;
-    while ((m = pythonRe.exec(text)) !== null) found.push({ type: "python", name: normalizeCommandName(m[1]) });
+    while ((m = pythonRe.exec(evidence)) !== null) found.push({ type: "python", name: normalizeCommandName(m[1]) });
     return found;
+}
+function extractCommandEvidence(text: string): string {
+    return text.split(/\r?\n/).filter((line) => {
+        const trimmed = line.trim();
+        if (!trimmed) return false;
+        if (/^[>$]\s+/.test(trimmed)) return true;
+        if (/^(?:npm(?:\.cmd)?|node|npx|python(?:3|\.exe)?)\s+/i.test(trimmed)) return true;
+        if (/\b(?:running|ran|executed|executing)\s+(?:npm(?:\.cmd)?|node|npx|python(?:3|\.exe)?)\s+/i.test(trimmed)) return true;
+        return /\s-(?:command|c)\s+['"]/i.test(trimmed);
+    }).join("\n");
 }
 function normalizeCommandName(value: string): string {
     return value.replace(/\\/g, "/").replace(/^\.\//, "");
@@ -501,7 +522,7 @@ export function checkUnrecordedCommandExecution(testLogContent: string | null, r
     const hasResult = !!resultMdContent && resultMdContent.length > 0;
     if (!hasLog && !hasResult) return null;
     const combined = `${testLogContent || ""}\n${resultMdContent || ""}`;
-    const highRisk = findHighRiskCommandEvidence(combined);
+    const highRisk = findHighRiskCommandEvidence(extractCommandEvidence(combined));
     if (highRisk.length > 0) {
         return { name: "unrecorded_command_execution", result: "fail", detail: `High-risk command evidence: ${highRisk.join(", ")}` };
     }
@@ -523,6 +544,10 @@ export function checkUnrecordedCommandExecution(testLogContent: string | null, r
         detail: transitive.length > 0 ? `All commands are whitelisted; transitive_verified_command: ${transitive.join(", ")}` : "All commands in whitelist.",
     };
 }
+function safeProviderErrorReference(value: unknown): string | null {
+    return typeof value === "string" && /^err_[A-Za-z0-9_-]{4,120}$/.test(value) ? value : null;
+}
+
 export function auditTask(taskId: string): AuditTaskOutput {
     const config = getConfig();
     const tasksDir = getTasksDir(config);
@@ -586,11 +611,14 @@ export function auditTask(taskId: string): AuditTaskOutput {
     }
     if (existsSync(verifyJsonFile)) {
         try {
-            const verify = JSON.parse(readFileSync(verifyJsonFile, "utf-8")) as { status?: string };
+            const verify = JSON.parse(readFileSync(verifyJsonFile, "utf-8")) as { status?: string; reason?: string; configured_commands?: string[]; requested_commands?: string[] };
+            const configuredCount = (verify.configured_commands || verify.requested_commands || []).length;
             checks.push({
                 name: "verify_status",
                 result: verify.status === "passed" ? "pass" : verify.status === "failed" ? "fail" : "warn",
-                detail: `Structured verification status is "${verify.status || "unknown"}".`,
+                detail: verify.status === "not_run"
+                    ? `Verification was configured (${configuredCount} command(s)) but did not run: ${verify.reason || "unknown reason"}.`
+                    : `Structured verification status is "${verify.status || "unknown"}".`,
             });
         }
         catch {
@@ -985,8 +1013,11 @@ export function auditTask(taskId: string): AuditTaskOutput {
     // 导出 ACCEPTANCE.md
     const acceptanceMd = renderAcceptanceMarkdown(taskId, acceptanceResult, acceptanceEvidence);
     atomicWriteFileSync(join(taskDir, "ACCEPTANCE.md"), acceptanceMd);
-    return {
+    const output: AuditTaskOutput = {
         task_id: taskId,
+        model_selection: sanitizeAgentRuntimeMetadata(statusData.model_selection ?? statusData.agent_runtime) as unknown as Record<string, unknown> | null,
+        failure_category: statusData.failure_category || statusData.agent_failure_category || null,
+        provider_error_reference: safeProviderErrorReference(statusData.provider_error_reference),
         verdict,
         acceptance: {
             verdict: acceptanceResult.verdict,
@@ -1007,4 +1038,7 @@ export function auditTask(taskId: string): AuditTaskOutput {
         manual_verification_items: manualVerificationItems,
         recommended_next_actions: actions,
     };
+    atomicWriteJsonFileSync(join(taskDir, "audit.json"), output);
+    syncTaskAuditToLineages(taskId, output, statusData.lineage_id);
+    return output;
 }

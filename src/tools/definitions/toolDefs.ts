@@ -106,6 +106,20 @@ export function getToolDefs(): ToolDef[] {
             description: agentDescription,
             ...(agentNames.length > 0 ? { enum: agentNames } : {}),
           },
+          requested_model: {
+            type: "string",
+            minLength: 1,
+            maxLength: 200,
+            pattern: "^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$",
+            description: "Optional model override for the explicitly selected Agent. It is passed as one shell-free argv value and persisted as task evidence.",
+          },
+          request_id: {
+            type: "string",
+            minLength: 8,
+            maxLength: 128,
+            pattern: "^[A-Za-z0-9_-]+$",
+            description: "Optional create_task idempotency key. Reuse requires identical parameters, including requested_model.",
+          },
           repo_path: {
             type: "string",
             description: "Required repository path inside workspaceRoot. No implicit workspace-root fallback is allowed.",
@@ -173,6 +187,13 @@ export function getToolDefs(): ToolDef[] {
             type: "string",
             description: agentDescription,
             ...(agentNames.length > 0 ? { enum: routableAgentNames } : {}),
+          },
+          requested_model: {
+            type: "string",
+            minLength: 1,
+            maxLength: 200,
+            pattern: "^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$",
+            description: "Optional model override. Requires an explicit non-auto agent and is retained for every task iteration.",
           },
           template: {
             type: "string",
@@ -822,6 +843,13 @@ export function getToolDefs(): ToolDef[] {
           },
           goal: { type: "string", description: "Task goal when template is supplied." },
           agent: { type: "string", description: "Agent name." },
+          requested_model: {
+            type: "string",
+            minLength: 1,
+            maxLength: 200,
+            pattern: "^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$",
+            description: "Optional model override for the explicitly selected Agent.",
+          },
           repo_path: { type: "string", description: "Repository path inside workspaceRoot." },
           test_command: { type: "string", description: "Verification command." },
           verify_commands: {
@@ -1075,6 +1103,11 @@ export function getToolDefs(): ToolDef[] {
         title: {
           type: "string",
           description: "Optional title describing the session's purpose",
+        },
+        expected_changes: {
+          type: "boolean",
+          default: true,
+          description: "Set false for an explicitly read-only or verification-only session where an empty diff is expected.",
         },
       },
       required: ["repo_path"],

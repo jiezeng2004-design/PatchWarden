@@ -6,18 +6,20 @@ import {
   createQuitCleanupCoordinator,
   createSerializedRestartScheduler,
   mayStopOwnedServices,
+  sanitizeStartupDiagnostic,
   stopBackendChild,
 } from "../dist/backend-lifecycle.js";
 
 describe("desktop backend lifecycle", () => {
-  it("stops services only for the captured child with a verified PatchWarden identity", () => {
+  it("stops services only for the captured child with a verified Desktop instance identity", () => {
     const owned = {};
-    assert.equal(mayStopOwnedServices(owned, owned, "patchwarden"), true);
-    assert.equal(mayStopOwnedServices(owned, {}, "patchwarden"), false);
-    assert.equal(mayStopOwnedServices(null, owned, "patchwarden"), false);
-    assert.equal(mayStopOwnedServices(owned, owned, "mismatched_patchwarden"), false);
-    assert.equal(mayStopOwnedServices(owned, owned, "outdated_patchwarden"), false);
-    assert.equal(mayStopOwnedServices(owned, owned, "foreign"), false);
+    assert.equal(mayStopOwnedServices(owned, owned, "patchwarden", true), true);
+    assert.equal(mayStopOwnedServices(owned, owned, "patchwarden", false), false);
+    assert.equal(mayStopOwnedServices(owned, {}, "patchwarden", true), false);
+    assert.equal(mayStopOwnedServices(null, owned, "patchwarden", true), false);
+    assert.equal(mayStopOwnedServices(owned, owned, "mismatched_patchwarden", true), false);
+    assert.equal(mayStopOwnedServices(owned, owned, "outdated_patchwarden", true), false);
+    assert.equal(mayStopOwnedServices(owned, owned, "foreign", true), false);
   });
 
   it("waits for the owned child exit event after kill", async () => {
@@ -75,5 +77,15 @@ describe("desktop backend lifecycle", () => {
     await Promise.all([first, second]);
     assert.equal(coordinator.isComplete(), true);
     assert.equal(cleanups, 1);
+  });
+
+  it("redacts credentials from bounded startup diagnostics", () => {
+    const output = sanitizeStartupDiagnostic("Authorization=Bearer abc123\napi_key=secret-value cookie=session-value\n{\"api_key\":\"quoted-key-value\"} cookie=\"quoted-cookie-value\"");
+    assert.equal(output.includes("abc123"), false);
+    assert.equal(output.includes("secret-value"), false);
+    assert.equal(output.includes("session-value"), false);
+    assert.equal(output.includes("quoted-key-value"), false);
+    assert.equal(output.includes("quoted-cookie-value"), false);
+    assert.match(output, /\[REDACTED\]/);
   });
 });

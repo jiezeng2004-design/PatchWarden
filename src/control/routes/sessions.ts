@@ -2,11 +2,11 @@
  * Control Center routes — Direct sessions (/api/direct-sessions/*).
  *
  * Lists, inspects, finalizes, audits, and hides Direct editing sessions. The
- * list/detail endpoints are read-only and fault-tolerant (missing dir returns
- * an empty list, never 500). The finalize/audit/hide endpoints are POST routes
+ * list/detail endpoints are read-only. A missing root returns an empty list;
+ * an existing but unreadable source fails closed. The finalize/audit/hide endpoints are POST routes
  * gated by the control token in the server router.
  */
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { type ServerResponse } from "node:http";
 import { getDirectSessionsDir } from "../../config.js";
@@ -37,14 +37,18 @@ interface DirectSessionSummary {
 }
 
 function readDirectSessionSummary(sessionDir: string, sessionId: string): DirectSessionSummary | null {
-  const sessionFile = join(sessionDir, "session.json");
-  if (!existsSync(sessionFile)) return null;
+  const sessionFile = resolveControlFile(join(sessionDir, "session.json"), "session");
+  if (!sessionFile) return null;
   const data = readJsonFileSafe<Record<string, unknown>>(sessionFile);
-  if (!data) return null;
+  if (!isRecord(data)) throw new Error("direct_session_artifact_unreadable");
 
   // summary.json holds the finalized change summary (changed_files_total, etc.)
-  const summaryFile = join(sessionDir, "summary.json");
-  const summary = readJsonFileSafe<Record<string, unknown>>(summaryFile);
+  const summaryFile = resolveControlFile(join(sessionDir, "summary.json"), "summary");
+  const summaryExists = summaryFile !== null;
+  const summary = summaryFile
+    ? readJsonFileSafe<Record<string, unknown>>(summaryFile)
+    : null;
+  if (summaryExists && !isRecord(summary)) throw new Error("direct_summary_artifact_unreadable");
   const changedFilesTotal = summary
     ? typeof summary.changed_files_total === "number"
       ? summary.changed_files_total
@@ -52,8 +56,12 @@ function readDirectSessionSummary(sessionDir: string, sessionId: string): Direct
     : null;
 
   // audit.json (written by audit_session) holds the audit decision
-  const auditFile = join(sessionDir, "audit.json");
-  const audit = readJsonFileSafe<Record<string, unknown>>(auditFile);
+  const auditFile = resolveControlFile(join(sessionDir, "audit.json"), "audit");
+  const auditExists = auditFile !== null;
+  const audit = auditFile
+    ? readJsonFileSafe<Record<string, unknown>>(auditFile)
+    : null;
+  if (auditExists && !isRecord(audit)) throw new Error("direct_audit_artifact_unreadable");
   const auditDecision = audit
     ? typeof audit.decision === "string"
       ? audit.decision
@@ -64,7 +72,7 @@ function readDirectSessionSummary(sessionDir: string, sessionId: string): Direct
   const auditCheckedAt = audit
     ? typeof audit.checked_at === "string"
       ? audit.checked_at
-      : fileMtimeIso(auditFile)
+      : auditFile ? fileMtimeIso(auditFile) : null
     : null;
 
   // verification summary: read from session.json verification_runs (last run)
@@ -102,26 +110,20 @@ export interface DirectSessionFilters {
 
 export function handleDirectSessions(res: ServerResponse, filters?: DirectSessionFilters): void {
   try {
-    const sessionsDir = getDirectSessionsDir(config);
-    if (!existsSync(sessionsDir)) {
+    const sessionsDir = existingControlDirectory(getDirectSessionsDir(config), config.directSessionsDir);
+    if (!sessionsDir) {
       // Directory missing -> empty list, never 500.
       sendJson(res, 200, emptyDirectSessionResponse(filters));
       return;
     }
-    let entries: import("node:fs").Dirent[] = [];
-    try {
-      entries = readdirSync(sessionsDir, { withFileTypes: true }).filter((e) => e.isDirectory());
-    } catch (err) {
-      sendJson(res, 200, { ...emptyDirectSessionResponse(filters), reason: errorMessage(err) });
-      return;
-    }
+    const entries = readdirSync(sessionsDir, { withFileTypes: true }).filter((e) => e.isDirectory());
     // Filter out sessions hidden from the dashboard via POST .../hide.
     const hiddenIds = new Set(readHiddenDirectSessionIds());
     const summaries: DirectSessionSummary[] = [];
     for (const entry of entries) {
       if (hiddenIds.has(entry.name)) continue;
       const sessionDir = guardControlPath(join(sessionsDir, entry.name), config.directSessionsDir);
-      if (!sessionDir) continue;
+      if (!sessionDir) throw new Error("direct_session_directory_outside_workspace");
       const summary = readDirectSessionSummary(sessionDir, entry.name);
       if (summary) summaries.push(summary);
     }
@@ -156,6 +158,7 @@ export function handleDirectSessions(res: ServerResponse, filters?: DirectSessio
     sendJson(res, 200, {
       sessions,
       total: filtered.length,
+      available_total: summaries.length,
       returned: sessions.length,
       nextCursor,
       next_cursor: nextCursor,
@@ -171,15 +174,52 @@ export function handleDirectSessions(res: ServerResponse, filters?: DirectSessio
       direct_profile_enabled: config.enableDirectProfile === true,
       reason: null,
     });
-  } catch (err) {
-    sendJson(res, 200, { ...emptyDirectSessionResponse(filters), reason: errorMessage(err) });
+  } catch {
+    sendJson(res, 500, {
+      ok: false,
+      error_code: "direct_sessions_data_unavailable",
+      error: "Direct session data is unavailable.",
+    });
   }
+}
+
+function existingControlDirectory(path: string, allowedPrefix: string): string | null {
+  try {
+    lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  const guardedPath = guardControlPath(path, allowedPrefix);
+  if (!guardedPath) throw new Error("direct_sessions_directory_outside_workspace");
+  const stats = statSync(guardedPath);
+  if (!stats.isDirectory()) throw new Error("direct_sessions_directory_invalid");
+  return guardedPath;
+}
+
+function resolveControlFile(path: string, label: string): string | null {
+  try {
+    lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  const guardedPath = guardControlPath(path, config.directSessionsDir);
+  if (!guardedPath) throw new Error(`direct_${label}_artifact_outside_workspace`);
+  const stats = statSync(guardedPath);
+  if (!stats.isFile()) throw new Error(`direct_${label}_artifact_invalid`);
+  return guardedPath;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function emptyDirectSessionResponse(filters?: DirectSessionFilters): Record<string, unknown> {
   return {
     sessions: [],
     total: 0,
+    available_total: 0,
     returned: 0,
     nextCursor: null,
     next_cursor: null,

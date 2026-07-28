@@ -1969,6 +1969,7 @@ await test("M4. create_direct_session creates a session", async () => {
   if (!result.expires_at) throw new Error("Missing expires_at");
   if (result.allowed_commands.length === 0) throw new Error("No allowed commands");
   if (!result.workspace_clean) throw new Error("Workspace should be clean");
+  if (result.expected_changes !== true) throw new Error("Direct sessions should expect changes by default");
   directSessionId = result.session_id;
 });
 

@@ -12,6 +12,56 @@
       "nav.direct": "Direct 会话",
       "nav.logs": "日志",
       "nav.settings": "设置",
+      "tasks.historyView": "历史视图",
+      "tasks.current": "当前",
+      "tasks.archived": "已归档",
+      "tasks.archiveSelected": "归档所选",
+      "tasks.restoreSelected": "恢复所选",
+      "tasks.selectAll": "选择全部可操作任务",
+      "common.connected": "已连接",
+      "logs.coreCategory": "Core 服务",
+      "logs.directCategory": "Direct 服务",
+      "logs.watcherCategory": "任务监视器",
+      "logs.controlCenterCategory": "控制中心",
+      "logs.last100": "最近 100 行",
+      "logs.last300": "最近 300 行",
+      "logs.last1000": "最近 1000 行",
+      "logs.tailFilterLabel": "日志行数",
+      "logs.clearView": "清空视图",
+      "logs.clearViewTitle": "仅清空当前分类的显示，不删除日志文件",
+      "logs.levelFilterLabel": "日志级别",
+      "logs.allLevels": "全部级别",
+      "logs.levelError": "错误",
+      "logs.levelWarning": "警告",
+      "logs.levelInfo": "信息",
+      "logs.searchPlaceholder": "搜索日志",
+      "logs.searchLabel": "搜索日志",
+      "logs.autoRefresh": "自动刷新",
+      "logs.refresh": "刷新",
+      "logs.stdout": "标准输出（stdout）",
+      "logs.stderr": "错误输出（stderr）",
+      "logs.noStdout": "暂无标准输出日志",
+      "logs.noStderr": "暂无错误输出日志",
+      "logs.copy": "复制",
+      "logs.copied": "已复制",
+      "logs.copyTitle": "复制脱敏日志行",
+      "logs.updatedAt": "更新于 {time}",
+      "logs.historyMeta": "历史日志 · {count} 行 · 最近 {tail} 行",
+      "logs.liveMeta": "实时日志 · {count} 行 · 最近 {tail} 行",
+      "logs.loadingCategory": "正在加载 {category} 日志…",
+      "logs.clearedMeta": "已清空当前视图",
+      "logs.fileKeptMeta": "日志文件未删除",
+      "logs.clearedEmpty": "当前分类视图已清空；点击刷新重新加载日志。",
+      "logs.fileNotFoundReason": "日志文件不存在",
+      "logs.historicalReason": "历史原因：{reason}",
+      "logs.levelRaw": "原始",
+      "logs.levelUnknown": "未知",
+      "logs.noTimestamp": "无时间字段",
+      "logs.categoryMismatch": "日志分类响应不匹配",
+      "logs.loadFailed": "加载日志失败",
+      "logs.connectionFailed": "无法连接到日志服务，请确认 PatchWarden 服务正在运行",
+      "logs.errorTitle": "日志加载失败",
+      "logs.unknownError": "发生未知日志错误",
       "language.label": "语言",
       "language.system": "跟随 Windows",
       "language.zh": "简体中文",
@@ -52,7 +102,7 @@
       "settings.pageTitle": "设置 — PatchWarden",
       "settings.appearance": "外观与窗口",
       "settings.localAgents": "本地 Agent 与模型",
-      "settings.localAgentsHelp": "这里选择本地 Agent CLI 使用的模型，不会改变 ChatGPT 当前会话模型；联网刷新需手动触发。",
+      "settings.localAgentsHelp": "打开本页时会自动读取各 Agent 的本地配置；支持安全列表命令的 Agent 仅在点击刷新时额外查询 CLI。这里的选择不会改变 ChatGPT 当前会话模型。",
       "settings.detectAgents": "重新检测",
       "settings.loadingAgents": "正在读取本地 Agent…",
       "settings.detectingAgents": "正在重新检测本地 Agent…",
@@ -66,6 +116,8 @@
       "settings.refreshModels": "刷新模型列表",
       "settings.refreshingModels": "正在刷新 {agent} 模型…",
       "settings.modelsRefreshed": "已发现 {count} 个模型",
+      "settings.modelsDiscovered": "已自动读取 {count} 个模型",
+      "settings.reloadModels": "重新读取本地模型目录",
       "settings.theme": "主题",
       "settings.themeHelp": "跟随 Windows，或固定使用浅色、深色。",
       "settings.themeSystem": "跟随系统",
@@ -171,6 +223,56 @@
       "nav.direct": "Direct Sessions",
       "nav.logs": "Logs",
       "nav.settings": "Settings",
+      "tasks.historyView": "History",
+      "tasks.current": "Current",
+      "tasks.archived": "Archived",
+      "tasks.archiveSelected": "Archive selected",
+      "tasks.restoreSelected": "Restore selected",
+      "tasks.selectAll": "Select all actionable tasks",
+      "common.connected": "Connected",
+      "logs.coreCategory": "Core",
+      "logs.directCategory": "Direct",
+      "logs.watcherCategory": "Watcher",
+      "logs.controlCenterCategory": "Control Center",
+      "logs.last100": "Last 100 lines",
+      "logs.last300": "Last 300 lines",
+      "logs.last1000": "Last 1000 lines",
+      "logs.tailFilterLabel": "Log line count",
+      "logs.clearView": "Clear view",
+      "logs.clearViewTitle": "Clear only the current category view without deleting log files",
+      "logs.levelFilterLabel": "Log level",
+      "logs.allLevels": "All levels",
+      "logs.levelError": "Error",
+      "logs.levelWarning": "Warning",
+      "logs.levelInfo": "Info",
+      "logs.searchPlaceholder": "Search logs",
+      "logs.searchLabel": "Search logs",
+      "logs.autoRefresh": "Auto refresh",
+      "logs.refresh": "Refresh",
+      "logs.stdout": "Standard output (stdout)",
+      "logs.stderr": "Error output (stderr)",
+      "logs.noStdout": "No standard output logs",
+      "logs.noStderr": "No error output logs",
+      "logs.copy": "Copy",
+      "logs.copied": "Copied",
+      "logs.copyTitle": "Copy redacted log line",
+      "logs.updatedAt": "Updated {time}",
+      "logs.historyMeta": "History · {count} lines · last {tail} lines",
+      "logs.liveMeta": "Live · {count} lines · last {tail} lines",
+      "logs.loadingCategory": "Loading {category} logs…",
+      "logs.clearedMeta": "Current view cleared",
+      "logs.fileKeptMeta": "Log files were not deleted",
+      "logs.clearedEmpty": "This category view is cleared. Refresh to load logs again.",
+      "logs.fileNotFoundReason": "Log file not found",
+      "logs.historicalReason": "Historical reason: {reason}",
+      "logs.levelRaw": "Raw",
+      "logs.levelUnknown": "Unknown",
+      "logs.noTimestamp": "No timestamp",
+      "logs.categoryMismatch": "Log category response did not match the current view",
+      "logs.loadFailed": "Unable to load logs",
+      "logs.connectionFailed": "Unable to connect to the log service. Confirm PatchWarden is running.",
+      "logs.errorTitle": "Log loading failed",
+      "logs.unknownError": "An unknown log error occurred.",
       "language.label": "Language",
       "language.system": "Use Windows language",
       "language.zh": "简体中文",
@@ -211,7 +313,7 @@
       "settings.pageTitle": "Settings — PatchWarden",
       "settings.appearance": "Appearance and window",
       "settings.localAgents": "Local agents and models",
-      "settings.localAgentsHelp": "This selects the model used by the local Agent CLI. It does not change the current ChatGPT conversation model; online refresh is always manual.",
+      "settings.localAgentsHelp": "This page automatically reads each Agent's local configuration. Agents with a safe list command query the CLI only when you click refresh. The selection does not change the current ChatGPT conversation model.",
       "settings.detectAgents": "Detect again",
       "settings.loadingAgents": "Loading local agents…",
       "settings.detectingAgents": "Detecting local agents…",
@@ -225,6 +327,8 @@
       "settings.refreshModels": "Refresh model list",
       "settings.refreshingModels": "Refreshing {agent} models…",
       "settings.modelsRefreshed": "Found {count} models",
+      "settings.modelsDiscovered": "Automatically read {count} models",
+      "settings.reloadModels": "Reload local model catalog",
       "settings.theme": "Theme",
       "settings.themeHelp": "Follow Windows or always use the light or dark theme.",
       "settings.themeSystem": "Use system theme",
@@ -333,10 +437,10 @@
     "健康评分": "Health score", "任务监视器": "Task monitor", "隧道就绪": "Tunnel readiness", "本地 Agent": "Local Agents",
     "过期任务": "Stale tasks", "失败任务": "Failed tasks", "安全策略": "Security policy", "发布检查": "Release check",
     "Direct 配置": "Direct configuration", "启动准备": "Startup readiness", "健康建议": "Health suggestions",
-    "任务链路": "Task lineages", "项目策略": "Project policy", "证据包": "Evidence packs", "最近任务": "Recent tasks",
+    "任务链路": "Task lineages", "项目策略": "Project policy", "证据包": "Evidence packs", "最近任务": "Recent tasks", "高级控制台": "Advanced console",
     "系统状态": "System status", "活动日志": "Activity log", "活动时间线": "Activity timeline",
     "Core + Direct 输出摘要": "Core + Direct output summary", "复制诊断": "Copy diagnostics", "查看详情": "View details",
-    "查看": "View", "隐藏": "Hide", "执行": "Run", "处理": "Resolve", "正常": "Ready", "有效": "Valid", "已启用": "Enabled",
+    "查看": "View", "隐藏": "Hide", "执行": "Run", "处理": "Resolve", "正常": "Ready", "有效": "Valid", "已启用": "Enabled", "已连接": "Connected",
     "暂无任务": "No tasks", "暂无任务链路": "No task lineages", "创建受控任务链": "Create controlled task lineage", "查看最近运行": "View recent runs",
     "选择具体 repo 以读取 version": "Select a repository to read its version",
     "已可供桌面启动和重启使用。": "Available for desktop start and restart.",
@@ -350,7 +454,7 @@
     "警告类型": "Warning type", "全部警告": "All warnings", "全部 Agent": "All Agents", "更新从": "Updated from", "更新至": "Updated to",
     "应用筛选": "Apply filters", "清空筛选": "Clear filters", "无筛选": "No filters", "加载中...": "Loading...", "加载失败": "Load failed", "重试": "Retry",
     "任务ID": "Task ID", "标题": "Title", "验证": "Verification", "阶段": "Phase", "创建时间": "Created", "更新时间": "Updated", "下一步": "Next step", "操作": "Actions",
-    "排队中": "Queued", "已完成": "Completed", "收集产物": "Collecting artifacts",
+    "排队中": "Queued", "等待中": "Pending", "准备中": "Preparing", "Agent 执行中": "Agent running", "运行中": "Running", "验证中": "Verifying", "正在取消": "Canceling", "正在终止": "Stopping", "已完成": "Completed", "收集产物": "Collecting artifacts", "验证失败": "Failed verification", "策略违规": "Policy violation", "范围违规": "Scope violation", "需修复": "Needs fix", "待审核": "Ready for review", "Agent 已执行": "Agent finished", "已通过": "Passed", "未通过": "Rejected", "已阻止": "Blocked", "已取消": "Canceled", "超时": "Timed out", "已过期": "Expired", "孤立任务": "Orphaned", "未记录的命令执行": "Unrecorded command execution", "产物规范": "Artifact hygiene", "发布声明": "Release claim", "需要人工验证": "Manual verification required", "归档所选": "Archive selected", "恢复所选": "Restore selected", "查看修复项并重新验收": "Review fixes and re-run acceptance", "打开详情运行验收": "Open details to run acceptance", "查看安全结果": "View safe result", "查看安全审计": "View safe audit", "查看详情": "View details", "错误": "Error", "信息": "Info",
     "工作区路径": "Workspace path", "项目列表": "Projects", "暂无项目": "No projects", "检查": "Check", "配置预览": "Configuration preview",
     "Agent 注册": "Agent registration", "未注册任何 Agent": "No Agents registered", "可用": "Available", "安全边界": "Security boundaries",
     "工作区隔离": "Workspace confinement", "workspaceRoot 路径限制": "workspaceRoot path restrictions", "命令白名单": "Command allow-list",
@@ -369,6 +473,7 @@
   var literalChinese = Object.fromEntries(Object.entries(literalEnglish).map(function (entry) { return [entry[1], entry[0]]; }));
   Object.assign(literalChinese, {
     blocked: "已阻止", missing: "缺失", unavailable: "不可用", unknown: "未知", healthy: "健康", stale: "已过期",
+    running: "运行中", pending: "等待中", done: "已完成", failed: "失败", passed: "已通过", accepted: "已通过", rejected: "未通过", done_by_agent: "Agent 已执行", warning: "警告", warn: "警告", info: "信息", error: "错误", finalized: "已完成", audited: "已审计", active: "进行中", "Command not found": "未找到 CLI",
     "Watcher heartbeat has not been observed. Start or restart the PatchWarden watcher.": "尚未检测到 Watcher 心跳。请启动或重启 PatchWarden Watcher。"
   });
   var selected = "system";
@@ -413,6 +518,7 @@
     keyed.forEach(function (node) { var value = t(node.dataset.i18n); if (node.textContent !== value) node.textContent = value; });
     scope.querySelectorAll("[data-i18n-title]").forEach(function (node) { var value = t(node.dataset.i18nTitle); if (node.title !== value) node.title = value; });
     scope.querySelectorAll("[data-i18n-placeholder]").forEach(function (node) { var value = t(node.dataset.i18nPlaceholder); if (node.placeholder !== value) node.placeholder = value; });
+    scope.querySelectorAll("[data-i18n-aria-label]").forEach(function (node) { var value = t(node.dataset.i18nAriaLabel); if (node.getAttribute("aria-label") !== value) node.setAttribute("aria-label", value); });
     var walker = document.createTreeWalker(scope === document ? document.body : scope, NodeFilter.SHOW_TEXT);
     var node;
     while ((node = walker.nextNode())) {
@@ -420,6 +526,20 @@
       if (translated !== text) node.nodeValue = node.nodeValue.replace(text, translated);
     }
     document.documentElement.lang = language;
+  }
+  async function refreshCoreVersion() {
+    var badges = Array.from(document.querySelectorAll("[data-core-version]"));
+    if (badges.length === 0) return;
+    try {
+      var response = await fetch("/api/control-center-status", { cache: "no-store", headers: { Accept: "application/json" } });
+      if (!response.ok) return;
+      var status = await response.json();
+      var version = status && status.version;
+      if (typeof version !== "string" || !/^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/.test(version)) return;
+      badges.forEach(function (badge) { badge.textContent = "Core v" + version; });
+    } catch {
+      // Keep the neutral fallback instead of displaying a stale hard-coded version.
+    }
   }
   async function setLanguage(value) {
     selected = value === "zh-CN" || value === "en" ? value : "system";
@@ -452,6 +572,7 @@
     }
     addLanguageSwitcher();
     applyTranslations(document);
+    void refreshCoreVersion();
     var observer = new MutationObserver(function (mutations) {
       mutations.forEach(function (mutation) {
         mutation.addedNodes.forEach(function (node) {
@@ -469,7 +590,7 @@
   function addLanguageSwitcher() {
     if (document.getElementById("language") || document.getElementById("pw-language-switcher")) return;
     var header = document.querySelector("header"); if (!header) return;
-    var select = document.createElement("select"); select.id = "pw-language-switcher"; select.className = "pw-language-switcher"; select.setAttribute("aria-label", "Language");
+    var select = document.createElement("select"); select.id = "pw-language-switcher"; select.className = "pw-language-switcher"; select.dataset.i18nAriaLabel = "language.label"; select.dataset.i18nTitle = "language.label"; select.setAttribute("aria-label", t("language.label")); select.title = t("language.label");
     [["system", "language.system"], ["zh-CN", "language.zh"], ["en", "language.en"]].forEach(function (entry) { var option = document.createElement("option"); option.value = entry[0]; option.dataset.i18n = entry[1]; option.textContent = t(entry[1]); select.appendChild(option); });
     select.value = selected;
     select.addEventListener("change", function () { void setLanguage(select.value); });

@@ -309,7 +309,7 @@ try {
   const assessmentRecord = JSON.parse(readFileSync(assessmentFile, "utf-8"));
   if (
     !/^[a-f0-9]{64}$/.test(assessmentRecord.execution_config_hash || "") ||
-    assessmentRecord.assessment_security_snapshot_version !== "assessment-security-v2"
+    assessmentRecord.assessment_security_snapshot_version !== "assessment-security-v3"
   ) {
     throw new Error(`assessment security fingerprint missing: ${JSON.stringify(assessmentRecord)}`);
   }

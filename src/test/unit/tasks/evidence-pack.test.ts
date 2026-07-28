@@ -64,6 +64,41 @@ describe("v1.5 evidence packs and agent recommendations", () => {
     assert.ok(!payload.includes("diff"));
   });
 
+  it("does not report remote-write risk for local read-only verification", () => {
+    const goals = [
+      "只读查看 README.md 和 package.json，并运行 npm test。",
+      "Inspect README.md and run local tests without modifying files.",
+      "Run npm run build for local verification only.",
+    ];
+    for (const goal of goals) {
+      const recommendation = recommendAgentForTask({ repo_path: ".", goal });
+      assert.ok(!recommendation.risk_notes.includes("release_or_remote_write_language_detected"), goal);
+    }
+  });
+
+  it("reports remote-write risk only for explicit publication actions", () => {
+    const goals = [
+      "运行 npm publish",
+      "git push origin main",
+      "创建 GitHub Release",
+      "创建 tag 并推送到远程仓库",
+    ];
+    for (const goal of goals) {
+      const recommendation = recommendAgentForTask({ repo_path: ".", goal });
+      assert.ok(recommendation.risk_notes.includes("release_or_remote_write_language_detected"), goal);
+    }
+  });
+
+  it("does not leak release risk notes between requests", () => {
+    const publishing = recommendAgentForTask({ repo_path: ".", goal: "运行 npm publish" });
+    const readOnly = recommendAgentForTask({
+      repo_path: ".",
+      goal: "只读查看 README.md 和 package.json，并运行 npm test。",
+    });
+    assert.ok(publishing.risk_notes.includes("release_or_remote_write_language_detected"));
+    assert.ok(!readOnly.risk_notes.includes("release_or_remote_write_language_detected"));
+  });
+
   it("exports bounded BOM-free evidence pack from lineage", () => {
     writeTaskLineage({
       lineage_id: "lineage_v15_pack",
@@ -117,12 +152,27 @@ describe("v1.5 evidence packs and agent recommendations", () => {
         reason: "test route",
         fallback: false,
       },
+      model_selection: {
+        requested_agent: "codex",
+        selected_agent: "codex",
+        requested_model: "openai/gpt-test",
+        configured_default_model: null,
+        effective_model: "openai/gpt-test",
+        model_source: "task_override",
+        provider: "openai",
+        model_argument_present: true,
+        agent_config_revision: "a".repeat(64),
+        fallback_used: false,
+        agent_fallback_used: false,
+        model_fallback_used: false,
+      },
     });
 
     const pack = exportTaskEvidencePack({ lineage_id: "lineage_v15_pack" });
     assert.equal(pack.bounded, true);
     assert.equal(pack.lineage.worktree.worktree_id, "wt-one");
     assert.equal(pack.lineage.agent_routing?.selected_agent, "codex");
+    assert.equal(pack.lineage.model_selection?.effective_model, "openai/gpt-test");
     const raw = readFileSync(pack.files.json);
     assert.notEqual(raw[0], 0xef);
     JSON.parse(raw.toString("utf-8"));
@@ -199,6 +249,8 @@ describe("v1.5 evidence packs and agent recommendations", () => {
         terminal: true,
         verification_status: "passed",
         audit_verdict: "pass",
+        failure_category: "provider_server_error",
+        provider_error_reference: "err_agnes_TEST123",
         fail_checks: [],
         warn_checks: ["minor scope drift"],
         next_action: "accept",
@@ -214,6 +266,12 @@ describe("v1.5 evidence packs and agent recommendations", () => {
     });
 
     const pack = exportTaskEvidencePack({ lineage_id: "lineage_v2_secret" });
+    const lineageEvidence = JSON.parse(readFileSync(pack.files.lineage, "utf-8"));
+    assert.deepEqual(lineageEvidence.failures, [{
+      task_id: "task-v2-secret",
+      failure_category: "provider_server_error",
+      provider_error_reference: "err_agnes_TEST123",
+    }]);
 
     // All six v2 files should exist.
     for (const key of ["risk", "verify", "diffstat", "lineage", "attestation", "redactions"] as const) {

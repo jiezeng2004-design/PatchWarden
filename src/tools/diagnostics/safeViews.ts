@@ -2,9 +2,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { getConfig, getTasksDir } from "../../config.js";
 import { auditSession } from "./auditSession.js";
-import { auditTask, type AuditTaskOutput } from "./auditTask.js";
+import type { AuditTaskOutput } from "./auditTask.js";
 import { finalizeDirectSession } from "../direct/finalizeDirectSession.js";
 import { getTaskSummary } from "../tasks/getTaskSummary.js";
+import { safeStatus } from "./safeStatus.js";
 import { guardReadPath } from "../../security/pathGuard.js";
 import { redactSensitiveValue } from "../../security/contentRedaction.js";
 import { readDirectSession, type DirectSessionRecord, type DirectSessionVerificationRun } from "../../direct/directSessionStore.js";
@@ -18,15 +19,19 @@ export interface SafeViewOptions {
 export function safeResult(taskId: string, options: SafeViewOptions = {}) {
   const maxItems = normalizeMaxItems(options.max_items);
   const summary = getTaskSummary(taskId, { view: "compact", max_items: maxItems });
+  const status = safeStatus(taskId);
   return redact({
     schema_version: ARTIFACT_SCHEMA_VERSION,
     task_id: summary.task_id,
     status: summary.status,
     terminal: summary.terminal,
     history_state: summary.history_state,
-    acceptance_status: summary.acceptance_status,
+    acceptance_status: status.acceptance_status,
     phase: summary.phase,
     agent_runtime: summary.agent_runtime,
+    model_selection: summary.model_selection,
+    failure_category: summary.failure_category,
+    provider_error_reference: summary.provider_error_reference,
     repo_path: summary.repo_path,
     changed_files_total: summary.changed_files_total,
     out_of_scope_changes_total: summary.out_of_scope_changes_total,
@@ -65,6 +70,10 @@ export function safeTestSummary(taskId: string) {
     task_id: taskId,
     status: String(verify.status || summary.verification_summary.status || "not_available"),
     command_count: commands.length,
+    configured_command_count: asArray(verify.configured_commands ?? verify.requested_commands).length,
+    configured_commands: asArray(verify.configured_commands ?? verify.requested_commands).map(String),
+    executed_verify_commands: commands.map((entry) => entry.command),
+    reason: typeof verify.reason === "string" ? verify.reason : null,
     passed_commands: commands.filter((entry) => entry.status === "passed").length,
     failed_commands: commands.filter((entry) => ["failed", "timed_out", "canceled"].includes(entry.status)).length,
     skipped_commands: commands.filter((entry) => entry.status === "skipped").length,
@@ -104,7 +113,33 @@ export function safeDiffSummary(taskId: string, options: SafeViewOptions = {}) {
 
 export function safeAudit(taskId: string, options: SafeViewOptions = {}) {
   const maxItems = normalizeMaxItems(options.max_items);
-  return auditToSafe(auditTask(taskId) as AuditTaskOutput, maxItems);
+  const { taskDir, config } = getTaskDir(taskId);
+  const auditPath = join(taskDir, "audit.json");
+  const stored = existsSync(auditPath) ? readJson(auditPath, config) : {};
+  if (typeof stored.task_id !== "string" || !Array.isArray(stored.checks)) {
+    return redact({
+      schema_version: ARTIFACT_SCHEMA_VERSION,
+      task_id: taskId,
+      verdict: "not_run",
+      acceptance: {
+        verdict: null,
+        status: safeStatus(taskId).acceptance_status,
+        reason: "Audit has not been run yet.",
+        fail_checks: [],
+        warn_checks: [],
+        next_suggested_task: "Run audit_task to evaluate the completed work.",
+      },
+      check_counts: { pass: 0, warn: 0, fail: 0 },
+      checks: [],
+      fail_checks: [],
+      warn_checks: [],
+      possible_false_positives: [],
+      manual_verification_required: false,
+      manual_verification_items: [],
+      recommended_next_actions: ["Run audit_task to create acceptance evidence."],
+    });
+  }
+  return auditToSafe(stored as unknown as AuditTaskOutput, maxItems);
 }
 
 export function safeDirectSummary(sessionId: string, options: SafeViewOptions = {}) {
@@ -129,6 +164,7 @@ export function safeAuditDirectSession(sessionId: string, options: SafeViewOptio
   const audit = auditSession({ session_id: sessionId });
   return redact({
     session_id: audit.session_id,
+    expected_changes: audit.expected_changes,
     decision: audit.decision,
     reason_codes: audit.reason_codes.slice(0, maxItems),
     blocking_findings: limitStrings(audit.blocking_findings, maxItems),
@@ -145,7 +181,8 @@ export function safeAuditDirectSession(sessionId: string, options: SafeViewOptio
 }
 
 function auditToSafe(audit: AuditTaskOutput, maxItems: number) {
-  const checks = audit.checks.map((check) => ({
+  const rawChecks = Array.isArray(audit.checks) ? audit.checks : [];
+  const checks = rawChecks.map((check) => ({
     name: check.name,
     result: check.result,
     detail: truncate(check.detail, 240),
@@ -153,13 +190,16 @@ function auditToSafe(audit: AuditTaskOutput, maxItems: number) {
   return redact({
     schema_version: ARTIFACT_SCHEMA_VERSION,
     task_id: audit.task_id,
+    model_selection: audit.model_selection,
+    failure_category: audit.failure_category,
+    provider_error_reference: audit.provider_error_reference,
     verdict: audit.verdict,
     acceptance: {
       verdict: audit.acceptance.verdict,
       status: audit.acceptance.status,
       reason: truncate(audit.acceptance.reason, 240),
-      fail_checks: audit.acceptance.fail_checks.slice(0, maxItems).map((check) => check.name),
-      warn_checks: audit.acceptance.warn_checks.slice(0, maxItems).map((check) => check.name),
+      fail_checks: (Array.isArray(audit.acceptance?.fail_checks) ? audit.acceptance.fail_checks : []).slice(0, maxItems).map((check) => check.name),
+      warn_checks: (Array.isArray(audit.acceptance?.warn_checks) ? audit.acceptance.warn_checks : []).slice(0, maxItems).map((check) => check.name),
       next_suggested_task: truncate(audit.acceptance.next_suggested_task, 240),
     },
     check_counts: {
@@ -170,13 +210,13 @@ function auditToSafe(audit: AuditTaskOutput, maxItems: number) {
     checks: checks.slice(0, maxItems),
     fail_checks: checks.filter((check) => check.result === "fail").slice(0, maxItems),
     warn_checks: checks.filter((check) => check.result === "warn").slice(0, maxItems),
-    possible_false_positives: audit.possible_false_positives.slice(0, maxItems).map((item) => ({
+    possible_false_positives: (Array.isArray(audit.possible_false_positives) ? audit.possible_false_positives : []).slice(0, maxItems).map((item) => ({
       check: item.check,
       reason: truncate(item.reason, 240),
     })),
     manual_verification_required: audit.manual_verification_required,
-    manual_verification_items: limitStrings(audit.manual_verification_items, maxItems),
-    recommended_next_actions: limitStrings(audit.recommended_next_actions, maxItems),
+    manual_verification_items: limitStrings(Array.isArray(audit.manual_verification_items) ? audit.manual_verification_items : [], maxItems),
+    recommended_next_actions: limitStrings(Array.isArray(audit.recommended_next_actions) ? audit.recommended_next_actions : [], maxItems),
   });
 }
 
@@ -188,6 +228,7 @@ function directSessionToSafe(session: DirectSessionRecord, maxItems: number, vie
     session_id: session.session_id,
     title: session.title || "",
     repo_path: session.repo_path,
+    expected_changes: session.expected_changes !== false,
     created_at: session.created_at,
     expires_at: session.expires_at,
     finalized: session.finalized,

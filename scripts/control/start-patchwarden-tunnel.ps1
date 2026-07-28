@@ -20,10 +20,15 @@
   [switch]$SkipWatcher,
   [switch]$ForgetSavedApiKey,
   [switch]$NoTunnelWebUi,
-  [string]$HealthListenAddr = ""
+  [string]$HealthListenAddr = "",
+  [ValidatePattern('^[A-Fa-f0-9]{32}$')]
+  [string]$OwnerInstanceId = "",
+  [ValidateRange(0, 2147483647)]
+  [int]$SupervisorProcessId = 0
 )
 
 $ErrorActionPreference = "Stop"
+if ($OwnerInstanceId) { $OwnerInstanceId = $OwnerInstanceId.ToLowerInvariant() }
 
 if ([string]::IsNullOrWhiteSpace($ProxyMode)) {
   $ProxyMode = if ($ToolProfile -eq "chatgpt_direct" -and $env:PATCHWARDEN_DIRECT_PROXY_MODE) {
@@ -306,6 +311,9 @@ function Write-TunnelStatus {
     watcher_entry_path = $WatcherEntryPath
     validator_module_path = (Join-Path $ProjectRoot "dist\assessments\assessmentStore.js")
     runtime_build_layout = $RuntimeBuildLayout
+    owner_instance_id = if ($OwnerInstanceId) { $OwnerInstanceId } else { $null }
+    supervisor_pid = if ($SupervisorProcessId -gt 0) { $SupervisorProcessId } else { $null }
+    launcher_pid = $PID
   }
   $temporary = "$StatusFile.tmp"
   $payload | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $temporary -Encoding UTF8
@@ -410,6 +418,8 @@ function Write-WatcherStatus {
     watcher_entry_path = $WatcherEntryPath
     validator_module_path = (Join-Path $ProjectRoot "dist\assessments\assessmentStore.js")
     runtime_build_layout = $RuntimeBuildLayout
+    owner_instance_id = if ($OwnerInstanceId) { $OwnerInstanceId } else { $null }
+    supervisor_pid = if ($SupervisorProcessId -gt 0) { $SupervisorProcessId } else { $null }
   }
   $temporary = "$WatcherStatusFile.tmp"
   $payload | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $temporary -Encoding UTF8
@@ -435,6 +445,8 @@ function Start-OwnedWatcherProcess {
   $previousWatcherLauncherPid = $env:PATCHWARDEN_WATCHER_LAUNCHER_PID
   $previousToolProfile = $env:PATCHWARDEN_TOOL_PROFILE
   $previousXdgConfigHome = $env:XDG_CONFIG_HOME
+  $previousAgentXdgConfigHome = $env:PATCHWARDEN_AGENT_XDG_CONFIG_HOME
+  $previousWatcherOwnsXdgConfigHome = $env:PATCHWARDEN_WATCHER_XDG_CONFIG_HOME_OWNED
   $previousPath = $env:PATH
   $previousControlPlaneApiKey = $env:CONTROL_PLANE_API_KEY
   $previousOwnerToken = $env:PATCHWARDEN_OWNER_TOKEN
@@ -442,6 +454,12 @@ function Start-OwnedWatcherProcess {
     $env:PATCHWARDEN_WATCHER_INSTANCE_ID = $script:WatcherInstanceId
     $env:PATCHWARDEN_WATCHER_LAUNCHER_PID = [string]$PID
     $env:PATCHWARDEN_TOOL_PROFILE = $ToolProfile
+    if ($null -eq $previousXdgConfigHome) {
+      Remove-Item Env:PATCHWARDEN_AGENT_XDG_CONFIG_HOME -ErrorAction SilentlyContinue
+    } else {
+      $env:PATCHWARDEN_AGENT_XDG_CONFIG_HOME = $previousXdgConfigHome
+    }
+    $env:PATCHWARDEN_WATCHER_XDG_CONFIG_HOME_OWNED = "1"
     $env:XDG_CONFIG_HOME = $OpencodeConfigHome
     if ($OpencodeBin) { $env:PATH = "$OpencodeBin;$env:PATH" }
     Remove-Item Env:CONTROL_PLANE_API_KEY -ErrorAction SilentlyContinue
@@ -455,6 +473,8 @@ function Start-OwnedWatcherProcess {
     if ($null -eq $previousWatcherLauncherPid) { Remove-Item Env:PATCHWARDEN_WATCHER_LAUNCHER_PID -ErrorAction SilentlyContinue } else { $env:PATCHWARDEN_WATCHER_LAUNCHER_PID = $previousWatcherLauncherPid }
     if ($null -eq $previousToolProfile) { Remove-Item Env:PATCHWARDEN_TOOL_PROFILE -ErrorAction SilentlyContinue } else { $env:PATCHWARDEN_TOOL_PROFILE = $previousToolProfile }
     if ($null -eq $previousXdgConfigHome) { Remove-Item Env:XDG_CONFIG_HOME -ErrorAction SilentlyContinue } else { $env:XDG_CONFIG_HOME = $previousXdgConfigHome }
+    if ($null -eq $previousAgentXdgConfigHome) { Remove-Item Env:PATCHWARDEN_AGENT_XDG_CONFIG_HOME -ErrorAction SilentlyContinue } else { $env:PATCHWARDEN_AGENT_XDG_CONFIG_HOME = $previousAgentXdgConfigHome }
+    if ($null -eq $previousWatcherOwnsXdgConfigHome) { Remove-Item Env:PATCHWARDEN_WATCHER_XDG_CONFIG_HOME_OWNED -ErrorAction SilentlyContinue } else { $env:PATCHWARDEN_WATCHER_XDG_CONFIG_HOME_OWNED = $previousWatcherOwnsXdgConfigHome }
     if ($null -eq $previousControlPlaneApiKey) { Remove-Item Env:CONTROL_PLANE_API_KEY -ErrorAction SilentlyContinue } else { $env:CONTROL_PLANE_API_KEY = $previousControlPlaneApiKey }
     if ($null -eq $previousOwnerToken) { Remove-Item Env:PATCHWARDEN_OWNER_TOKEN -ErrorAction SilentlyContinue } else { $env:PATCHWARDEN_OWNER_TOKEN = $previousOwnerToken }
     $env:PATH = $previousPath
