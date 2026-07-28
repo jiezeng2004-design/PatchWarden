@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { reloadConfig } from "../../../config.js";
 import { auditTask } from "../../../tools/diagnostics/auditTask.js";
-import { getTaskLineage, writeTaskLineage } from "../../../tools/tasks/taskLineage.js";
+import { getTaskLineage, syncTaskAuditToLineages, writeTaskLineage } from "../../../tools/tasks/taskLineage.js";
 
 let tempDir: string;
 let previousConfig: string | undefined;
@@ -151,5 +151,30 @@ describe("task audit lineage synchronization", () => {
     assert.ok(["blocked", "needs_fix"].includes(after.final_status));
     assert.equal(after.stop_reason, "audit_failed");
     assert.notEqual(after.next_action, "audit_task");
+  });
+
+  it("does not accept a passing audit summary when acceptance blocks approval", () => {
+    const taskId = "task_audit_blocked";
+    const lineageId = "lineage_audit_blocked";
+    writeTaskFixture(taskId, lineageId);
+    writeReadyLineage(taskId, lineageId);
+
+    syncTaskAuditToLineages(taskId, {
+      task_id: taskId,
+      verdict: "pass",
+      acceptance: {
+        verdict: "BLOCKED_BY_APPROVAL",
+        status: "blocked",
+        warn_checks: [{ name: "release_claims_unverified" }],
+        next_suggested_task: "Verify the remote release claim before accepting this task.",
+      },
+    }, lineageId);
+    const after = getTaskLineage(lineageId);
+
+    assert.equal(after.rounds[0].audit_verdict, "fail");
+    assert.ok(after.rounds[0].warn_checks.includes("release_claims_unverified"));
+    assert.equal(after.final_status, "blocked");
+    assert.equal(after.stop_reason, "audit_failed");
+    assert.notEqual(after.next_action, "none");
   });
 });

@@ -80,10 +80,12 @@ describe("desktop backend lifecycle", () => {
   });
 
   it("redacts credentials from bounded startup diagnostics", () => {
-    const output = sanitizeStartupDiagnostic("Authorization=Bearer abc123\napi_key=secret-value cookie=session-value");
+    const output = sanitizeStartupDiagnostic("Authorization=Bearer abc123\napi_key=secret-value cookie=session-value\n{\"api_key\":\"quoted-key-value\"} cookie=\"quoted-cookie-value\"");
     assert.equal(output.includes("abc123"), false);
     assert.equal(output.includes("secret-value"), false);
     assert.equal(output.includes("session-value"), false);
+    assert.equal(output.includes("quoted-key-value"), false);
+    assert.equal(output.includes("quoted-cookie-value"), false);
     assert.match(output, /\[REDACTED\]/);
   });
 });

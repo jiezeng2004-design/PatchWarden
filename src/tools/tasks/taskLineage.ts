@@ -373,7 +373,16 @@ function applyAuditEvidence(record: TaskLineageRecord, taskId: string, audit: Li
   if (roundIndex < 0) return false;
   const round = record.rounds[roundIndex];
   const acceptance = asRecord(audit.acceptance);
-  const verdict = normalizeAuditVerdict(audit.verdict ?? acceptance.verdict);
+  const acceptanceStatus = String(acceptance.status || "").toLowerCase();
+  const auditVerdict = normalizeAuditVerdict(audit.verdict);
+  const acceptanceVerdict = normalizeAuditVerdict(acceptance.verdict);
+  // Acceptance is the authoritative gate: a summary "pass" cannot accept a
+  // task that still requires explicit approval (for example, release claims).
+  const verdict = acceptanceStatus === "blocked" || acceptanceVerdict === "fail"
+    ? "fail"
+    : acceptanceVerdict === "warn"
+      ? "warn"
+      : auditVerdict ?? acceptanceVerdict;
   if (!verdict || verdict === "not_run") return false;
   const failChecks = collectCheckNames(audit, acceptance, "fail");
   const warnChecks = collectCheckNames(audit, acceptance, "warn");
@@ -400,7 +409,6 @@ function applyAuditEvidence(record: TaskLineageRecord, taskId: string, audit: Li
       record.stop_reason = "audit_accepted";
       record.next_action = "none";
     } else if (verdict === "fail" || verdict === "warn") {
-      const acceptanceStatus = String(acceptance.status || "").toLowerCase();
       const highRisk = [...failChecks, ...warnChecks].some((name) =>
         /scope|policy|sensitive|secret|forbidden|publish|release|remote/.test(name.toLowerCase())
       );
