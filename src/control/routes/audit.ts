@@ -20,6 +20,7 @@ import {
 } from "../runtime.js";
 import {
   buildAuditOverview,
+  isCurrentTaskAuditArtifact,
   summarizeDirectAudit,
   summarizeIndependentReview,
   summarizeTaskAudit,
@@ -107,15 +108,18 @@ export function handleAudit(res: ServerResponse): void {
         const taskDir = guardControlPath(join(tasksDir, entry.name), config.tasksDir);
         if (!taskDir) throw new Error("audit_task_directory_outside_workspace");
 
-        // Prefer the structured JSON artifact. The Markdown review is a
-        // compatibility fallback, never a second row for the same task.
+        // Prefer only the current structured JSON artifact. Older JSON audit
+        // shapes must fall back to the Markdown review instead of producing
+        // an unknown conclusion.
         const auditFile = existingControlFile(join(taskDir, "audit.json"), config.tasksDir, "audit");
         if (auditFile) {
           const data = readJsonFileSafe<Record<string, unknown>>(auditFile);
           if (!isRecord(data)) throw new Error("audit_artifact_unreadable");
-          const checkedAt = typeof data.checked_at === "string" ? data.checked_at : fileMtimeIso(auditFile);
-          audits.push(summarizeTaskAudit(entry.name, data, checkedAt));
-          continue;
+          if (isCurrentTaskAuditArtifact(data)) {
+            const checkedAt = typeof data.checked_at === "string" ? data.checked_at : fileMtimeIso(auditFile);
+            audits.push(summarizeTaskAudit(entry.name, data, checkedAt));
+            continue;
+          }
         }
         const reviewFile = existingControlFile(join(taskDir, "independent-review.md"), config.tasksDir, "review");
         if (reviewFile) {

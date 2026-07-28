@@ -50,6 +50,17 @@ const MAX_TEXT = 500;
 const MAX_ITEM_TEXT = 300;
 const MAX_ITEMS = 8;
 
+/**
+ * Only v1 task audit artifacts can replace the independent-review.md fallback.
+ * Older JSON artifacts used unrelated shapes and must not suppress the review.
+ */
+export function isCurrentTaskAuditArtifact(data: Record<string, unknown>): boolean {
+  const verdict = typeof data.verdict === "string" ? data.verdict.toLowerCase() : "";
+  return (verdict === "pass" || verdict === "warn" || verdict === "fail")
+    && Array.isArray(data.checks)
+    && asRecord(data.acceptance) !== null;
+}
+
 export function summarizeTaskAudit(
   taskId: string,
   data: Record<string, unknown>,

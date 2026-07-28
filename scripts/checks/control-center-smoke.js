@@ -172,6 +172,12 @@ function prepareIsolatedWorkspace() {
     "## Recommended Actions",
     "- No specific actions recommended.",
   ].join("\n"), "utf-8");
+  // A legacy JSON artifact must not hide the current Markdown review.
+  writeFileSync(join(passedDir, "audit.json"), JSON.stringify({
+    audited_at: "2024-01-01T00:00:00.000Z",
+    result: "passed",
+    legacy_checks: ["verification"],
+  }), "utf-8");
   // Keep one uniquely filterable task older than the first 100 directory
   // entries. This proves Control Center filtering is not constrained by the
   // public MCP list_tasks response cap.
@@ -896,6 +902,10 @@ async function testOtherGetApis() {
           "direct_session:direct_smoke_audited",
         ]) {
           if (!auditSubjects.has(expectedSubject)) problems.push(`/api/audit missing fixture ${expectedSubject}`);
+        }
+        const markdownFallback = json.audits.find((audit) => audit.subject_id === "task-audit-passed-smoke");
+        if (markdownFallback?.source !== "independent-review.md" || markdownFallback?.verdict !== "pass") {
+          problems.push("/api/audit did not fall back from legacy audit.json to independent-review.md");
         }
         for (const audit of json.audits) {
           if (!isObject(audit)) {
