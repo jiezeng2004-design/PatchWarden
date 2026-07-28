@@ -4,6 +4,9 @@ PatchWarden is a local MCP bridge for AI coding workflows. Its core security
 goal is to let an MCP client request bounded maintainer tasks without turning
 the local machine into a general-purpose remote shell.
 
+For the integration-facing security posture, risk vocabulary, and recommended
+audit schema, see [PatchWarden Security Model](security-model.md).
+
 ## Assets Protected
 
 - source repositories under the configured workspace
@@ -30,6 +33,18 @@ Trusted local configuration includes:
 Human maintainer confirmation remains required for high-risk actions such as
 publishing, pushing, creating releases, changing live services, or approving
 local confirmation tickets.
+
+## Enforcement Boundary
+
+PatchWarden governs only operations routed through its MCP tools, task
+workflow, Direct tools, or an adapter that explicitly invokes its policy
+boundary. An agent's native shell, filesystem, browser, or direct MCP calls are
+not intercepted merely because PatchWarden is installed or launched nearby.
+
+Use client hooks, MCP proxies, or wrappers to reduce bypass paths. Use Docker,
+a VM, a devcontainer, WSL isolation, or an OS-level sandbox when the execution
+backend itself must be contained. These isolation mechanisms complement
+PatchWarden policy; they are not replaced by it.
 
 ## Main Threats
 

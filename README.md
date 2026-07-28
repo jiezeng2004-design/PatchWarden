@@ -1141,7 +1141,16 @@ Direct 模式不支持：shell、delete、rename、commit、push、publish、dep
 - [MCP Inspector 测试](docs/mcp-inspector-testing.md)
 - [OpenCode worker 集成](docs/opencode-worker.md)
 - [OpenHands worker 集成](docs/openhands-worker.md)
+- [安全模型](docs/security-model.md)
 - [威胁模型](docs/threat-model.md)
+- [外部贡献计划](docs/external-pr-plan.md)
+- 生态集成与贡献材料：
+  [Dev Machine Guard](docs/integrations/dev-machine-guard.md)、
+  [mcp-agent](docs/integrations/mcp-agent.md)、
+  [Desktop Commander](docs/integrations/desktop-commander.md)、
+  [MCPorter](docs/integrations/mcporter.md) 和
+  [OpenHands governance](docs/integrations/openhands-governance.md)
+- [Policy gateway 伪代码 wrapper](examples/policy-gateway/pseudo-wrapper.md)
 
 ## 安全边界与本地数据
 
@@ -1241,9 +1250,9 @@ Release 和发布资产校验值。
 
 ## 相关文档
 
-- [v0.6.4 发布说明](docs/release-v0.6.4.md)
-- [v0.6.1 发布说明](docs/release-v0.6.1.md)
-- [v0.6.0 发布说明](docs/release-v0.6.0.md)
+- [v0.6.4 发布说明](docs/archive/releases/release-v0.6.4.md)
+- [v0.6.1 发布说明](docs/archive/releases/release-v0.6.1.md)
+- [v0.6.0 发布说明](docs/archive/releases/release-v0.6.0.md)
 - [ChatGPT 调用规范](docs/chatgpt-usage.md)
 - [旧版本迁移指南](docs/migration-from-safe-bifrost.md)
 - [ChatGPT Connector 演示](docs/demo.md)

@@ -1203,7 +1203,16 @@ tools, and `direct_profile_enabled=true`.
 - [MCP Inspector testing](docs/mcp-inspector-testing.md)
 - [OpenCode worker integration](docs/opencode-worker.md)
 - [OpenHands worker integration](docs/openhands-worker.md)
+- [Security model](docs/security-model.md)
 - [Threat model](docs/threat-model.md)
+- [External contribution plan](docs/external-pr-plan.md)
+- Ecosystem integration and contribution materials:
+  [Dev Machine Guard](docs/integrations/dev-machine-guard.md),
+  [mcp-agent](docs/integrations/mcp-agent.md),
+  [Desktop Commander](docs/integrations/desktop-commander.md),
+  [MCPorter](docs/integrations/mcporter.md), and
+  [OpenHands governance](docs/integrations/openhands-governance.md)
+- [Policy gateway pseudo-wrapper](examples/policy-gateway/pseudo-wrapper.md)
 
 ## Security boundaries and local data
 

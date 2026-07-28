@@ -1,181 +1,105 @@
 # OpenHands worker 集成模式
 
-> 本文基于 v1.5.1 源码编写；安装时请使用已验证发布的 <published-version>。
-> 说明：本文描述的是 PatchWarden 将 OpenHands 作为 worker agent 的集成模式建议。
-> OpenHands 是独立的 AI 软件开发 Agent 项目，本文不声称任何官方集成关系。
+> 本文基于 PatchWarden v1.6.6 源码描述建议集成模式。
+> OpenHands 是独立项目，本文不声称已有官方集成关系。
 
-## OpenHands 是什么
+## 定位
 
-OpenHands 是面向软件开发的 AI Agent，主要能力包括：
+PatchWarden 可以把经过本地维护者登记的 OpenHands 命令作为 worker agent 启动，
+并使用 PatchWarden 的 task 生命周期保存计划、状态、验证结果、Git 快照、改动文件
+和审计证据。
 
-- 在本地或容器化环境中编写、修改、调试代码。
-- 执行测试、运行构建、操作文件系统。
-- 接收自然语言任务并自主规划实现步骤。
-- 支持多种模型后端与运行时环境。
-
-OpenHands 默认以较自主的方式运行，本身不具备 PatchWarden 的安全边界。
-本文描述如何让 PatchWarden 作为外部监督层，OpenHands 作为受约束的 worker。
-
-## External Supervisor Pattern
-
-PatchWarden 与 OpenHands 的集成采用 **external supervisor pattern**：
-
-```
-MCP 客户端 → PatchWarden（supervisor）→ OpenHands（worker）→ workspace
-                ↑ 安全边界在此
+```text
+MCP client -> PatchWarden task workflow -> registered OpenHands process
+                    |                              |
+                    v                              v
+           assessment and evidence             workspace
 ```
 
-- **PatchWarden 作为 supervisor**：接收 MCP 客户端的任务请求，
-  负责工作区隔离、命令允许列表、范围违规检测、证据收集。
-- **OpenHands 作为 worker**：在 PatchWarden 允许的范围内执行软件开发任务。
-- **安全边界在 PatchWarden 侧**：OpenHands 的所有文件改动与命令执行
-  必须经过 PatchWarden 的策略校验。
+这是一种 external supervisor 模式，不是对 OpenHands 内部每个工具调用的透明代理。
+PatchWarden 能治理自己的任务入口、启动配置和验证命令，并能根据任务前后证据报告
+范围违规；它不会仅因启动了 OpenHands 就自动拦截其原生 shell、文件或网络调用。
 
-关键点：OpenHands 不直接暴露给 MCP 客户端，而是由 PatchWarden 调度。
-这避免了 OpenHands 在无监督下执行越权操作或访问敏感资源。
+## 注册 worker
 
-## 配置示例
-
-### 1. 在 PatchWarden 中注册 OpenHands agent
-
-在 `.patchwarden/config.json` 中注册 OpenHands：
+在可信的 `patchwarden.config.json`（或 `PATCHWARDEN_CONFIG` 指向的文件）中把
+OpenHands 注册为本地 agent。具体 CLI 参数必须以实际安装版本为准，由维护者本地
+确认，不能由模型请求动态定义。
 
 ```json
 {
-  "workspaceRoot": "D:\\repos\\my-project",
-  "agents": [
-    {
-      "name": "openhands",
-      "type": "local-worker",
+  "workspaceRoot": "D:/repos",
+  "agents": {
+    "openhands": {
       "command": "openhands",
-      "args": ["--headless", "--task"],
-      "workspace": "D:\\repos\\my-project"
+      "args": ["<reviewed-headless-arguments>", "{prompt}"],
+      "envAllowlist": []
     }
-  ],
-  "evidencePackVersion": 2,
-  "safeResult": { "maxBytes": 4096 }
+  },
+  "allowedTestCommands": [
+    "npm test",
+    "npm run build"
+  ]
 }
 ```
 
-### 2. 配置 project-policy.json 约束 OpenHands 的操作范围
+不要把模型服务 API key 写进仓库配置。PatchWarden 默认向子进程传递最小环境；
+确有需要的 provider 环境变量必须通过该 agent 的 `envAllowlist` 显式允许。
+
+可选的仓库策略位于 `.patchwarden/project-policy.json`，真实字段包括
+`allowed_commands`、`high_risk_commands`、`protected_paths`、`auto_cleanup`
+和 `release_mode`。该策略不是 OpenHands 内部文件工具的通用拦截器。
+
+## 真实任务流程
+
+1. 使用 `save_plan` 或 `create_task` 的模板/inline plan 声明任务。
+2. 先以 `execution_mode: "assess_only"` 获取风险决定和 assessment。
+3. Low-risk assessment 可以执行；medium-risk assessment 需要本地
+   `patchwarden-confirm`；blocked assessment 不能执行。
+4. 使用最小 `assessment_id` 调用执行任务，并通过 `wait_for_task` 等待终态。
+5. 检查 `get_task_summary`、验证记录、diff/changed-file 证据和 `audit_task`。
+
+示例仅展示 PatchWarden 调用形状，不规定 OpenHands 自身 CLI：
 
 ```json
 {
-  "allowedPaths": ["src/**", "test/**", "docs/**"],
-  "allowedCommands": [
-    "npm.cmd test",
-    "npm.cmd run build",
-    "git status",
-    "git diff",
-    "openhands --headless"
-  ],
-  "blockedFiles": [".env", ".env.*", "id_rsa", "*.key", "*.pem", "cookies.db"],
-  "scopeRules": {
-    "enforceDeclaredFiles": true,
-    "blockOutOfWorkspace": true
-  }
-}
-```
-
-### 3. OpenHands 在 workspace 内执行
-
-OpenHands 进程由 PatchWarden 启动并监督：
-
-```powershell
-# PatchWarden 通过 MCP 工具 run_safe_task 调度 OpenHands
-# MCP 客户端传入任务描述与声明的文件范围
-# PatchWarden 在执行前校验范围，执行中监督，执行后收集证据
-```
-
-## 工作流示例
-
-### 任务：让 OpenHands 修复一个 bug
-
-1. **MCP 客户端发起任务**：
-
-```json
-{
+  "tool": "create_task",
+  "execution_mode": "assess_only",
+  "template": "feature_small",
+  "goal": "Fix the null handling bug and add a regression test",
   "agent": "openhands",
-  "task": "fix null pointer in src/services/auth.ts when token is missing",
-  "declaredFiles": ["src/services/auth.ts", "test/services/auth.test.ts"]
+  "repo_path": "my-project",
+  "verify_commands": ["npm test"]
 }
 ```
 
-2. **PatchWarden 校验范围**：
+## 能保证与不能保证的内容
 
-- `src/services/auth.ts` 与 `test/services/auth.test.ts` 在 `allowedPaths` 内。
-- `openhands` 命令在 `allowedCommands` 内。
-- 无 `blockedFiles` 命中。
-
-3. **PatchWarden 启动 OpenHands worker**：
-
-- OpenHands 在 `workspaceRoot` 下以 headless 模式执行。
-- OpenHands 的文件改动受 PatchWarden 监督。
-- 若 OpenHands 尝试修改未声明文件，PatchWarden 触发范围违规检测并阻断。
-- 若 OpenHands 尝试读取 `.env` 或凭据文件，PatchWarden 立即阻断。
-
-4. **任务完成后导出证据**：
-
-```powershell
-# 产物位于 .patchwarden/evidence-packs/<lineage_id>/
-# 包含 evidence.json / EVIDENCE.md / risk.json / verify.json 等 8 个文件
-```
-
-## 安全边界
-
-PatchWarden 对 OpenHands worker 的约束包括：
-
-| 维度 | 约束 |
+| 范围 | PatchWarden v1.6.6 行为 |
 | --- | --- |
-| 文件读写 | 必须在 `allowedPaths` 内，命中 `blockedFiles` 即阻断 |
-| 命令执行 | 必须在 `allowedCommands` 中（精确匹配） |
-| 工作区 | OpenHands 进程的 cwd 限定在 `workspaceRoot` 下 |
-| 越界改动 | `enforceDeclaredFiles` 为 true 时，未声明文件改动被阻断 |
-| 敏感资源 | `.env`、SSH key、cookie、token 等一律不可访问 |
-| 进程监督 | OpenHands 进程由 PatchWarden launcher 拥有，可被监督与终止 |
-| 网络访问 | 取决于 OpenHands 运行时配置，PatchWarden 不放宽命令允许列表 |
+| 仓库选择 | `repo_path` 必须位于 `workspaceRoot` 下 |
+| worker 启动 | 只能使用本地配置中登记的 command/args 模板 |
+| 验证命令 | 必须与可信配置中的允许列表精确匹配 |
+| 环境变量 | 子进程使用最小环境，额外 provider 变量需显式允许 |
+| 仓库改动 | 保存任务前后 Git 快照、changed-file 和 diff 证据，并报告范围违规 |
+| 敏感读取 | PatchWarden 自身文件工具会阻止敏感路径；worker 原生工具不受逐调用代理 |
+| 网络访问 | 取决于 worker 和隔离环境，PatchWarden 任务调度不构成网络 sandbox |
+| push/publish | 不属于普通 Runner 自动流程，远程结果必须单独核验 |
 
-## 容器化运行注意事项
+任务后的范围违规检测可以发现仓库效果，但不能撤销已经发生的外部网络请求，也不能
+替代对 worker 进程的强隔离。需要强保证时应在 Docker、VM、devcontainer 或其他
+OS-level sandbox 中运行 worker，并只挂载必要的 workspace。
 
-若 OpenHands 运行在容器中，需额外注意：
+## 与 Governance Issue 的关系
 
-- PatchWarden 监督的是宿主机上的 OpenHands 进程，
-  容器内的文件系统改动应通过挂载卷映射回 `workspaceRoot`。
-- `project-policy.json` 的 `allowedPaths` 应对应宿主机路径，
-  而非容器内路径。
-- 容器内的命令执行若需被 PatchWarden 监督，
-  应通过 OpenHands 的 headless 接口走 PatchWarden 调度，
-  而非绕过 PatchWarden 直接在容器内执行。
-
-## 注意事项
-
-- OpenHands 必须以 headless / 非交互模式运行，避免阻塞 PatchWarden。
-- OpenHands 的模型后端配置（API key 等）属于 OpenHands 自身配置，
-  PatchWarden 不读取也不持久化这些凭据。
-- 若 OpenHands 任务需要执行 `allowedCommands` 之外的命令，
-  应先更新 `project-policy.json` 再执行，不应临时放宽约束。
-- OpenHands worker 的 stdout / stderr 由 PatchWarden 收集为有界摘要，
-  完整日志不直接暴露给 MCP 客户端。
-- 本集成模式不修改 OpenHands 的任何行为，仅在调度与监督层面配合。
-
-## 与 OpenCode worker 的差异
-
-OpenHands 与 OpenCode 的集成模式在结构上一致（均采用 external supervisor pattern），
-主要差异在于：
-
-| 维度 | OpenCode | OpenHands |
-| --- | --- | --- |
-| 定位 | 本地编程 Agent | AI 软件开发 Agent |
-| 运行模式 | 通常直接在宿主机 | 支持 headless 与容器化 |
-| 自主性 | 中等，偏交互式 | 较高，偏自主规划 |
-| 适用任务 | 中小规模代码改动 | 较复杂的软件开发任务 |
-
-选择哪个 worker 取决于任务复杂度与运行时偏好，
-PatchWarden 的安全边界对两者一视同仁。
+OpenHands 的 action-level governance 仍应在执行前的 action boundary 解决。参见
+[治理讨论草稿](integrations/openhands-governance.md)。如果未来 OpenHands
+提供稳定的 pre-dispatch hook，可以再实现真正逐调用的外部 policy adapter；在此
+之前不应把 external worker 调度描述成该 adapter 已存在。
 
 ## 相关文档
 
-- `docs/threat-model.md`：PatchWarden 安全契约与进程监督边界。
-- `docs/evidence-pack-schema.md`：Evidence Pack v2 文件结构。
-- `docs/why-patchwarden.md`：external supervisor pattern 的定位。
-- `docs/opencode-worker.md`：类似的 worker 集成模式（OpenCode）。
+- [PatchWarden Security Model](security-model.md)
+- [PatchWarden Threat Model](threat-model.md)
+- [Evidence Pack v2 schema](evidence-pack-schema.md)
+- [OpenCode worker integration](opencode-worker.md)
