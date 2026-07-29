@@ -1,7 +1,7 @@
 # PatchWarden
 
 <p align="right">
-  <a href="./README.md">English</a> · <strong>简体中文</strong>
+  <a href="./README.en.md">English</a> · <strong>简体中文</strong>
 </p>
 
 [![最新版本](https://img.shields.io/github/v/release/jiezeng2004-design/PatchWarden?label=release)](https://github.com/jiezeng2004-design/PatchWarden/releases/latest)
@@ -52,16 +52,16 @@ PatchWarden 将 ChatGPT 与本地 Codex CLI、Claude Code 或 OpenCode 等编程
 
 ### 1. 下载并校验
 
-打开 [Releases](https://github.com/jiezeng2004-design/PatchWarden/releases/latest)，下载以下 Windows x64 文件：
+打开 [Releases](https://github.com/jiezeng2004-design/PatchWarden/releases/latest)，下载当前 Release 页面列出的 Windows x64 文件：
 
-- 安装版：`PatchWarden-Setup-1.6.7-x64.exe`。
-- 免安装版：`PatchWarden-Portable-1.6.7-x64.zip`。
+- 安装版：`PatchWarden-Setup-<release-version>-x64.exe`。
+- 免安装版：`PatchWarden-Portable-<release-version>-x64.zip`。
 - 校验文件：`PatchWarden-Desktop-SHA256SUMS.txt`。
 
-在 Windows PowerShell 中计算安装包 SHA-256，并与同一 Release 的校验文件比较：
+在只包含当前安装包的文件夹中运行以下 PowerShell 命令，并与同一 Release 的校验文件比较 SHA-256：
 
 ```powershell
-Get-FileHash .\PatchWarden-Setup-1.6.7-x64.exe -Algorithm SHA256
+Get-FileHash .\PatchWarden-Setup-*-x64.exe -Algorithm SHA256
 ```
 
 > [!WARNING]
