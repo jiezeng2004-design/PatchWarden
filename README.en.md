@@ -1,7 +1,7 @@
 # PatchWarden
 
 <p align="right">
-  <strong>English</strong> · <a href="./README.zh-CN.md">简体中文</a>
+  <strong>English</strong> · <a href="./README.md">简体中文</a>
 </p>
 
 [![Latest release](https://img.shields.io/github/v/release/jiezeng2004-design/PatchWarden?label=release)](https://github.com/jiezeng2004-design/PatchWarden/releases/latest)
@@ -52,16 +52,16 @@ This path proves that PatchWarden, your workspace, and a local agent are ready. 
 
 ### 1. Download and verify
 
-Open [Releases](https://github.com/jiezeng2004-design/PatchWarden/releases/latest) and download one of these Windows x64 assets:
+Open [Releases](https://github.com/jiezeng2004-design/PatchWarden/releases/latest) and download the Windows x64 assets listed on the current release page:
 
-- `PatchWarden-Setup-1.6.7-x64.exe` for the installer.
-- `PatchWarden-Portable-1.6.7-x64.zip` for the portable build.
+- `PatchWarden-Setup-<release-version>-x64.exe` for the installer.
+- `PatchWarden-Portable-<release-version>-x64.zip` for the portable build.
 - `PatchWarden-Desktop-SHA256SUMS.txt` for checksum verification.
 
-In Windows PowerShell, compute the installer checksum and compare it with the checksum file from the same release:
+In a folder containing only the current installer, run this PowerShell command and compare its SHA-256 with the checksum file from the same release:
 
 ```powershell
-Get-FileHash .\PatchWarden-Setup-1.6.7-x64.exe -Algorithm SHA256
+Get-FileHash .\PatchWarden-Setup-*-x64.exe -Algorithm SHA256
 ```
 
 > [!WARNING]
