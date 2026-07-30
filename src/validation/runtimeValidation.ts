@@ -235,7 +235,9 @@ async function validateRoute(
 async function waitForLoopbackServer(baseUrl: string, timeoutMs: number, child: ChildProcess): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) throw new Error(`Runtime server exited before readiness with code ${child.exitCode}`);
+    if (childHasExited(child)) {
+      throw new Error(`Runtime server exited before readiness with ${child.exitCode !== null ? `code ${child.exitCode}` : `signal ${child.signalCode}`}`);
+    }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 1500);
     try {
@@ -252,7 +254,7 @@ async function waitForLoopbackServer(baseUrl: string, timeoutMs: number, child: 
 }
 
 async function terminateOwnedProcessTree(child: ChildProcess, baseUrl: string): Promise<boolean> {
-  if (!child.pid || child.exitCode !== null) return true;
+  if (!child.pid || childHasExited(child)) return true;
   try {
     if (process.platform === "win32") {
       const systemRoot = process.env.SystemRoot || process.env.WINDIR || "C:\\Windows";
@@ -268,10 +270,14 @@ async function terminateOwnedProcessTree(child: ChildProcess, baseUrl: string): 
     try { child.kill("SIGKILL"); } catch {}
   }
   for (let attempt = 0; attempt < 40; attempt++) {
-    if (child.exitCode !== null && !(await isLoopbackReachable(baseUrl, 100))) return true;
+    if (childHasExited(child) && !(await isLoopbackReachable(baseUrl, 100))) return true;
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
   }
-  return child.exitCode !== null && !(await isLoopbackReachable(baseUrl, 250));
+  return childHasExited(child) && !(await isLoopbackReachable(baseUrl, 250));
+}
+
+function childHasExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
 }
 
 async function isLoopbackReachable(baseUrl: string, timeoutMs: number): Promise<boolean> {
