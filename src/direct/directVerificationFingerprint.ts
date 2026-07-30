@@ -61,13 +61,17 @@ export function assertDirectVerificationSnapshotComplete(
     fingerprint.sha256.startsWith("large-file:")
     || fingerprint.resolved_target_sha256?.startsWith("large-file:"),
   );
-  if (incompleteWarnings.length > 0 || approximateFiles.length > 0) {
+  if (snapshot.integrity?.complete === false || incompleteWarnings.length > 0 || approximateFiles.length > 0) {
     throw new PatchWardenError(
       "direct_review_workspace_snapshot_incomplete",
       "The repository snapshot is incomplete, so verification semantics cannot be bound to a review grant.",
       "Reduce the repository snapshot scope or fix unreadable files, then request a new Direct review.",
       true,
-      { warning_count: incompleteWarnings.length, approximate_file_count: approximateFiles.length },
+      {
+        warning_count: incompleteWarnings.length,
+        approximate_file_count: approximateFiles.length,
+        integrity_failure_count: snapshot.integrity?.failure_codes.length ?? 0,
+      },
     );
   }
 }
@@ -321,4 +325,3 @@ function dependencySnapshotError(reason: string): PatchWardenError {
     { dependency_snapshot_reason: reason },
   );
 }
-

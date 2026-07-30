@@ -69,6 +69,17 @@ describe("Direct verification workspace fingerprint", () => {
           && error.reason === "direct_review_workspace_snapshot_incomplete",
       );
     }
+    const integrityFailure = makeSnapshot({});
+    integrityFailure.integrity = {
+      complete: false,
+      truncated: false,
+      failure_codes: ["snapshot_fingerprint_failed"],
+    };
+    assert.throws(
+      () => assertDirectVerificationSnapshotComplete(integrityFailure),
+      (error: unknown) => error instanceof PatchWardenError
+        && error.reason === "direct_review_workspace_snapshot_incomplete",
+    );
   });
 
   it("fails closed for approximate large-file fingerprints", () => {
@@ -254,4 +265,3 @@ function makeSnapshot(files: RepoSnapshot["files"]): RepoSnapshot {
     warnings: [],
   };
 }
-
