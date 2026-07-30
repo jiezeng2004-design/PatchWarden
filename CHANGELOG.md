@@ -1,8 +1,26 @@
 # PatchWarden CHANGELOG
 
-## v1.7.0 (Unreleased)
+## v1.7.1 (Unreleased)
 
-> Local `1.7.0` release candidate; this does not assert a GitHub or npm release.
+> Local `1.7.1` candidate. This entry does not assert a GitHub or npm release.
+
+### Model management and Direct review
+
+- Add safe Desktop model state for Codex, OpenCode, and Claude: OpenCode alone
+  refreshes an isolated cached catalog with `--pure models`; Codex and Claude
+  only reread permitted local configuration.
+- Add strict model probe IPC, an isolated temporary runtime, value-free result
+  caching, and exact nonce validation. OpenCode provider probing remains
+  unsupported rather than attempting an unsafe fallback.
+- Add optional Direct Review policy modes. The default remains `off`; use
+  `shadow` for deployment observation. Enforce mode requires independent
+  reviewer tickets, fingerprint validation, one-time consumption, and receipt
+  evidence before Direct mutations or verification.
+- Reject Direct deletion through a final symbolic link or junction, retain
+  bounded ignored generated-artifact evidence, fail navigation independently of
+  console checks, and give runtime screenshots collision-resistant names.
+
+## v1.7.0 (2026-07-30)
 
 ### Security, evidence, and packaging
 

@@ -7,6 +7,13 @@ export type ToolProfile = "full" | "chatgpt_core" | "chatgpt_direct" | "chatgpt_
 export interface CatalogTool {
   name: string;
   description: string;
+  annotations?: {
+    title?: string;
+    readOnlyHint?: boolean;
+    destructiveHint?: boolean;
+    idempotentHint?: boolean;
+    openWorldHint?: boolean;
+  };
   inputSchema: unknown;
 }
 
@@ -52,6 +59,7 @@ export const CHATGPT_DIRECT_TOOL_NAMES = [
   "health_check",
   "list_workspace",
   "create_direct_session",
+  "request_direct_review",
   "search_workspace",
   "read_workspace_file",
   "apply_patch",
@@ -126,6 +134,7 @@ export function buildToolCatalogSnapshot(tools: CatalogTool[], profile: ToolProf
   const manifestInput = tools.map((tool) => ({
     name: tool.name,
     description: tool.description,
+    annotations: tool.annotations ?? {},
     inputSchema: tool.inputSchema,
   }));
   const tool_manifest_sha256 = createHash("sha256")

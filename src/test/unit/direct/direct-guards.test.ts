@@ -28,6 +28,7 @@ function makeConfig(workspaceRoot: string): PatchWardenConfig {
     directMaxFileBytes: 500_000,
     directAllowedCommands: ["npm test"],
     repoDirectAllowedCommands: {},
+    directReview: { mode: "off", autoReviewRequired: true, ttlSeconds: 300 },
   };
 }
 

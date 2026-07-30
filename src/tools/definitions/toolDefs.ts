@@ -15,9 +15,18 @@ import {
   selectToolsForProfile,
 } from "../catalog/toolCatalog.js";
 
+export interface ToolAnnotations {
+  title?: string;
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
+}
+
 export interface ToolDef {
   name: string;
   description: string;
+  annotations?: ToolAnnotations;
   inputSchema: {
     type: "object";
     properties: Record<string, unknown>;
@@ -63,6 +72,7 @@ export function getToolDefs(): ToolDef[] {
       name: "health_check",
       description:
         "Check MCP catalog consistency, watcher freshness/supervisor state, workspace readiness, and configured agents. Agent availability is executable-only unless an explicit provider probe is requested. Use detail=self_diagnostic for expanded read-only evidence.",
+      annotations: { title: "Health Check", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       inputSchema: {
         type: "object",
         properties: {
@@ -419,6 +429,7 @@ export function getToolDefs(): ToolDef[] {
       name: "list_workspace",
       description:
         "List files and directories within the workspace (sensitive files excluded).",
+      annotations: { title: "List Workspace", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       inputSchema: {
         type: "object",
         properties: {
@@ -433,6 +444,7 @@ export function getToolDefs(): ToolDef[] {
       name: "read_workspace_file",
       description:
         "Read a file within the workspace. Sensitive files (secrets, keys, tokens) are blocked. In Direct mode (with session_id), reads are scoped to the session's repo_path and return sha256.",
+      annotations: { title: "Read Workspace File", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       inputSchema: {
         type: "object",
         properties: {
@@ -1101,6 +1113,7 @@ export function getToolDefs(): ToolDef[] {
     name: "create_direct_session",
     description:
       "Create a Direct editing session for ChatGPT to apply patches directly. Requires enableDirectProfile: true in config.",
+    annotations: { title: "Create Direct Session", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     inputSchema: {
       type: "object",
       properties: {
@@ -1126,6 +1139,7 @@ export function getToolDefs(): ToolDef[] {
     name: "search_workspace",
     description:
       "Search file contents (grep-like) within a Direct session's repo_path. Skips .git, node_modules, dist, release, and sensitive files.",
+    annotations: { title: "Search Workspace", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: {
       type: "object",
       properties: {
@@ -1148,12 +1162,14 @@ export function getToolDefs(): ToolDef[] {
     name: "apply_patch",
     description:
       "Apply JSON patch operations to a file within a Direct session's repo_path. Validates expected_sha256 before applying. Supports replace_exact, insert_before, insert_after, replace_whole_file.",
+    annotations: { title: "Apply Patch", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     inputSchema: {
       type: "object",
       properties: {
         session_id: { type: "string", description: "Session ID" },
         path: { type: "string", description: "Relative file path within the session repo" },
         expected_sha256: { type: "string", description: "Expected SHA-256 hash of the current file content" },
+        review_id: { type: "string", description: "Fresh review ID for this exact operation when required." },
         operations: {
           type: "array",
           items: {
@@ -1175,12 +1191,14 @@ export function getToolDefs(): ToolDef[] {
   tools.push({
     name: "create_file",
     description: "Create a new bounded UTF-8 text file inside an active Direct session. The target and its parent are revalidated, sensitive content is blocked, and existing targets are never overwritten.",
+    annotations: { title: "Create File", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     inputSchema: {
       type: "object",
       properties: {
         session_id: { type: "string" },
         path: { type: "string", description: "New repository-relative file path." },
         content: { type: "string", description: "UTF-8 text content subject to Direct size and sensitive-content guards." },
+        review_id: { type: "string", description: "Fresh review ID for this exact create proposal when required." },
       },
       required: ["session_id", "path", "content"],
     },
@@ -1189,9 +1207,10 @@ export function getToolDefs(): ToolDef[] {
   tools.push({
     name: "mkdir",
     description: "Create one new directory level inside an active Direct session. Parent directories must already exist; linked, sensitive, internal, dependency, release, and build-output paths remain blocked.",
+    annotations: { title: "Create Directory", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     inputSchema: {
       type: "object",
-      properties: { session_id: { type: "string" }, path: { type: "string" } },
+      properties: { session_id: { type: "string" }, path: { type: "string" }, review_id: { type: "string" } },
       required: ["session_id", "path"],
     },
   });
@@ -1199,6 +1218,7 @@ export function getToolDefs(): ToolDef[] {
   tools.push({
     name: "move_file",
     description: "Move one bounded regular text file within a Direct session. Requires the current source SHA-256 and never overwrites the target.",
+    annotations: { title: "Move File", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     inputSchema: {
       type: "object",
       properties: {
@@ -1206,6 +1226,7 @@ export function getToolDefs(): ToolDef[] {
         source_path: { type: "string" },
         target_path: { type: "string" },
         expected_source_sha256: { type: "string", pattern: "^[A-Fa-f0-9]{64}$" },
+        review_id: { type: "string" },
       },
       required: ["session_id", "source_path", "target_path", "expected_source_sha256"],
     },
@@ -1214,6 +1235,7 @@ export function getToolDefs(): ToolDef[] {
   tools.push({
     name: "delete_file",
     description: "Delete one bounded regular text file inside a Direct session. Requires the current SHA-256 and confirm_delete=true; directories and recursive deletion are unsupported.",
+    annotations: { title: "Delete File", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     inputSchema: {
       type: "object",
       properties: {
@@ -1221,8 +1243,33 @@ export function getToolDefs(): ToolDef[] {
         path: { type: "string" },
         expected_sha256: { type: "string", pattern: "^[A-Fa-f0-9]{64}$" },
         confirm_delete: { type: "boolean", description: "Must be true after reviewing the exact path and hash." },
+        review_id: { type: "string" },
       },
       required: ["session_id", "path", "expected_sha256", "confirm_delete"],
+    },
+  });
+
+  tools.push({
+    name: "request_direct_review",
+    description: "Request a policy-bound review for the exact Direct operation to be performed. In enforce mode, pass the returned review_id unchanged to the matching operation before it expires.",
+    annotations: { title: "Request Direct Review", readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string" },
+        operation_type: { type: "string", enum: ["patch", "create", "mkdir", "move", "delete", "verification", "verification_bundle"] },
+        path: { type: "string" },
+        source_path: { type: "string" },
+        target_path: { type: "string" },
+        expected_sha256: { type: "string", pattern: "^[A-Fa-f0-9]{64}$" },
+        expected_source_sha256: { type: "string", pattern: "^[A-Fa-f0-9]{64}$" },
+        operations: { type: "array", items: { type: "object" } },
+        content: { type: "string" },
+        command: { type: "string" },
+        commands: { type: "array", minItems: 1, maxItems: 20, items: { type: "string" } },
+        timeout_seconds: { type: "integer", minimum: 1, maximum: Math.min(config.maxTaskTimeoutSeconds, config.directSessionTtlSeconds), default: 120 },
+      },
+      required: ["session_id", "operation_type"],
     },
   });
 
@@ -1230,6 +1277,7 @@ export function getToolDefs(): ToolDef[] {
     name: "run_verification",
     description:
       "Run a whitelisted verification command within a Direct session. Command must be in the Direct allowlist.",
+    annotations: { title: "Run Verification", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     inputSchema: {
       type: "object",
       properties: {
@@ -1240,6 +1288,7 @@ export function getToolDefs(): ToolDef[] {
           ...(directCommands.length > 0 ? { enum: directCommands } : {}),
         },
         timeout_seconds: { type: "number", description: "Timeout in seconds (default 120)" },
+        review_id: { type: "string" },
       },
       required: ["session_id", "command"],
     },
@@ -1249,6 +1298,7 @@ export function getToolDefs(): ToolDef[] {
     name: "run_direct_verification_bundle",
     description:
       "Run multiple allowlisted Direct verification commands sequentially and return only bounded structured status. Omits stdout/stderr tails and log content.",
+    annotations: { title: "Run Direct Verification Bundle", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     inputSchema: {
       type: "object",
       properties: {
@@ -1264,6 +1314,7 @@ export function getToolDefs(): ToolDef[] {
           description: "Verification commands to run in order. Each command must be accepted by the existing Direct command guard.",
         },
         timeout_seconds: { type: "integer", minimum: 1, maximum: Math.min(config.maxTaskTimeoutSeconds, config.directSessionTtlSeconds), default: 120 },
+        review_id: { type: "string", description: "Fresh review ID for this exact verification bundle when required." },
       },
       required: ["session_id", "commands"],
     },
@@ -1273,6 +1324,7 @@ export function getToolDefs(): ToolDef[] {
     name: "finalize_direct_session",
     description:
       "Finalize a Direct session: capture after snapshot, generate diff/summary/change artifacts, mark session as finalized. Must be called before audit_session.",
+    annotations: { title: "Finalize Direct Session", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     inputSchema: {
       type: "object",
       properties: {
@@ -1286,6 +1338,7 @@ export function getToolDefs(): ToolDef[] {
     name: "audit_session",
     description:
       "Independently audit a Direct session's changes. Performs 16 deterministic checks and returns pass/warn/fail decision. Requires session to be finalized first.",
+    annotations: { title: "Audit Session", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     inputSchema: {
       type: "object",
       properties: {
@@ -1299,6 +1352,7 @@ export function getToolDefs(): ToolDef[] {
     name: "safe_direct_summary",
     description:
       "Return a low-noise Direct session summary without diff content or verification stdout/stderr tails.",
+    annotations: { title: "Safe Direct Summary", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: {
       type: "object",
       properties: {
@@ -1313,6 +1367,7 @@ export function getToolDefs(): ToolDef[] {
     name: "safe_finalize_direct_session",
     description:
       "Finalize a Direct session and return only bounded structured evidence, omitting diff and verification log content.",
+    annotations: { title: "Safe Finalize Direct Session", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     inputSchema: {
       type: "object",
       properties: {
@@ -1327,6 +1382,7 @@ export function getToolDefs(): ToolDef[] {
     name: "safe_audit_direct_session",
     description:
       "Audit a Direct session and return only bounded structured evidence without verification stdout/stderr tails.",
+    annotations: { title: "Safe Audit Direct Session", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     inputSchema: {
       type: "object",
       properties: {
@@ -1339,7 +1395,8 @@ export function getToolDefs(): ToolDef[] {
   tools.push({
     name: "sync_file",
     description:
-      "Copy a file from source to target within the same Direct session repo. Both paths must be inside the session repo_path. Returns before/after sha256 hashes and whether the target changed.",
+      "Copy a file from source to target within the same Direct session repo. This legacy operation is outside the first Direct review MVP and is disabled when directReview.mode=enforce. Both paths must be inside the session repo_path.",
+    annotations: { title: "Sync File", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     inputSchema: {
       type: "object",
       properties: {

@@ -16,6 +16,8 @@ import { finalizeDirectSession } from "../direct/finalizeDirectSession.js";
 import { auditSession } from "../diagnostics/auditSession.js";
 import { syncFile } from "../workspace/syncFile.js";
 import { createDirectFile, deleteDirectFile, mkdirDirect, moveDirectFile } from "../workspace/directFileOperations.js";
+import { requestDirectReview } from "../../direct/directReviewGate.js";
+import type { DirectReviewOperationType } from "../../direct/directSessionStore.js";
 import {
   safeAuditDirectSession,
   safeDirectSummary,
@@ -78,6 +80,7 @@ export const directHandlers: ToolHandlerMap = {
         path: String(args?.path ?? ""),
         expected_sha256: String(args?.expected_sha256 ?? ""),
         operations: parsePatchOperations(args?.operations),
+        review_id: args?.review_id ? String(args.review_id) : undefined,
       }),
     );
   },
@@ -88,12 +91,13 @@ export const directHandlers: ToolHandlerMap = {
       session_id: String(args?.session_id ?? ""),
       path: String(args?.path ?? ""),
       content: String(args?.content ?? ""),
+      review_id: args?.review_id ? String(args.review_id) : undefined,
     }));
   },
 
   mkdir: async (args) => {
     guardDirectProfileEnabled();
-    return toResult(mkdirDirect({ session_id: String(args?.session_id ?? ""), path: String(args?.path ?? "") }));
+    return toResult(mkdirDirect({ session_id: String(args?.session_id ?? ""), path: String(args?.path ?? ""), review_id: args?.review_id ? String(args.review_id) : undefined }));
   },
 
   move_file: async (args) => {
@@ -103,6 +107,7 @@ export const directHandlers: ToolHandlerMap = {
       source_path: String(args?.source_path ?? ""),
       target_path: String(args?.target_path ?? ""),
       expected_source_sha256: String(args?.expected_source_sha256 ?? ""),
+      review_id: args?.review_id ? String(args.review_id) : undefined,
     }));
   },
 
@@ -113,6 +118,26 @@ export const directHandlers: ToolHandlerMap = {
       path: String(args?.path ?? ""),
       expected_sha256: String(args?.expected_sha256 ?? ""),
       confirm_delete: args?.confirm_delete === true,
+      review_id: args?.review_id ? String(args.review_id) : undefined,
+    }));
+  },
+
+  request_direct_review: async (args) => {
+    guardDirectProfileEnabled();
+    const operationType = String(args?.operation_type ?? "") as DirectReviewOperationType;
+    return toResult(await requestDirectReview({
+      session_id: String(args?.session_id ?? ""),
+      operation_type: operationType,
+      path: args?.path,
+      source_path: args?.source_path,
+      target_path: args?.target_path,
+      expected_sha256: args?.expected_sha256,
+      expected_source_sha256: args?.expected_source_sha256,
+      operations: operationType === "patch" ? parsePatchOperations(args?.operations) : args?.operations,
+      content: args?.content,
+      command: args?.command,
+      commands: args?.commands,
+      timeout_seconds: args?.timeout_seconds,
     }));
   },
 
@@ -123,6 +148,7 @@ export const directHandlers: ToolHandlerMap = {
         session_id: String(args?.session_id ?? ""),
         command: String(args?.command ?? ""),
         timeout_seconds: args?.timeout_seconds ? Number(args.timeout_seconds) : undefined,
+        review_id: args?.review_id ? String(args.review_id) : undefined,
       }),
     );
   },
@@ -136,6 +162,7 @@ export const directHandlers: ToolHandlerMap = {
           ? args.commands.map((command) => String(command))
           : [],
         timeout_seconds: args?.timeout_seconds ? Number(args.timeout_seconds) : undefined,
+        review_id: args?.review_id ? String(args.review_id) : undefined,
       }),
     );
   },

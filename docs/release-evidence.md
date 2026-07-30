@@ -9,29 +9,27 @@ Remote facts checked again on 2026-07-30 after the v1.6.7 release completed.
 
 | Surface | Current evidence |
 | --- | --- |
-| Remote `main` | `5192ee379158370e977b36ee071d40bd24450609` |
-| Annotated tag object | `41b7f8393d79b058d8a6f42f29c44d7a152863ba` |
-| Tag peeled commit | `69103b2b649e31ee2a8014f5d20616c5ad6b68ba` |
-| Local `package.json` | `patchwarden@1.7.0` (release preparation) |
-| GitHub latest release | `v1.6.7` |
-| GitHub release URL | https://github.com/jiezeng2004-design/PatchWarden/releases/tag/v1.6.7 |
+| Remote `main` | `4c8f66e0461d3460886bca8c3f17c3c4fbdc5e18` |
+| Annotated tag object | `b4ccc0012188c690a2a8482f46dea0648e176321` |
+| Tag peeled commit | `4c8f66e0461d3460886bca8c3f17c3c4fbdc5e18` |
+| Local `package.json` | `patchwarden@1.7.1` (unreleased candidate) |
+| GitHub latest release | `v1.7.0` |
+| GitHub release URL | https://github.com/jiezeng2004-design/PatchWarden/releases/tag/v1.7.0 |
 | GitHub release published at | `2026-07-28T10:21:44Z` |
 | GitHub release state | non-draft, non-prerelease |
 | GitHub release target | `69103b2b649e31ee2a8014f5d20616c5ad6b68ba` |
-| npm latest | `patchwarden@1.6.7` |
-| npm `dist-tags.latest` | `1.6.7` |
-| npm `gitHead` | `69103b2b649e31ee2a8014f5d20616c5ad6b68ba` |
-| npm published at | `2026-07-28T10:00:41.420Z` |
+| npm latest | `patchwarden@1.7.0` |
+| npm `dist-tags.latest` | `1.7.0` |
+| npm `gitHead` | unavailable in registry metadata |
+| npm published at | `2026-07-30T10:38:55.884Z` |
 | GitHub stars | 2 |
 | GitHub forks | 0 |
 | Open issues | 5 |
 | Open pull requests | 1 |
 
-Conclusion: the local source is preparing `v1.7.0`. The Git tag, GitHub
+Conclusion: the local source is preparing `v1.7.1`. The Git tag, GitHub
 Release, npm package version, and `dist-tags.latest` are independently verified
-at `v1.6.7`; this document does not claim that v1.7.0 has been published. The
-v1.6.7 release tag intentionally remains on the reviewed release commit while
-`main` contains later documentation and dependency-maintenance commits.
+at `v1.7.0`; this document does not claim that v1.7.1 has been published.
 
 ## v1.6.7 Uploaded Asset Digests
 

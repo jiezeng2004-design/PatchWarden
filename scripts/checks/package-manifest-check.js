@@ -76,7 +76,8 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
-const maxFiles = 400;
+// Direct Review adds nine production modules to the published runtime.
+const maxFiles = 410;
 const maxUnpackedBytes = 6 * 1024 * 1024;
 if (files.length > maxFiles || Number(packageMetadata.unpackedSize || 0) > maxUnpackedBytes) {
   console.error(`[package-manifest-check] Package budget exceeded: ${files.length}/${maxFiles} files, ${packageMetadata.unpackedSize}/${maxUnpackedBytes} unpacked bytes.`);

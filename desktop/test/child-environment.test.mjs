@@ -117,7 +117,9 @@ describe("desktop child environment", () => {
 
     assert.doesNotMatch(main, /\.\.\.process\.env/);
     assert.match(main, /configuredAgentEnvironmentPolicy\(\)/);
-    assert.match(main, /refreshAgentModels\(id, detection, \{\s*cwd: coreRoot,/);
+    assert.match(main, /refreshAgentModels\(id, detection, \{\s*cwd: directory,/);
+    assert.match(main, /createOwnedCatalogDirectory\(\)/);
+    assert.match(main, /verifyAgentModel\(\{/);
     assert.match(runtimeRoot, /buildDesktopChildEnvironment\(\{ \.\.\.environmentOptions, overrides: env \}\)/);
     assert.match(adapters, /resolveTrustedWhere\(process\.cwd\(\),/);
     assert.match(adapters, /execFileAsync\(lookup, \[adapter\.id\], \{[^}]*\benv\b[^}]*\}\)/);

@@ -2,14 +2,22 @@ import {
   readDirectSession,
   appendDirectSessionVerificationRun,
   withDirectSessionMutationLockAsync,
+  type DirectSessionRecord,
 } from "../../direct/directSessionStore.js";
 import { guardDirectSessionActive } from "../../direct/directGuards.js";
 import { runDirectVerification } from "../../direct/directVerification.js";
+import {
+  authorizeDirectOperation,
+  buildDirectReviewProposalForCurrentWorkspace,
+  completeDirectReview,
+  validateDirectReviewProposal,
+} from "../../direct/directReviewGate.js";
 
 export interface RunVerificationInput {
   session_id: string;
   command: string;
   timeout_seconds?: number;
+  review_id?: string;
 }
 
 export interface RunVerificationOutput {
@@ -31,12 +39,35 @@ export async function runVerification(
   input: RunVerificationInput
 ): Promise<RunVerificationOutput> {
   return withDirectSessionMutationLockAsync(input.session_id, async () => {
-  // 1. Read session and guard active
-  const session = readDirectSession(input.session_id);
-  guardDirectSessionActive(session);
+    const session = readDirectSession(input.session_id);
+    guardDirectSessionActive(session);
+    const proposal = await buildDirectReviewProposalForCurrentWorkspace(session, {
+      operation_type: "verification",
+      command: input.command,
+      timeout_seconds: input.timeout_seconds,
+    });
+    validateDirectReviewProposal(session, proposal);
+    const authorization = authorizeDirectOperation(session, proposal, input.review_id);
+    try {
+      const output = await runVerificationWithinLockedSession(input, session);
+      completeDirectReview(input.session_id, authorization, true);
+      return output;
+    } catch (error) {
+      try {
+        completeDirectReview(input.session_id, authorization, false, error);
+      } catch {
+        // Preserve the primary verification failure; the audit reports an incomplete receipt.
+      }
+      throw error;
+    }
+  });
+}
 
-  // 2. Call runDirectVerification with command, resolvedRepoPath,
-  //    sessionId, and timeoutSeconds
+/** Execute an already-authorized command while the caller owns the session lock. */
+export async function runVerificationWithinLockedSession(
+  input: Omit<RunVerificationInput, "review_id">,
+  session: DirectSessionRecord,
+): Promise<RunVerificationOutput> {
   const timeoutSeconds = input.timeout_seconds ?? 120;
   const result = await runDirectVerification({
     command: input.command,
@@ -45,10 +76,8 @@ export async function runVerification(
     timeoutSeconds,
   });
 
-  // 3. Append verification run to session
   appendDirectSessionVerificationRun(input.session_id, result.run);
 
-  // 4. Return result
   return {
     command: result.run.command,
     exit_code: result.run.exit_code,
@@ -65,5 +94,4 @@ export async function runVerification(
       ? "Call finalize_direct_session to complete the session."
       : "Review the verification output and apply_patch to fix issues.",
   };
-  });
 }

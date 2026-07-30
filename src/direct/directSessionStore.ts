@@ -3,7 +3,7 @@ import {
   existsSync,
 } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
-import { resolve, join } from "node:path";
+import { dirname, resolve, join } from "node:path";
 import {
   getDirectSessionsDir,
   getConfig,
@@ -26,6 +26,7 @@ import {
   type RepoSnapshot,
   type ChangeArtifacts,
 } from "../runner/changeCapture.js";
+import { computeDirectReviewPolicyHash } from "./directReviewPolicy.js";
 
 // Session history writes are metadata-only and may queue behind concurrent
 // Direct workers. Keep the wait bounded, while workspace mutation locks remain
@@ -60,6 +61,32 @@ export interface DirectSessionVerificationRun {
   log_path: string;
 }
 
+export type DirectReviewOperationType =
+  | "patch"
+  | "create"
+  | "mkdir"
+  | "move"
+  | "delete"
+  | "verification"
+  | "verification_bundle";
+
+export interface DirectReviewEvent {
+  review_id: string | null;
+  review_record_hmac_sha256?: string | null;
+  operation_type: DirectReviewOperationType;
+  proposal_sha256: string;
+  mode: "off" | "shadow" | "enforce";
+  risk_level: "low" | "medium" | "high";
+  decision: "allow" | "needs_approval" | "blocked";
+  status: "requested" | "authorized" | "would_block" | "blocked" | "executed" | "failed";
+  reviewer_agent: string | null;
+  reviewer_status: string;
+  outer_approval_required: boolean;
+  reason_codes: string[];
+  created_at: string;
+  updated_at: string;
+}
+
 export interface DirectSessionRecord {
   session_id: string;
   title: string;
@@ -70,12 +97,15 @@ export interface DirectSessionRecord {
   server_version: string;
   schema_epoch: string;
   tool_manifest_sha256: string;
+  direct_review_policy_sha256: string;
+  requester_agent: string;
   workspace_snapshot_before: RepoSnapshot;
   workspace_fingerprint_before: string;
   allowed_commands: string[];
   expected_changes: boolean;
   operations: DirectSessionOperation[];
   verification_runs: DirectSessionVerificationRun[];
+  review_events: DirectReviewEvent[];
   finalized: boolean;
   finalized_at: string | null;
   audited: boolean;
@@ -87,6 +117,7 @@ export interface DirectSessionCreateInput {
   resolved_repo_path: string;
   title?: string;
   expected_changes?: boolean;
+  requester_agent?: string;
   snapshot: RepoSnapshot;
 }
 
@@ -190,12 +221,18 @@ export function createDirectSession(
     server_version: PATCHWARDEN_VERSION,
     schema_epoch: TOOL_SCHEMA_EPOCH,
     tool_manifest_sha256: toolManifest,
+    direct_review_policy_sha256: computeDirectReviewPolicyHash(config.directReview),
+    requester_agent: redactSensitiveContent(input.requester_agent || "chatgpt")
+      .content
+      .replace(/[^A-Za-z0-9_.-]+/g, "-")
+      .slice(0, 80) || "chatgpt",
     workspace_snapshot_before: input.snapshot,
     workspace_fingerprint_before: workspaceFingerprint,
     allowed_commands: allowedCommands,
     expected_changes: input.expected_changes !== false,
     operations: [],
     verification_runs: [],
+    review_events: [],
     finalized: false,
     finalized_at: null,
     audited: false,
@@ -265,8 +302,14 @@ export function withDirectSessionMutationLock<R>(
   action: () => R,
   config: PatchWardenConfig = getConfig(),
 ): R {
+  const session = readDirectSession(sessionId, config);
+  const repoLockTarget = getDirectRepoMutationLockTarget(session.resolved_repo_path, config);
   const lockTarget = join(getDirectSessionDir(sessionId, config), "workspace-mutation");
-  return withFileLockSync(lockTarget, action, directSessionBusyOptions(sessionId));
+  return withFileLockSync(
+    repoLockTarget,
+    () => withFileLockSync(lockTarget, action, directSessionBusyOptions(sessionId)),
+    directRepoBusyOptions(sessionId, session.resolved_repo_path),
+  );
 }
 
 export function withDirectSessionMutationLockAsync<R>(
@@ -274,8 +317,14 @@ export function withDirectSessionMutationLockAsync<R>(
   action: () => Promise<R>,
   config: PatchWardenConfig = getConfig(),
 ): Promise<R> {
+  const session = readDirectSession(sessionId, config);
+  const repoLockTarget = getDirectRepoMutationLockTarget(session.resolved_repo_path, config);
   const lockTarget = join(getDirectSessionDir(sessionId, config), "workspace-mutation");
-  return withFileLock(lockTarget, action, directSessionBusyOptions(sessionId));
+  return withFileLock(
+    repoLockTarget,
+    () => withFileLock(lockTarget, action, directSessionBusyOptions(sessionId)),
+    directRepoBusyOptions(sessionId, session.resolved_repo_path),
+  );
 }
 
 export function appendDirectSessionVerificationRun(
@@ -286,6 +335,22 @@ export function appendDirectSessionVerificationRun(
     ...session,
     verification_runs: [...session.verification_runs, run],
   }));
+}
+
+export function upsertDirectReviewEvent(
+  sessionId: string,
+  event: DirectReviewEvent,
+  config: PatchWardenConfig = getConfig(),
+): DirectSessionRecord {
+  return mutateDirectSessionRecord(sessionId, (session) => {
+    const events = [...session.review_events];
+    const index = event.review_id
+      ? events.findIndex((entry) => entry.review_id === event.review_id)
+      : -1;
+    if (index >= 0) events[index] = event;
+    else events.push(event);
+    return { ...session, review_events: events.slice(-200) };
+  }, config);
 }
 
 // ── Validation ─────────────────────────────────────────────────────
@@ -321,6 +386,15 @@ export function validateDirectSessionFreshness(
     return {
       valid: false,
       failure_reason: "session_stale_config",
+      session,
+    };
+  }
+
+  const currentReviewPolicy = computeDirectReviewPolicyHash(getConfig().directReview);
+  if (session.direct_review_policy_sha256 !== currentReviewPolicy) {
+    return {
+      valid: false,
+      failure_reason: "direct_review_stale_config",
       session,
     };
   }
@@ -456,6 +530,41 @@ function directSessionBusyOptions(sessionId: string) {
   };
 }
 
+function directRepoBusyOptions(sessionId: string, repoPath: string) {
+  return {
+    waitMs: 0,
+    busyError: () => new PatchWardenError(
+      "direct_session_busy",
+      `Repository "${repoPath}" already has a Direct workspace operation in progress.`,
+      "Wait for the active Direct operation in this repository to finish, then retry.",
+      true,
+      { session_id: sessionId, repo_path: repoPath },
+    ),
+  };
+}
+
+function getDirectRepoMutationLockTarget(
+  repoPath: string,
+  config: PatchWardenConfig,
+): string {
+  const sessionsDir = guardPath(
+    getDirectSessionsDir(config),
+    config.workspaceRoot,
+    config.directSessionsDir,
+  );
+  const lockRoot = guardPath(
+    join(dirname(sessionsDir), "direct-repo-locks"),
+    config.workspaceRoot,
+  );
+  mkdirSync(lockRoot, { recursive: true });
+  const guardedLockRoot = guardPath(lockRoot, config.workspaceRoot);
+  const comparableRepoPath = process.platform === "win32"
+    ? resolve(repoPath).toLowerCase()
+    : resolve(repoPath);
+  const repoKey = createHash("sha256").update(comparableRepoPath).digest("hex");
+  return guardPath(join(guardedLockRoot, repoKey), config.workspaceRoot, guardedLockRoot);
+}
+
 function validateDirectSessionRecord(sessionId: string, value: unknown): DirectSessionRecord {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw invalidDirectSessionRecord(sessionId, "session.json must contain an object");
@@ -476,9 +585,20 @@ function validateDirectSessionRecord(sessionId: string, value: unknown): DirectS
   if (!Array.isArray(record.operations) || !Array.isArray(record.verification_runs)) {
     throw invalidDirectSessionRecord(sessionId, "operation or verification history is invalid");
   }
+  if (record.review_events !== undefined && !Array.isArray(record.review_events)) {
+    throw invalidDirectSessionRecord(sessionId, "review event history is invalid");
+  }
+  const config = getConfig();
   return {
     ...record,
     expected_changes: record.expected_changes !== false,
+    requester_agent: typeof record.requester_agent === "string" && record.requester_agent
+      ? record.requester_agent
+      : "chatgpt",
+    direct_review_policy_sha256: typeof record.direct_review_policy_sha256 === "string"
+      ? record.direct_review_policy_sha256
+      : computeDirectReviewPolicyHash(config.directReview),
+    review_events: Array.isArray(record.review_events) ? record.review_events : [],
   } as DirectSessionRecord;
 }
 

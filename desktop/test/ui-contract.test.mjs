@@ -38,6 +38,8 @@ describe("desktop UI contracts", () => {
     const settingsPage = read("ui/pages/settings.html");
     const settingsClient = read("ui/settings.js");
     const desktopMain = read("desktop/src/main.ts");
+    const modelIpc = read("desktop/src/model-ipc.ts");
+    const preload = read("desktop/src/preload.cjs");
     assert.doesNotMatch(settingsPage, />[^<]*\p{Script=Han}[^<]*</u);
     assert.doesNotMatch(settingsClient, /[\p{Script=Han}]/u);
     for (const key of [
@@ -55,10 +57,31 @@ describe("desktop UI contracts", () => {
     assert.match(settingsClient, /state\.workspaceRoot \|\| tr\("settings\.workspaceHelp"\)/);
     assert.match(settingsClient, /state\.tunnelClient && state\.tunnelClient\.available/);
     assert.match(settingsClient, /tr\("settings\.loadFailed"\)/);
-    assert.match(settingsClient, /agent\.supportsModelRefresh \? api\.refreshAgentModels\(agent\.id\) : api\.discoverAgentModels\(agent\.id\)/);
-    assert.match(settingsClient, /refresh\.disabled = !agent\.available/);
+    assert.match(settingsClient, /refreshSupported \? api\.refreshAgentModels\(agent\.id\) : api\.discoverAgentModels\(agent\.id\)/);
+    assert.match(settingsClient, /agent\.catalog && agent\.catalog\.strategy !== "config_only" && agent\.catalog\.refreshSupported/);
+    assert.match(settingsClient, /probeSupported = agent\.id === "codex" \|\| agent\.id === "opencode" \|\| agent\.id === "claude"/);
+    assert.match(settingsClient, /api\.verifyAgentModel\(\{ agentId: agent\.id, modelId: modelId \}\)/);
+    assert.match(settingsClient, /SAFE_MODEL_REASONS\.has\(reason\) \? reason : "unexpected_result"/);
+    assert.match(settingsClient, /catalog\.state === "fresh"/);
+    assert.match(settingsClient, /\^\[A-Za-z_\]\[A-Za-z0-9_\]\*\$/);
+    assert.match(settingsClient, /envAllowlist: names/);
+    assert.match(settingsClient, /if \(result\.ok === false\) \{ agentSettingsStatus\.textContent = reasonText\(result\.reasonCode\); return; \}/);
+    assert.match(settingsClient, /item\.name/);
+    assert.match(settingsClient, /agent-env-allowlist/);
+    assert.doesNotMatch(settingsClient, /agentSettingsStatus\.textContent = error\.message/);
+    assert.doesNotMatch(settingsClient, /textContent = (?:result\.)?reasonCode\s*;/);
+    assert.doesNotMatch(settingsClient, /item\.(?:value|secret|credential)/);
+    assert.match(settingsClient, /refresh\.disabled = refreshSupported && !agent\.available/);
     assert.match(settingsClient, /if \(!agentSettingsDirty && Date\.now\(\) - lastAgentLoadAt > 2000\) void loadAgents\(false\)/);
+    for (const marker of [
+      "agent-state-line", "settings.agentCliState", "settings.modelConfigSourceState",
+      "settings.modelCatalogState", "settings.modelEffectiveState", "settings.modelProviderState",
+    ]) assert.ok(settingsClient.includes(marker), marker);
+    assert.match(settingsPage, /@media\(max-width:520px\)/);
+    assert.match(preload, /verifyAgentModel: \(value\) => invoke\("desktop:verify-agent-model", value\)/);
     assert.match(desktopMain, /discoverModelsForAgent\(agent\.id, workspaceRoot\)/);
+    assert.match(modelIpc, /keys\.length !== 2 \|\| !keys\.includes\("agentId"\) \|\| !keys\.includes\("modelId"\)/);
+    assert.match(desktopMain, /validateAgentSelectionsWithCore\(coreRoot,/);
     assert.doesNotMatch(desktopMain, /refreshDetectedModels/);
     for (const id of ["tunnelClientPath", "configPath", "workspacePath"]) {
       assert.doesNotMatch(settingsPage, new RegExp(`id="${id}"[^>]*data-i18n=`), id);

@@ -1,4 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import type { Browser, BrowserContext } from "playwright-core";
@@ -20,6 +21,7 @@ export interface RuntimeRouteResult {
   console_errors: string[];
   broken_images: Array<{ src: string }>;
   horizontal_overflow: number;
+  navigation_error: string | null;
   screenshot: string | null;
   status: "passed" | "failed";
 }
@@ -91,12 +93,12 @@ export async function runRuntimeValidation(input: {
     browser = await launchSystemBrowser();
     const screenshotDir = join(input.taskDir, "runtime-screenshots");
     if (input.settings.captureScreenshots) mkdirSync(screenshotDir, { recursive: true });
-    for (const viewport of input.settings.viewports) {
+    for (const [viewportIndex, viewport] of input.settings.viewports.entries()) {
       const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
       try {
         await restrictContextToLoopback(context, input.settings.baseUrl);
-        for (const route of input.settings.routes) {
-          const result = await validateRoute(context, input.settings, viewport, route, screenshotDir, input.taskDir);
+        for (const [routeIndex, route] of input.settings.routes.entries()) {
+          const result = await validateRoute(context, input.settings, viewport, viewportIndex, route, routeIndex, screenshotDir, input.taskDir);
           report.route_results.push(result);
         }
       } finally {
@@ -173,7 +175,9 @@ async function validateRoute(
   context: BrowserContext,
   settings: RuntimeValidationConfig,
   viewport: RuntimeValidationViewport,
+  viewportIndex: number,
   route: string,
+  routeIndex: number,
   screenshotDir: string,
   taskDir: string,
 ): Promise<RuntimeRouteResult> {
@@ -190,6 +194,7 @@ async function validateRoute(
   let brokenImages: Array<{ src: string }> = [];
   let horizontalOverflow = 0;
   let screenshot: string | null = null;
+  let navigationError: string | null = null;
   try {
     const response = await page.goto(finalUrl, { waitUntil: "domcontentloaded", timeout: settings.navigationTimeoutSeconds * 1000 });
     await page.waitForTimeout(250);
@@ -206,16 +211,18 @@ async function validateRoute(
       horizontalOverflow = await page.evaluate(() => Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth));
     }
     if (settings.captureScreenshots) {
-      const filename = `${viewport.name}-${routeSlug(route)}.png`;
+      const filename = `v${viewportIndex}-${viewport.name}-r${routeIndex}-${routeSlug(route)}-${routeHash(route)}.png`;
       await page.screenshot({ path: join(screenshotDir, filename), fullPage: true });
       screenshot = relative(taskDir, join(screenshotDir, filename)).replace(/\\/g, "/");
     }
   } catch (error) {
-    consoleErrors.push(`navigation: ${error instanceof Error ? error.message : String(error)}`.slice(0, 1000));
+    navigationError = `navigation: ${error instanceof Error ? error.message : String(error)}`.slice(0, 1000);
+    consoleErrors.push(navigationError);
   } finally {
     await page.close();
   }
   const failed = (statusCode !== null && statusCode >= 400)
+    || navigationError !== null
     || (settings.checkConsoleErrors && consoleErrors.length > 0)
     || (settings.checkBrokenImages && brokenImages.length > 0)
     || (settings.checkHorizontalOverflow && horizontalOverflow > 0);
@@ -227,6 +234,7 @@ async function validateRoute(
     console_errors: consoleErrors,
     broken_images: brokenImages,
     horizontal_overflow: horizontalOverflow,
+    navigation_error: navigationError,
     screenshot,
     status: failed ? "failed" : "passed",
   };
@@ -296,4 +304,8 @@ async function isLoopbackReachable(baseUrl: string, timeoutMs: number): Promise<
 function routeSlug(route: string): string {
   const value = route.replace(/[?#].*$/, "").replace(/^\/+|\/+$/g, "").replace(/[^A-Za-z0-9_-]+/g, "-");
   return (value || "home").slice(0, 80);
+}
+
+function routeHash(route: string): string {
+  return createHash("sha256").update(route, "utf8").digest("hex").slice(0, 12);
 }

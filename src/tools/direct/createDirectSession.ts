@@ -14,6 +14,7 @@ export interface CreateDirectSessionInput {
   repo_path: string;
   title?: string;
   expected_changes?: boolean;
+  requester_agent?: string;
 }
 
 export interface CreateDirectSessionOutput {
@@ -23,6 +24,7 @@ export interface CreateDirectSessionOutput {
   workspace_clean: boolean;
   allowed_commands: string[];
   expected_changes: boolean;
+  requester_agent: string;
   expires_at: string;
   next_action: string;
 }
@@ -88,6 +90,8 @@ export async function createDirectSession(
 
   guardRuntimeSelfModification(resolvedRepoPath);
 
+  const requesterAgent = resolveDirectRequesterAgent(input.requester_agent, config);
+
   // ── Capture repo snapshot ────────────────────────────────────────
 
   const snapshot = await captureRepoSnapshot(resolvedRepoPath);
@@ -99,6 +103,7 @@ export async function createDirectSession(
     resolved_repo_path: resolvedRepoPath,
     title: input.title,
     expected_changes: input.expected_changes,
+    requester_agent: requesterAgent,
     snapshot,
   });
 
@@ -109,9 +114,37 @@ export async function createDirectSession(
     workspace_clean: !snapshot.workspace_dirty,
     allowed_commands: session.allowed_commands,
     expected_changes: session.expected_changes,
+    requester_agent: session.requester_agent,
     expires_at: session.expires_at,
     next_action:
       "Use search_workspace/read_workspace_file, then apply_patch to make file changes within this session. " +
       "After editing, call run_verification, finalize_direct_session, and audit_session.",
   };
+}
+
+function resolveDirectRequesterAgent(
+  callerValue: string | undefined,
+  config: ReturnType<typeof getConfig>,
+): string | undefined {
+  if (config.directReview.mode === "off") return callerValue;
+  const configured = config.directReview.requesterAgentName;
+  if (!configured) {
+    throw new PatchWardenError(
+      "direct_requester_identity_unconfigured",
+      "Direct review requires a server-configured requester Agent identity.",
+      "Set directReview.requesterAgentName to a registered Agent that differs from reviewerAgentName.",
+      true,
+      { direct_review_mode: config.directReview.mode },
+    );
+  }
+  if (callerValue && callerValue.trim() !== configured) {
+    throw new PatchWardenError(
+      "direct_requester_identity_mismatch",
+      "The caller-supplied requester Agent does not match the server-configured Direct requester identity.",
+      "Do not override requester identity through MCP; use the configured Direct requester Agent.",
+      true,
+      { configured_requester_agent: configured },
+    );
+  }
+  return configured;
 }

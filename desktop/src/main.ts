@@ -12,11 +12,19 @@ import {
   type IpcMainInvokeEvent,
 } from "electron";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { detectAgents, getAgentAdapter, refreshAgentModels } from "./agent-detection.js";
+import { detectAgents, getAgentAdapter, refreshAgentModels, validateModelId } from "./agent-detection.js";
 import { discoverModelsForAgent, mergeDiscoveredModels } from "./model-discovery.js";
+import {
+  findModelCatalogCache,
+  isPrimaryModelAgent,
+  modelCatalogStrategy,
+  writeModelCatalogCache,
+} from "./model-catalog.js";
+import { findModelProbeRecord, verifyAgentModel } from "./model-probe.js";
+import { parseModelProbeRequest } from "./model-ipc.js";
 import {
   atomicWriteJson,
   buildConfig,
@@ -50,6 +58,7 @@ import {
 import { detectTunnelClient, validateTunnelClientPath } from "./runtime-settings.js";
 import { resolveCoreRoot, utilityProcessOptions } from "./runtime-root.js";
 import { evaluateAgentSettingsApplication, type AgentSettingsApplication } from "./agent-settings-apply.js";
+import { CoreModelValidationError, validateAgentSelectionsWithCore } from "./core-model-validator.js";
 import {
   forgetTunnelCredential,
   getTunnelSetupStatus,
@@ -83,7 +92,9 @@ let quitting = false;
 let appMode = "starting";
 let blockReason: string | null = null;
 let detectedAgents: AgentDetection[] = [];
-const refreshedAgentModels = new Map<string, readonly DiscoveredModel[]>();
+// Legacy refreshes remain process-local. Only OpenCode receives the new
+// persistent catalog because its CLI can enumerate models in a controlled mode.
+const legacyRefreshedAgentModels = new Map<string, readonly DiscoveredModel[]>();
 let desktopPaths: DesktopPaths | null = null;
 let preferences: DesktopPreferences | null = null;
 let activeConfigPath: string | null = null;
@@ -145,10 +156,14 @@ function parseAgentSelections(value: unknown): AgentSelection[] {
     if (!isRecord(item) || typeof item.id !== "string") throw new Error("Agent 设置数据无效");
     if (item.enabled !== undefined && typeof item.enabled !== "boolean") throw new Error("Agent 设置数据无效");
     if (item.model !== undefined && item.model !== null && typeof item.model !== "string") throw new Error("Agent 设置数据无效");
+    if (item.envAllowlist !== undefined && (!Array.isArray(item.envAllowlist) || item.envAllowlist.some((name) => typeof name !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)))) {
+      throw new Error("Agent 环境变量白名单无效");
+    }
     return {
       id: item.id,
       ...(typeof item.enabled === "boolean" ? { enabled: item.enabled } : {}),
       ...(typeof item.model === "string" || item.model === null ? { model: item.model } : {}),
+      ...(Array.isArray(item.envAllowlist) ? { envAllowlist: [...new Set(item.envAllowlist)] } : {}),
     };
   });
 }
@@ -295,12 +310,55 @@ function configuredAgentEnvironmentPolicy(agentId?: string): {
   };
 }
 
+function environmentNameIsPresent(name: string): boolean {
+  return Object.keys(process.env).some((candidate) => candidate.toUpperCase() === name.toUpperCase() && process.env[candidate] !== undefined);
+}
+
+function catalogRefreshFailureReason(error: unknown): "refresh_timed_out" | "refresh_failed" {
+  const detail = error && typeof error === "object" ? error as { code?: unknown; killed?: unknown; signal?: unknown } : {};
+  return detail.code === "ETIMEDOUT" || detail.killed === true || detail.signal ? "refresh_timed_out" : "refresh_failed";
+}
+
+function createOwnedCatalogDirectory(): string {
+  const root = resolve(join(desktopPaths!.root, "model-catalog-refresh"));
+  mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "refresh-"));
+  const rel = relative(root, directory);
+  if (!rel || rel === ".." || rel.startsWith("..\\") || rel.startsWith("../")) {
+    try { rmSync(directory, { recursive: true, force: true }); } catch { /* new path only */ }
+    throw new Error("Model catalog temporary directory escaped its owner root");
+  }
+  return directory;
+}
+
+function removeOwnedCatalogDirectory(directory: string): void {
+  const root = resolve(join(desktopPaths!.root, "model-catalog-refresh"));
+  const rel = relative(root, resolve(directory));
+  if (!rel || rel === ".." || rel.startsWith("..\\") || rel.startsWith("../")) return;
+  try { rmSync(directory, { recursive: true, force: true, maxRetries: 2, retryDelay: 50 }); } catch { /* next refresh may remove stale owned output */ }
+}
+
 function publicAgentCatalog() {
   const configured = new Map((activeConfigPath ? readAgentSettings(activeConfigPath) : []).map((agent) => [agent.id, agent]));
   const workspaceRoot = configuredWorkspaceRoot();
   return detectedAgents.map((agent) => {
     const local = discoverModelsForAgent(agent.id, workspaceRoot);
     const setting = configured.get(agent.id);
+    const primary = isPrimaryModelAgent(agent.id);
+    const legacyModels = primary ? [] : legacyRefreshedAgentModels.get(agent.id) || [];
+    const cached = primary && desktopPaths
+      ? findModelCatalogCache(desktopPaths.modelCatalogCache, agent.id, workspaceRoot, agent)
+      : null;
+    const configuredModel = local.configuredModel;
+    const effectiveModel = setting?.model || configuredModel || null;
+    const probe = primary && desktopPaths
+      ? findModelProbeRecord(desktopPaths.modelProbeCache, agent.id, effectiveModel, agent)
+      : null;
+    const catalogState = primary
+      ? cached
+        ? cached.state === "fresh" ? "cached" : "empty"
+        : local.models.length > 0 ? "configured" : "not_checked"
+      : legacyModels.length > 0 ? "fresh" : local.models.length > 0 ? "configured" : "not_checked";
     return {
       id: agent.id,
       name: agent.id,
@@ -308,11 +366,31 @@ function publicAgentCatalog() {
       available: agent.available,
       enabled: setting ? true : false,
       selectedModel: setting?.model || null,
-      models: mergeDiscoveredModels(local.models, refreshedAgentModels.get(agent.id) || [], setting?.model),
+      configuredModel,
+      configuredModelSource: local.configuredModelSource,
+      configSources: local.sources,
+      effectiveModel,
+      models: mergeDiscoveredModels(local.models, primary ? cached?.models || [] : legacyModels, setting?.model),
       modelSources: [
         ...local.sources,
-        ...(refreshedAgentModels.has(agent.id) ? ["Agent CLI"] : []),
+        ...(primary && cached ? ["OpenCode CLI cache"] : []),
+        ...(!primary && legacyRefreshedAgentModels.has(agent.id) ? ["Agent CLI"] : []),
       ],
+      catalog: {
+        strategy: primary ? modelCatalogStrategy(agent.id) : "legacy",
+        state: catalogState,
+        refreshedAt: primary ? cached?.refreshedAt || null : null,
+        reasonCode: primary
+          ? cached?.reasonCode || (local.models.length > 0 ? "ok" : "not_checked")
+          : legacyModels.length > 0 || local.models.length > 0 ? "ok" : "not_checked",
+        refreshSupported: primary ? agent.id === "opencode" : agent.supportsModelRefresh,
+      },
+      providerStatus: probe?.status || "not_checked",
+      providerReasonCode: probe?.reasonCode || "not_checked",
+      providerCheckedAt: probe?.checkedAt || null,
+      envAllowlist: (setting?.envAllowlist || []).map((name) => ({ name, present: environmentNameIsPresent(name) })),
+      allowUnlistedModelOverride: setting?.allowUnlistedModelOverride !== false,
+      availableModels: setting?.availableModels || [],
       commandLabel: agent.command ? `${agent.displayName} (${agent.source})` : null,
       supportsModelOverride: agent.supportsModelOverride,
       supportsModelRefresh: agent.supportsModelRefresh,
@@ -773,25 +851,116 @@ function registerDesktopIpc(): void {
   });
   registerIpc("desktop:discover-agent-models", async (value) => {
     const id = requireAgentId(value);
-    return discoverModelsForAgent(id, configuredWorkspaceRoot());
+    const local = discoverModelsForAgent(id, configuredWorkspaceRoot());
+    return {
+      ...local,
+      state: local.models.length > 0 ? "configured" : "not_checked",
+      reasonCode: local.models.length > 0 ? "ok" : "not_checked",
+    };
   });
   registerIpc("desktop:refresh-agent-models", async (value) => {
     const id = requireAgentId(value);
     if (detectedAgents.length === 0) detectedAgents = await detectAgents();
     const detection = detectedAgents.find((agent) => agent.id === id);
+    const primary = isPrimaryModelAgent(id);
+    if (primary && id !== "opencode") {
+      const catalog = publicAgentCatalog().find((agent) => agent.id === id);
+      return {
+        ok: false,
+        agentId: id,
+        models: catalog?.models || [],
+        sources: catalog?.modelSources || [],
+        reasonCode: "refresh_unsupported",
+      };
+    }
+    if (!detection?.available || !detection.command) {
+      const catalog = publicAgentCatalog().find((agent) => agent.id === id);
+      return {
+        ok: false,
+        agentId: id,
+        models: catalog?.models || [],
+        sources: catalog?.modelSources || [],
+        reasonCode: "agent_unavailable",
+      };
+    }
     const environmentPolicy = configuredAgentEnvironmentPolicy(id);
-    const models = await refreshAgentModels(id, detection, {
-      cwd: coreRoot,
-      envAllowlist: environmentPolicy.allowedNames,
-      blockedEnvNames: environmentPolicy.blockedNames,
-    });
-    refreshedAgentModels.set(id, models);
-    const catalog = publicAgentCatalog().find((agent) => agent.id === id);
-    return {
-      agentId: id,
-      models: catalog?.models || models,
-      sources: catalog?.modelSources || ["Agent CLI"],
-    };
+    if (!primary) {
+      try {
+        const models = await refreshAgentModels(id, detection, {
+          cwd: coreRoot,
+          envAllowlist: environmentPolicy.allowedNames,
+          blockedEnvNames: environmentPolicy.blockedNames,
+        });
+        legacyRefreshedAgentModels.set(id, models);
+        const catalog = publicAgentCatalog().find((agent) => agent.id === id);
+        return {
+          ok: true,
+          agentId: id,
+          models: catalog?.models || models,
+          sources: catalog?.modelSources || ["Agent CLI"],
+          reasonCode: models.length > 0 ? "ok" : "catalog_empty",
+        };
+      } catch (error) {
+        const catalog = publicAgentCatalog().find((agent) => agent.id === id);
+        return {
+          ok: false,
+          agentId: id,
+          models: catalog?.models || [],
+          sources: catalog?.modelSources || [],
+          reasonCode: catalogRefreshFailureReason(error),
+        };
+      }
+    }
+    let directory: string | null = null;
+    try {
+      directory = createOwnedCatalogDirectory();
+      const models = await refreshAgentModels(id, detection, {
+        cwd: directory,
+        envAllowlist: environmentPolicy.allowedNames,
+        blockedEnvNames: environmentPolicy.blockedNames,
+      });
+      writeModelCatalogCache(desktopPaths!.modelCatalogCache, "opencode", configuredWorkspaceRoot(), detection, models);
+      const catalog = publicAgentCatalog().find((agent) => agent.id === id);
+      return {
+        ok: true,
+        agentId: id,
+        models: catalog?.models || models,
+        sources: catalog?.modelSources || ["OpenCode CLI cache"],
+        reasonCode: models.length > 0 ? "ok" : "catalog_empty",
+      };
+    } catch (error) {
+      const catalog = publicAgentCatalog().find((agent) => agent.id === id);
+      return {
+        ok: false,
+        agentId: id,
+        models: catalog?.models || [],
+        sources: catalog?.modelSources || [],
+        reasonCode: catalogRefreshFailureReason(error),
+      };
+    } finally {
+      if (directory) removeOwnedCatalogDirectory(directory);
+    }
+  });
+  registerIpc("desktop:verify-agent-model", async (value) => {
+    const input = parseModelProbeRequest(value);
+    if (!input) return { ok: false, reasonCode: "invalid_model" };
+    if (detectedAgents.length === 0) detectedAgents = await detectAgents();
+    const detection = detectedAgents.find((agent) => agent.id === input.agentId);
+    try {
+      const environmentPolicy = configuredAgentEnvironmentPolicy(input.agentId);
+      const result = await verifyAgentModel({
+        agentId: input.agentId,
+        modelId: input.modelId,
+        detection,
+        probeRoot: desktopPaths!.modelProbeRoot,
+        cachePath: desktopPaths!.modelProbeCache,
+        envAllowlist: environmentPolicy.allowedNames,
+        blockedEnvNames: environmentPolicy.blockedNames,
+      });
+      return { ok: result.status === "verified", result };
+    } catch {
+      return { ok: false, reasonCode: "probe_failed" };
+    }
   });
   registerIpc("desktop:save-setup", async (value) => {
     const input = asRecord(value);
@@ -805,11 +974,18 @@ function registerDesktopIpc(): void {
     if (!validation.ok) return { ok: false, error: validation.reason, validation };
     const enabledNames = new Set(input.enabledAgents.filter((name): name is string => typeof name === "string" && Boolean(getAgentAdapter(name))));
     const agentModels = asRecord(input.agentModels);
-    const selections = [...enabledNames].map((id) => ({
+    const unvalidatedSelections = [...enabledNames].map((id) => ({
       id,
       enabled: true,
       model: typeof agentModels[id] === "string" ? agentModels[id] : null,
     }));
+    let selections: AgentSelection[];
+    try {
+      selections = await validateAgentSelectionsWithCore(coreRoot, unvalidatedSelections);
+    } catch (error) {
+      const reasonCode = error instanceof CoreModelValidationError ? error.reasonCode : "save_failed";
+      return { ok: false, error: "模型配置校验失败", reasonCode };
+    }
     const selected = detectedAgents.filter((agent) => enabledNames.has(agent.id) && agent.available);
     const generated = buildConfig(validation.path!, selected, selections);
     const existing = asRecord(readJson(activeConfigPath!));
@@ -822,12 +998,28 @@ function registerDesktopIpc(): void {
       }
       const managedAgents: Record<string, AgentRegistration> = {};
       for (const [id, registration] of Object.entries(generated.agents || {})) {
-        const envAllowlist = asRecord(existingAgents[id]).envAllowlist;
+        const previous = asRecord(existingAgents[id]);
+        const envAllowlist = previous.envAllowlist;
+        const previousModels = Array.isArray(previous.available_models)
+          ? previous.available_models.flatMap((value) => {
+            try { const model = validateModelId(value); return model ? [model] : []; } catch { return []; }
+          })
+          : [];
+        const selectedModel = typeof registration.default_model === "string" ? registration.default_model : null;
+        if (previous.allow_unlisted_model_override === false && selectedModel && !previousModels.includes(selectedModel)) {
+          previousModels.push(selectedModel);
+        }
         managedAgents[id] = {
           ...registration,
           ...(Array.isArray(envAllowlist) && envAllowlist.every((name) => typeof name === "string")
             ? { envAllowlist: [...envAllowlist] as string[] }
             : {}),
+          ...(previous.provider && typeof previous.provider === "string" ? { provider: previous.provider } : {}),
+          ...(previous.settings_policy === "inherit" || previous.settings_policy === "isolated" ? { settings_policy: previous.settings_policy } : {}),
+          ...(previous.allow_unlisted_model_override === false ? {
+            allow_unlisted_model_override: false,
+            available_models: [...new Set(previousModels)],
+          } : {}),
         };
       }
       generated.agents = { ...customAgents, ...managedAgents };
@@ -844,7 +1036,15 @@ function registerDesktopIpc(): void {
     return { ok: true, workspaceRoot: validation.path, agentCount: selected.length };
   });
   registerIpc("desktop:save-agent-settings", async (value) => {
-    const selections = parseAgentSelections(asRecord(value).agents);
+    let selections: AgentSelection[];
+    try {
+      selections = await validateAgentSelectionsWithCore(coreRoot, parseAgentSelections(asRecord(value).agents));
+    } catch (error) {
+      return {
+        ok: false,
+        reasonCode: error instanceof CoreModelValidationError ? error.reasonCode : "save_failed",
+      };
+    }
     if (detectedAgents.length === 0) detectedAgents = await detectAgents();
     const settings = updateAgentSettings(activeConfigPath!, detectedAgents as readonly AgentDetectionInput[], selections);
     let application: AgentSettingsApplication = { applied: false, reason: "backend_unavailable" };

@@ -17,9 +17,21 @@ interface ModelSource {
   readonly project?: boolean;
 }
 
+interface ModelSetting {
+  readonly present: boolean;
+  readonly id: string | null;
+}
+
+interface ConfiguredModelCandidate {
+  readonly id: string;
+  readonly source: string;
+}
+
 /** Result of model discovery for an agent. */
 export interface ModelDiscoveryResult {
   readonly agentId: string;
+  readonly configuredModel: string | null;
+  readonly configuredModelSource: string | null;
   readonly models: readonly DiscoveredModel[];
   readonly sources: readonly string[];
 }
@@ -162,14 +174,60 @@ export function discoverModelsForAgent(id: string, workspaceRoot: string, env: N
   if (!getAgentAdapter(id)) throw new Error("不支持的 Agent");
   const models = new Map<string, DiscoveredModel>();
   const readSources: string[] = [];
+  let configuredModel: ConfiguredModelCandidate | null | undefined;
+  let environmentOverride: ConfiguredModelCandidate | null | undefined;
   for (const source of sourcesFor(id, workspaceRoot, env, home)) {
     const text = safeRead(source.path, workspaceRoot, source.project === true);
     if (text === null) continue;
     try {
       const value = parseStructured(source.kind, text);
       extract(id, value, source.label, models);
+      const configured = configuredSettings(id, value);
+      if (configured.model.present) {
+        configuredModel = configured.model.id ? { id: configured.model.id, source: source.label } : null;
+      }
+      if (configured.environmentOverride.present) {
+        environmentOverride = configured.environmentOverride.id
+          ? { id: configured.environmentOverride.id, source: source.label }
+          : null;
+      }
       readSources.push(source.label);
     } catch { /* invalid local config is reported as no discovered models */ }
   }
-  return { agentId: id, models: [...models.values()].sort((a, b) => a.id.localeCompare(b.id)), sources: [...new Set(readSources)] };
+  const effectiveConfiguredModel = id === "claude" && environmentOverride !== undefined
+    ? environmentOverride
+    : configuredModel;
+  return {
+    agentId: id,
+    configuredModel: effectiveConfiguredModel?.id || null,
+    configuredModelSource: effectiveConfiguredModel?.source || null,
+    models: [...models.values()].sort((a, b) => a.id.localeCompare(b.id)),
+    sources: [...new Set(readSources)],
+  };
+}
+
+function modelSetting(record: Record<string, unknown>, key: string): ModelSetting {
+  if (!Object.prototype.hasOwnProperty.call(record, key)) return { present: false, id: null };
+  try {
+    return { present: true, id: validateModelId(record[key]) };
+  } catch {
+    return { present: true, id: null };
+  }
+}
+
+function configuredSettings(id: string, value: unknown): { model: ModelSetting; environmentOverride: ModelSetting } {
+  const absent = { present: false, id: null } as const;
+  if (!isRecord(value)) return { model: absent, environmentOverride: absent };
+  if (id === "claude") {
+    return {
+      model: modelSetting(value, "model"),
+      environmentOverride: modelSetting(asRecord(value.env), "ANTHROPIC_MODEL"),
+    };
+  }
+  if (id === "gemini" || id === "qwen") {
+    const model = isRecord(value.model) ? modelSetting(value.model, "name") : modelSetting(value, "model");
+    return { model, environmentOverride: absent };
+  }
+  if (id === "kimi") return { model: modelSetting(value, "default_model"), environmentOverride: absent };
+  return { model: modelSetting(value, "model"), environmentOverride: absent };
 }

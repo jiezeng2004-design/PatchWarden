@@ -46,6 +46,15 @@ export function syncFile(
   return withDirectSessionMutationLock(sessionId, () => {
   const session = readDirectSession(sessionId, cfg);
   guardDirectSessionActive(session);
+  if (cfg.directReview.mode === "enforce") {
+    throw new PatchWardenError(
+      "direct_review_sync_not_supported",
+      "sync_file is outside the first Direct review MVP and is disabled while directReview.mode=enforce.",
+      "Use apply_patch/create_file with a matching review_id, or switch to shadow/off only after reviewing the local policy impact.",
+      true,
+      { operation: "sync_file", direct_review_mode: "enforce" },
+    );
+  }
   const repoPath = session.resolved_repo_path;
   const workspaceRoot = cfg.workspaceRoot;
 

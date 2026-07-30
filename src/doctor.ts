@@ -344,7 +344,7 @@ const checkToolProfiles: DoctorCheck = {
       const coreTools = selectToolsForProfile(fullTools, "chatgpt_core", context.config?.enableDirectProfile);
       const createSchema = coreTools.find((tool) => tool.name === "create_task")?.inputSchema;
       const waitSchema = coreTools.find((tool) => tool.name === "wait_for_task")?.inputSchema;
-      results.push(checkResult("Full tool profile exposes 70 tools", fullTools.length === 70, `${fullTools.length} tools`));
+      results.push(checkResult("Full tool profile exposes 71 tools", fullTools.length === 71, `${fullTools.length} tools`));
       results.push(
         checkResult(
           `chatgpt_core profile exposes the exact ${CHATGPT_CORE_TOOL_NAMES.length}-tool manifest`,
