@@ -234,8 +234,12 @@ describe("runTask claim", () => {
     const safe = safeResult("task-provider-before-verify");
     const audit = auditTask("task-provider-before-verify");
 
-    assert.equal(status.failure_category, "provider_server_error");
+    assert.equal(status.failure_category, "agent_execution_error");
     assert.equal(status.agent_failure_category, "provider_server_error");
+    assert.equal(status.failure_source, "agent");
+    assert.equal(status.counts_against_agent, true);
+    assert.equal(status.fallback_eligible, true);
+    assert.equal(status.retryable, true);
     assert.equal(status.provider_error_reference, "err_agnes_SAFE123");
     assert.equal(verify.status, "not_run");
     assert.equal(verify.reason, "agent_failed_before_verification");
@@ -249,9 +253,19 @@ describe("runTask claim", () => {
     assert.deepEqual(safeTests.configured_commands, ["node --check main.js"]);
     assert.deepEqual(safeTests.executed_verify_commands, []);
     assert.equal(safe.verification.reason, "agent_failed_before_verification");
-    assert.equal(safe.failure_category, "provider_server_error");
+    assert.equal(safe.failure_category, "agent_execution_error");
+    assert.equal(safe.agent_failure_category, "provider_server_error");
+    assert.equal(safe.failure_source, "agent");
+    assert.equal(safe.counts_against_agent, true);
+    assert.equal(safe.fallback_eligible, true);
+    assert.equal(safe.retryable, true);
     assert.equal(safe.provider_error_reference, "err_agnes_SAFE123");
-    assert.equal(audit.failure_category, "provider_server_error");
+    assert.equal(audit.failure_category, "agent_execution_error");
+    assert.equal(audit.agent_failure_category, "provider_server_error");
+    assert.equal(audit.failure_source, "agent");
+    assert.equal(audit.counts_against_agent, true);
+    assert.equal(audit.fallback_eligible, true);
+    assert.equal(audit.retryable, true);
     assert.equal(audit.provider_error_reference, "err_agnes_SAFE123");
   });
 

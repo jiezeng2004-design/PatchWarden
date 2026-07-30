@@ -6,6 +6,7 @@ import {
   parseReleaseStage,
   parseTaskLogFile,
 } from "../../../tools/dispatch/validation.js";
+import { PatchWardenError } from "../../../errors.js";
 
 describe("dispatch input validation", () => {
   it("validates bounded string enums", () => {
@@ -32,14 +33,36 @@ describe("dispatch input validation", () => {
       new_text: "after",
       occurrence: "exactly_once",
     }]);
-    assert.throws(() => parsePatchOperations({}), /operations must be an array/);
+    assert.throws(() => parsePatchOperations({}), (error: unknown) => {
+      if (!(error instanceof PatchWardenError)) return false;
+      assert.equal(error.reason, "invalid_patch_operation");
+      assert.equal(error.details.failed_operation_index, null);
+      assert.equal(error.details.operation_type, null);
+      assert.equal(error.details.other_operations_applied, false);
+      assert.equal(error.details.batch_atomic, true);
+      return true;
+    });
     assert.throws(
-      () => parsePatchOperations([{ type: "replace_exact", new_text: 42 }]),
-      /new_text must be a string/,
+      () => parsePatchOperations([
+        { type: "replace_whole_file", new_text: "valid" },
+        { type: "replace_exact", new_text: 42 },
+      ]),
+      (error: unknown) => {
+        if (!(error instanceof PatchWardenError)) return false;
+        assert.equal(error.details.failed_operation_index, 1);
+        assert.equal(error.details.operation_type, "replace_exact");
+        assert.equal(error.details.other_operations_applied, false);
+        assert.equal(error.details.batch_atomic, true);
+        return true;
+      },
     );
     assert.throws(
       () => parsePatchOperations([{ type: "shell", new_text: "x" }]),
-      /type is invalid/,
+      (error: unknown) => error instanceof PatchWardenError
+        && error.details.failed_operation_index === 0
+        && error.details.operation_type === "shell"
+        && error.details.other_operations_applied === false
+        && error.details.batch_atomic === true,
     );
   });
 });

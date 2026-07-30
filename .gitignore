@@ -2,6 +2,7 @@ node_modules/
 .npm-cache/
 .playwright-cli/
 dist/
+coverage/
 .patchwarden/
 .safe-bifrost/
 .trae/

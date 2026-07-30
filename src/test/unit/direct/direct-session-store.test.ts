@@ -26,6 +26,7 @@ import {
   type DirectSessionRecord,
 } from "../../../direct/directSessionStore.js";
 import { auditDirectSession } from "../../../direct/directAudit.js";
+import type { ChangeArtifacts } from "../../../runner/changeCapture.js";
 
 describe("Direct session store", () => {
   let root: string | undefined;
@@ -247,7 +248,220 @@ describe("Direct session store", () => {
     assert.equal(audit.reason_codes.includes("empty_diff"), false);
     assert.equal(audit.warnings.some((warning) => warning.startsWith("diff_empty:")), false);
   });
+
+  it("keeps generated rebuild deletions as evidence without treating them as source failures", () => {
+    root = mkdtempSync(join(tmpdir(), "patchwarden-direct-generated-"));
+    const repoPath = join(root, "repo");
+    const configPath = join(root, "patchwarden.config.json");
+    mkdirSync(repoPath, { recursive: true });
+    writeFileSync(configPath, JSON.stringify({ workspaceRoot: root }), "utf-8");
+    process.env.PATCHWARDEN_CONFIG = configPath;
+    reloadConfig();
+
+    const now = new Date().toISOString();
+    const createFinalized = (ignored: boolean) => {
+      const session = createDirectSession({
+        repo_path: "repo",
+        resolved_repo_path: repoPath,
+        title: "Next.js rebuild",
+        snapshot: {
+          captured_at: now,
+          is_git: false,
+          head: null,
+          status: "",
+          workspace_dirty: false,
+          files: {},
+          dirty_paths: [],
+          warnings: [],
+        },
+      });
+      appendDirectSessionVerificationRun(session.session_id, {
+        command: "npm test",
+        exit_code: 0,
+        passed: true,
+        timed_out: false,
+        stdout_tail: "ok",
+        stderr_tail: "",
+        started_at: now,
+        finished_at: now,
+        log_path: "verification.log",
+      });
+      finalizeDirectSessionRecord(session.session_id, generatedRebuildArtifacts(ignored));
+      return auditDirectSession(session.session_id);
+    };
+
+    const ignoredAudit = createFinalized(true);
+    assert.equal(ignoredAudit.decision, "pass");
+    assert.equal(ignoredAudit.reason_codes.includes("file_deleted"), false);
+    assert.equal(ignoredAudit.reason_codes.includes("file_renamed"), false);
+
+    const trackedAudit = createFinalized(false);
+    assert.equal(trackedAudit.decision, "warn");
+    assert.ok(trackedAudit.reason_codes.includes("generated_file_deleted"));
+    assert.ok(trackedAudit.reason_codes.includes("generated_file_renamed"));
+    assert.equal(trackedAudit.blocking_findings.length, 0);
+
+    const sourceRenameSession = createDirectSession({
+      repo_path: "repo",
+      resolved_repo_path: repoPath,
+      title: "Source moved into output",
+      snapshot: {
+        captured_at: now,
+        is_git: false,
+        head: null,
+        status: "",
+        workspace_dirty: false,
+        files: {},
+        dirty_paths: [],
+        warnings: [],
+      },
+    });
+    appendDirectSessionVerificationRun(sourceRenameSession.session_id, {
+      command: "npm test", exit_code: 0, passed: true, timed_out: false,
+      stdout_tail: "ok", stderr_tail: "", started_at: now, finished_at: now, log_path: "verification.log",
+    });
+    finalizeDirectSessionRecord(sourceRenameSession.session_id, sourceMovedIntoGeneratedArtifacts());
+    const sourceRenameAudit = auditDirectSession(sourceRenameSession.session_id);
+    assert.equal(sourceRenameAudit.decision, "fail");
+    assert.ok(sourceRenameAudit.reason_codes.includes("file_renamed"));
+
+    const dependencySession = createDirectSession({
+      repo_path: "repo",
+      resolved_repo_path: repoPath,
+      title: "Dependency-only change",
+      snapshot: {
+        captured_at: now,
+        is_git: false,
+        head: null,
+        status: "",
+        workspace_dirty: false,
+        files: {},
+        dirty_paths: [],
+        warnings: [],
+      },
+    });
+    finalizeDirectSessionRecord(dependencySession.session_id, dependencyOnlyArtifacts());
+    const dependencyAudit = auditDirectSession(dependencySession.session_id);
+    assert.equal(dependencyAudit.decision, "fail");
+    assert.ok(dependencyAudit.reason_codes.includes("source_changes_without_verification"));
+  });
 });
+
+function sourceMovedIntoGeneratedArtifacts(): ChangeArtifacts {
+  const file = {
+    path: ".next/draft.ts",
+    old_path: "src/draft.ts",
+    old_kind: "source" as const,
+    change: "renamed" as const,
+    before_sha256: "same",
+    after_sha256: "same",
+    tracked: false,
+    ignored: true,
+    kind: "source" as const,
+  };
+  return changeArtifactsFor([file], [toClassified(file)], []);
+}
+
+function dependencyOnlyArtifacts(): ChangeArtifacts {
+  const file = {
+    path: "package-lock.json",
+    change: "modified" as const,
+    before_sha256: "before",
+    after_sha256: "after",
+    tracked: true,
+    ignored: false,
+    kind: "dependency" as const,
+  };
+  return changeArtifactsFor([file], [], []);
+}
+
+function toClassified(file: ChangeArtifacts["changed_files"][number]) {
+  return { path: file.path, change: file.change, tracked: file.tracked, ignored: file.ignored, kind: file.kind, reason: "source path must remain protected" };
+}
+
+function changeArtifactsFor(
+  changed_files: ChangeArtifacts["changed_files"],
+  source_changes: ReturnType<typeof toClassified>[],
+  generated_changes: ReturnType<typeof toClassified>[],
+): ChangeArtifacts {
+  return {
+    changed_files,
+    diff: "", diff_available: true, diff_truncated: false, diff_size_bytes: 0, additions: 0, deletions: 0, file_stats: [],
+    workspace_dirty_before: false, workspace_dirty_after: false, patch_mode: "hash_only", unavailable_reason: null,
+    artifact_hygiene: {
+      counts: { source_changes: source_changes.length, dependency_changes: changed_files.filter((file) => file.kind === "dependency").length, generated_changes: generated_changes.length, runtime_changes: 0, unexpected_changes: 0, tracked_build_artifacts: 0, ignored_untracked_artifacts: 0, runtime_generated_files: 0, suspicious_changes: 0 },
+      source_changes, dependency_changes: [], generated_changes, runtime_changes: [], unexpected_changes: [], tracked_build_artifacts: [], ignored_untracked_artifacts: [], runtime_generated_files: [], suspicious_changes: [],
+    },
+  };
+}
+
+function generatedRebuildArtifacts(ignored: boolean): ChangeArtifacts {
+  const changedFiles: ChangeArtifacts["changed_files"] = [
+    {
+      path: ".next/static/old.js",
+      change: "deleted",
+      before_sha256: "old",
+      after_sha256: null,
+      tracked: !ignored,
+      ignored,
+      kind: "build_artifact",
+    },
+    {
+      path: "dist/app-new.js",
+      old_path: "dist/app-old.js",
+      change: "renamed",
+      before_sha256: "same",
+      after_sha256: "same",
+      tracked: !ignored,
+      ignored,
+      kind: "build_artifact",
+    },
+  ];
+  const classified = changedFiles.map((file) => ({
+    path: file.path,
+    change: file.change,
+    tracked: file.tracked,
+    ignored: file.ignored,
+    kind: file.kind,
+    reason: ignored ? "ignored generated path" : "generated path requires review",
+  }));
+  return {
+    changed_files: changedFiles,
+    diff: "",
+    diff_available: true,
+    diff_truncated: false,
+    diff_size_bytes: 0,
+    additions: 0,
+    deletions: 0,
+    file_stats: [],
+    workspace_dirty_before: false,
+    workspace_dirty_after: false,
+    patch_mode: "hash_only",
+    unavailable_reason: null,
+    artifact_hygiene: {
+      counts: {
+        source_changes: 0,
+        dependency_changes: 0,
+        generated_changes: 2,
+        runtime_changes: 0,
+        unexpected_changes: ignored ? 0 : 2,
+        tracked_build_artifacts: ignored ? 0 : 2,
+        ignored_untracked_artifacts: ignored ? 2 : 0,
+        runtime_generated_files: 0,
+        suspicious_changes: ignored ? 0 : 2,
+      },
+      source_changes: [],
+      dependency_changes: [],
+      generated_changes: classified,
+      runtime_changes: [],
+      unexpected_changes: ignored ? [] : classified,
+      tracked_build_artifacts: ignored ? [] : classified,
+      ignored_untracked_artifacts: ignored ? classified : [],
+      runtime_generated_files: [],
+      suspicious_changes: ignored ? [] : classified,
+    },
+  };
+}
 
 function emptyChangeArtifacts() {
   return {

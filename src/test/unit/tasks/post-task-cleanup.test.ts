@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { runPostTaskCleanup } from "../../../runner/postTaskCleanup.js";
 
 describe("postTaskCleanup", () => {
-  it("removes untracked low-risk artifacts and skips tracked or excluded paths", () => {
+  it("preserves untracked artifacts without process ownership evidence", () => {
     const root = mkdtempSync(join(tmpdir(), "pw-cleanup-"));
     try {
       execFileSync("git", ["init"], { cwd: root, encoding: "utf-8", windowsHide: true });
@@ -34,12 +34,14 @@ describe("postTaskCleanup", () => {
 
       const taskDir = join(root, ".patchwarden", "tasks", "task-1");
       mkdirSync(taskDir, { recursive: true });
-      const report = runPostTaskCleanup(root, taskDir);
+      const report = runPostTaskCleanup(root, taskDir, new Set([
+        "tracked/__pycache__/keep.pyc",
+      ]));
 
-      assert.ok(report.removed.some((entry) => entry.path === "backend/__pycache__"));
-      assert.ok(report.skipped.some((entry) => entry.path === "tracked/__pycache__" && entry.skip_reason === "tracked_by_git"));
+      assert.ok(report.skipped.some((entry) => entry.path === "backend/__pycache__" && entry.skip_reason === "no_process_ownership_evidence"));
+      assert.ok(report.skipped.some((entry) => entry.path === "tracked/__pycache__" && entry.skip_reason === "pre_existing_path"));
       assert.equal(report.source_files_touched, 0);
-      assert.ok(!existsSync(join(root, "backend", "__pycache__")));
+      assert.ok(existsSync(join(root, "backend", "__pycache__")));
       assert.ok(existsSync(join(root, "tracked", "__pycache__", "keep.pyc")));
       assert.ok(existsSync(join(root, ".venv", "__pycache__", "skip.pyc")));
       assert.ok(existsSync(join(root, ".patchwarden", "tasks", "old-task", "__pycache__", "skip.pyc")));
@@ -48,6 +50,31 @@ describe("postTaskCleanup", () => {
 
       const written = JSON.parse(readFileSync(join(taskDir, "post-task-cleanup.json"), "utf-8"));
       assert.equal(written.enabled, true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("removes only explicit task-owned artifacts and records the attribution", () => {
+    const root = mkdtempSync(join(tmpdir(), "pw-cleanup-baseline-"));
+    try {
+      mkdirSync(join(root, "release_packages"), { recursive: true });
+      writeFileSync(join(root, "release_packages", "important.zip"), "release", "utf-8");
+      mkdirSync(join(root, "frontend", "dist"), { recursive: true });
+      writeFileSync(join(root, "frontend", "dist", "generated.js"), "generated", "utf-8");
+
+      const taskDir = join(root, ".patchwarden", "tasks", "task-2");
+      mkdirSync(taskDir, { recursive: true });
+      const report = runPostTaskCleanup(root, taskDir, new Set([
+        "release_packages/important.zip",
+      ]), new Set(["frontend/dist/generated.js"]));
+
+      assert.ok(report.skipped.some((entry) =>
+        entry.path === "release_packages" && entry.skip_reason === "pre_existing_path"));
+      assert.ok(report.removed.some((entry) => entry.path === "frontend/dist"));
+      assert.ok(report.removed.some((entry) => entry.attribution === "task_owned_change"));
+      assert.ok(existsSync(join(root, "release_packages", "important.zip")));
+      assert.ok(!existsSync(join(root, "frontend", "dist")));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

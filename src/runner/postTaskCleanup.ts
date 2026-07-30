@@ -49,6 +49,7 @@ const CLEANUP_FILES = [/\.pyc$/i];
 export interface PostTaskCleanupEntry {
   path: string;
   reason: string;
+  attribution?: "task_owned_change";
 }
 
 export interface PostTaskCleanupReport {
@@ -58,7 +59,12 @@ export interface PostTaskCleanupReport {
   source_files_touched: number;
 }
 
-export function runPostTaskCleanup(repoPath: string, taskDir: string): PostTaskCleanupReport {
+export function runPostTaskCleanup(
+  repoPath: string,
+  taskDir: string,
+  preTaskFiles: ReadonlySet<string>,
+  taskOwnedPaths: ReadonlySet<string> = new Set(),
+): PostTaskCleanupReport {
   const report: PostTaskCleanupReport = {
     enabled: true,
     removed: [],
@@ -73,6 +79,14 @@ export function runPostTaskCleanup(repoPath: string, taskDir: string): PostTaskC
       report.skipped.push({ path: rel || ".", reason: candidate.reason, skip_reason: "excluded_path" });
       continue;
     }
+    if (existedBeforeTask(rel, candidate.path, preTaskFiles)) {
+      report.skipped.push({ path: rel, reason: candidate.reason, skip_reason: "pre_existing_path" });
+      continue;
+    }
+    if (!isTaskOwned(rel, taskOwnedPaths)) {
+      report.skipped.push({ path: rel, reason: candidate.reason, skip_reason: "no_process_ownership_evidence" });
+      continue;
+    }
     if (hasTrackedGitContent(root, rel)) {
       report.skipped.push({ path: rel, reason: candidate.reason, skip_reason: "tracked_by_git" });
       continue;
@@ -83,7 +97,7 @@ export function runPostTaskCleanup(repoPath: string, taskDir: string): PostTaskC
     }
     try {
       safeRemoveSync(candidate.path);
-      report.removed.push({ path: rel, reason: candidate.reason });
+      report.removed.push({ path: rel, reason: candidate.reason, attribution: "task_owned_change" });
     } catch (error) {
       report.skipped.push({
         path: rel,
@@ -94,6 +108,32 @@ export function runPostTaskCleanup(repoPath: string, taskDir: string): PostTaskC
   }
   atomicWriteJsonFileSync(join(taskDir, "post-task-cleanup.json"), report);
   return report;
+}
+
+function isTaskOwned(rel: string, taskOwnedPaths: ReadonlySet<string>): boolean {
+  const normalized = rel.replace(/\\/g, "/");
+  const prefix = `${normalized}/`;
+  for (const path of taskOwnedPaths) {
+    const owned = path.replace(/\\/g, "/");
+    if (owned === normalized || owned.startsWith(prefix) || normalized.startsWith(`${owned}/`)) return true;
+  }
+  return false;
+}
+
+function existedBeforeTask(rel: string, candidatePath: string, preTaskFiles: ReadonlySet<string>): boolean {
+  const normalized = rel.replace(/\\/g, "/");
+  let isDirectory = false;
+  try {
+    isDirectory = lstatSync(candidatePath).isDirectory();
+  } catch {
+    return true;
+  }
+  if (!isDirectory) return preTaskFiles.has(normalized);
+  const prefix = `${normalized}/`;
+  for (const path of preTaskFiles) {
+    if (path === normalized || path.startsWith(prefix)) return true;
+  }
+  return false;
 }
 
 function collectCandidates(root: string): PostTaskCleanupEntry[] {

@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteJsonFileSync } from "./atomicFile.js";
 
@@ -18,6 +18,8 @@ const waitArray = new Int32Array(new SharedArrayBuffer(4));
 const lockReleaseRetryCodes = new Set(["EACCES", "EBUSY", "ENOTEMPTY", "EPERM"]);
 const lockReleaseRetryMs = 5_000;
 const lockReleaseRetryDelayMs = 10;
+const staleLockProbeIntervalMs = 100;
+const lockAcquirePollDelayMs = lockReleaseRetryDelayMs + (process.pid % 11);
 const deadOwnerGraceMs = 250;
 const lockOwnerFile = "owner.json";
 
@@ -88,18 +90,21 @@ async function acquireLockAsync(path: string, options: LockedJsonOptions): Promi
   const owner = `${process.pid}-${randomBytes(8).toString("hex")}`;
 
   const deadline = Date.now() + (options.waitMs ?? 2000);
+  let nextStaleProbeAt = 0;
   while (true) {
     if (tryCreateLock(lockPath, owner)) return { path: lockPath, owner };
-    if (
+    const now = Date.now();
+    if (now >= nextStaleProbeAt &&
       removeStaleLock(lockPath, options.corruptLockStaleMs ?? 30_000) &&
       tryCreateLock(lockPath, owner)
     ) {
       return { path: lockPath, owner };
     }
-    if (Date.now() >= deadline) {
+    nextStaleProbeAt = now + staleLockProbeIntervalMs;
+    if (now >= deadline) {
       throw options.busyError?.() ?? new Error(`JSON file is busy: ${path}`);
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, lockReleaseRetryDelayMs));
+    await new Promise<void>((resolve) => setTimeout(resolve, lockAcquirePollDelayMs));
   }
 }
 
@@ -108,18 +113,21 @@ function acquireLock(path: string, options: LockedJsonOptions): AcquiredLock {
   const owner = `${process.pid}-${randomBytes(8).toString("hex")}`;
 
   const deadline = Date.now() + (options.waitMs ?? 2000);
+  let nextStaleProbeAt = 0;
   while (true) {
     if (tryCreateLock(lockPath, owner)) return { path: lockPath, owner };
-    if (
+    const now = Date.now();
+    if (now >= nextStaleProbeAt &&
       removeStaleLock(lockPath, options.corruptLockStaleMs ?? 30_000) &&
       tryCreateLock(lockPath, owner)
     ) {
       return { path: lockPath, owner };
     }
-    if (Date.now() >= deadline) {
+    nextStaleProbeAt = now + staleLockProbeIntervalMs;
+    if (now >= deadline) {
       throw options.busyError?.() ?? new Error(`JSON file is busy: ${path}`);
     }
-    Atomics.wait(waitArray, 0, 0, lockReleaseRetryDelayMs);
+    Atomics.wait(waitArray, 0, 0, lockAcquirePollDelayMs);
   }
 }
 
@@ -192,10 +200,15 @@ function releaseLock(lockPath: string, owner: string): void {
 }
 
 function removeStaleLock(lockPath: string, corruptLockStaleMs: number): boolean {
+  assertLockPathIsNotLink(lockPath);
   const lock = readLock(lockPath);
   let ageMs: number;
   try {
-    ageMs = Date.now() - statSync(lockPath).mtimeMs;
+    // A freshly-created entry can report an mtime fractionally ahead of
+    // Date.now() on filesystems with coarse or differently synchronized clocks.
+    // Treat that as age zero so a caller asking for immediate corrupt-lock
+    // recovery is not forced to wait for the regular busy timeout.
+    ageMs = Math.max(0, Date.now() - statSync(lockPath).mtimeMs);
   } catch (error) {
     if (errorCode(error) === "ENOENT") return true;
     throw error;
@@ -219,6 +232,17 @@ function removeStaleLock(lockPath: string, corruptLockStaleMs: number): boolean 
   } catch (error) {
     if (errorCode(error) === "ENOENT") return true;
     if (lockReleaseRetryCodes.has(errorCode(error) || "")) return false;
+    throw error;
+  }
+}
+
+function assertLockPathIsNotLink(lockPath: string): void {
+  try {
+    if (lstatSync(lockPath).isSymbolicLink()) {
+      throw new Error(`Refusing symlink/junction lock path: ${lockPath}`);
+    }
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return;
     throw error;
   }
 }

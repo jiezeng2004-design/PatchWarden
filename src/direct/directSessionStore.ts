@@ -38,10 +38,10 @@ export interface DirectSessionOperation {
   index: number;
   timestamp: string;
   path: string;
-  operation_type?: "patch" | "sync";
+  operation_type?: "patch" | "sync" | "create" | "delete" | "move" | "mkdir";
   source_path?: string;
   before_sha256: string | null;
-  after_sha256: string;
+  after_sha256: string | null;
   operations_applied: number;
   bytes_changed: number;
 }
@@ -131,9 +131,9 @@ export function createDirectSessionDir(
   guardDirectSessionId(sessionId);
   const sessionsDir = getDirectSessionsDir(config);
   guardPath(sessionsDir, config.workspaceRoot, config.directSessionsDir);
-  mkdirSync(sessionsDir, { recursive: true });
+  mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
   const dir = getDirectSessionDir(sessionId, config);
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
   return dir;
 }
 

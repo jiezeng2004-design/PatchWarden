@@ -37,11 +37,13 @@ function makeContext(overrides: Partial<InvokeDiscoveredToolContext> = {}): Invo
 }
 
 function issueTokenFor(toolName: string, risk: ToolRisk): string {
+  const tool = MOCK_TOOLS.find((candidate) => candidate.name === toolName);
+  if (!tool) throw new Error(`Missing mock tool: ${toolName}`);
   return issueToken({
     toolName,
     risk,
     query: "test query",
-    schemaDigest: computeSchemaDigest({}),
+    schemaDigest: computeSchemaDigest(tool.inputSchema),
     profile: "full",
   });
 }
@@ -174,6 +176,21 @@ describe("invokeDiscoveredTool", () => {
       );
       assert.equal(result.ok, false);
       assert.equal(result.error?.reason, "assessment_required");
+    });
+
+    it("workspace_write rejects a fabricated non-empty assessment id", async () => {
+      const token = issueTokenFor("save_plan", "workspace_write");
+      const result = await invokeDiscoveredTool(
+        makeInput({
+          toolName: "save_plan",
+          arguments: {},
+          discoveryToken: token,
+          assessmentId: "assessment_20260729_120000_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        }),
+        makeContext(),
+      );
+      assert.equal(result.ok, false);
+      assert.equal(result.error?.reason, "assessment_tool_mismatch");
     });
   });
 

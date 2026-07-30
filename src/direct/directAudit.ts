@@ -125,50 +125,97 @@ export function auditDirectSession(sessionId: string): DirectSessionAuditOutput 
     });
 
     // Check 6: release/dist modification
-    const releaseChanges = findPathChanges(artifacts, "release");
-    const distChanges = findPathChanges(artifacts, "dist");
-    const artifactDirChanges = [...releaseChanges, ...distChanges];
-    const hasBuildArtifacts = artifacts.artifact_hygiene.counts.tracked_build_artifacts > 0;
+    const artifactDirEntries = artifacts.changed_files.filter((file) =>
+      isPathInsideDirectory(file.path, "release") || isPathInsideDirectory(file.path, "dist")
+    );
+    const artifactDirChanges = artifactDirEntries.map((file) => file.path);
+    const manualArtifactDirChanges = artifactDirEntries.filter((file) => file.kind !== "build_artifact");
+    const reviewArtifactDirChanges = artifactDirEntries.filter((file) => file.kind === "build_artifact" && !file.ignored);
     checks.push({
       name: "release_dist_modified",
       result: artifactDirChanges.length === 0
         ? "pass"
-        : hasBuildArtifacts
+        : manualArtifactDirChanges.length > 0
+        ? "fail"
+        : reviewArtifactDirChanges.length > 0
         ? "warn"
-        : "fail",
+        : "pass",
       detail:
         artifactDirChanges.length === 0
           ? "No release/dist modifications."
-          : `release/dist modified: ${artifactDirChanges.join(", ")}${hasBuildArtifacts ? " (build-generated)" : " (not build-generated)"}`,
+          : manualArtifactDirChanges.length > 0
+          ? `release/dist contains non-generated changes: ${manualArtifactDirChanges.map((file) => file.path).join(", ")}`
+          : reviewArtifactDirChanges.length > 0
+          ? `release/dist generated changes are tracked or not ignored: ${reviewArtifactDirChanges.map((file) => file.path).join(", ")}`
+          : `${artifactDirChanges.length} ignored release/dist generated change(s) retained as build evidence.`,
       reason_code: artifactDirChanges.length > 0
-        ? hasBuildArtifacts
+        ? manualArtifactDirChanges.length > 0
+          ? "release_dist_manually_modified"
+          : reviewArtifactDirChanges.length > 0
           ? "build_artifact_modified"
-          : "release_dist_manually_modified"
+          : undefined
         : undefined,
     });
 
     // Check 7: file deletion
     const deletedFiles = artifacts.changed_files.filter((f) => f.change === "deleted");
+    const authorizedDeletedPaths = new Set(session.operations.filter((operation) => operation.operation_type === "delete").map((operation) => operation.path));
+    const authorizedDeletedFiles = deletedFiles.filter((file) => authorizedDeletedPaths.has(file.path));
+    const blockingDeletedFiles = deletedFiles.filter((f) => (f.kind === "source" || f.kind === "dependency") && !authorizedDeletedPaths.has(f.path));
+    const reviewDeletedFiles = deletedFiles.filter((f) =>
+      (f.kind === "build_artifact" || f.kind === "runtime_generated") && !f.ignored
+    );
     checks.push({
       name: "file_deletion",
-      result: deletedFiles.length === 0 ? "pass" : "fail",
+      result: blockingDeletedFiles.length > 0 ? "fail" : reviewDeletedFiles.length > 0 || authorizedDeletedFiles.length > 0 ? "warn" : "pass",
       detail:
         deletedFiles.length === 0
           ? "No files deleted."
-          : `Files deleted: ${deletedFiles.map((f) => f.path).join(", ")}`,
-      reason_code: deletedFiles.length > 0 ? "file_deleted" : undefined,
+          : blockingDeletedFiles.length > 0
+          ? `Source or dependency files deleted: ${blockingDeletedFiles.map((f) => f.path).join(", ")}`
+          : authorizedDeletedFiles.length > 0
+          ? `Explicitly confirmed Direct deletions require review: ${authorizedDeletedFiles.map((f) => f.path).join(", ")}`
+          : reviewDeletedFiles.length > 0
+          ? `Generated files deleted but are tracked or not ignored: ${reviewDeletedFiles.map((f) => f.path).join(", ")}`
+          : `${deletedFiles.length} ignored generated file(s) deleted; retained as build evidence only.`,
+      reason_code: blockingDeletedFiles.length > 0
+        ? "file_deleted"
+        : authorizedDeletedFiles.length > 0
+        ? "confirmed_file_deleted"
+        : reviewDeletedFiles.length > 0
+        ? "generated_file_deleted"
+        : undefined,
     });
 
     // Check 8: file rename
     const renamedFiles = artifacts.changed_files.filter((f) => f.change === "renamed");
+    const authorizedMoves = session.operations.filter((operation) => operation.operation_type === "move");
+    const isAuthorizedMove = (file: ChangedFile) => authorizedMoves.some((operation) => operation.path === file.path && operation.source_path === file.old_path);
+    const authorizedRenamedFiles = renamedFiles.filter(isAuthorizedMove);
+    const blockingRenamedFiles = renamedFiles.filter((f) => (f.kind === "source" || f.kind === "dependency") && !isAuthorizedMove(f));
+    const reviewRenamedFiles = renamedFiles.filter((f) =>
+      (f.kind === "build_artifact" || f.kind === "runtime_generated") && !f.ignored
+    );
     checks.push({
       name: "file_rename",
-      result: renamedFiles.length === 0 ? "pass" : "fail",
+      result: blockingRenamedFiles.length > 0 ? "fail" : reviewRenamedFiles.length > 0 || authorizedRenamedFiles.length > 0 ? "warn" : "pass",
       detail:
         renamedFiles.length === 0
           ? "No files renamed."
-          : `Files renamed: ${renamedFiles.map((f) => `${f.old_path} → ${f.path}`).join(", ")}`,
-      reason_code: renamedFiles.length > 0 ? "file_renamed" : undefined,
+          : blockingRenamedFiles.length > 0
+          ? `Source or dependency files renamed: ${blockingRenamedFiles.map((f) => `${f.old_path} -> ${f.path}`).join(", ")}`
+          : authorizedRenamedFiles.length > 0
+          ? `Explicit Direct moves recorded: ${authorizedRenamedFiles.map((f) => `${f.old_path} -> ${f.path}`).join(", ")}`
+          : reviewRenamedFiles.length > 0
+          ? `Generated files renamed but are tracked or not ignored: ${reviewRenamedFiles.map((f) => `${f.old_path} -> ${f.path}`).join(", ")}`
+          : `${renamedFiles.length} ignored generated file(s) renamed; retained as build evidence only.`,
+      reason_code: blockingRenamedFiles.length > 0
+        ? "file_renamed"
+        : authorizedRenamedFiles.length > 0
+        ? "direct_file_moved"
+        : reviewRenamedFiles.length > 0
+        ? "generated_file_renamed"
+        : undefined,
     });
 
     // Check 9: package-lock / dependency changes
@@ -206,7 +253,8 @@ export function auditDirectSession(sessionId: string): DirectSessionAuditOutput 
     }
 
     // Check 14: suspicious changes
-    const suspiciousCount = artifacts.artifact_hygiene.counts.suspicious_changes;
+    const suspiciousCount = artifacts.artifact_hygiene.counts.unexpected_changes
+      ?? artifacts.artifact_hygiene.counts.suspicious_changes;
     checks.push({
       name: "suspicious_changes",
       result: suspiciousCount === 0 ? "pass" : "warn",
@@ -245,24 +293,24 @@ export function auditDirectSession(sessionId: string): DirectSessionAuditOutput 
   // Check 10: at least one verification command run
   const verificationRuns = session.verification_runs || [];
   const hasVerification = verificationRuns.length > 0;
-  const hasSourceChanges = artifacts
-    ? artifacts.changed_files.some((f) => f.kind === "source")
+  const hasVerificationRequiredChanges = artifacts
+    ? artifacts.changed_files.some((f) => f.kind === "source" || f.kind === "dependency")
     : false;
 
   checks.push({
     name: "verification_run",
     result: hasVerification
       ? "pass"
-      : hasSourceChanges
+      : hasVerificationRequiredChanges
       ? "fail"
       : "warn",
     detail: hasVerification
       ? `${verificationRuns.length} verification command(s) run.`
-      : hasSourceChanges
-      ? "Source files were modified but no verification commands were run."
-      : "No verification commands were run (no source changes detected).",
+      : hasVerificationRequiredChanges
+          ? "Source or dependency files were modified but no verification commands were run."
+          : "No source or dependency changes require verification.",
     reason_code: !hasVerification
-      ? hasSourceChanges
+      ? hasVerificationRequiredChanges
         ? "source_changes_without_verification"
         : "no_verification_run"
       : undefined,
@@ -356,6 +404,11 @@ function findPathChanges(artifacts: ChangeArtifacts, dirName: string): string[] 
       return normalized.startsWith(`${dirName}/`) || normalized.includes(`/${dirName}/`);
     })
     .map((f) => f.path);
+}
+
+function isPathInsideDirectory(path: string, dirName: string): boolean {
+  const normalized = path.replace(/\\/g, "/");
+  return normalized.startsWith(`${dirName}/`) || normalized.includes(`/${dirName}/`);
 }
 
 function formatAuditMd(

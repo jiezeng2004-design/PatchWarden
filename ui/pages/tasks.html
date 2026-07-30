@@ -453,6 +453,7 @@ html.dark {
                 <th class="px-4 py-3 text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="验收" data-en="Acceptance">验收</th>
                 <th class="px-4 py-3 text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="验证" data-en="Verification">验证</th>
                 <th class="px-4 py-3 text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="阶段" data-en="Phase">阶段</th>
+                <th class="px-4 py-3 text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="可观测性" data-en="Observability">可观测性</th>
                 <th class="px-4 py-3 text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="创建时间" data-en="Created">创建时间</th>
                 <th class="px-4 py-3 text-xs font-semibold whitespace-nowrap" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="下一步" data-en="Next Action">下一步</th>
                 <th class="px-4 py-3 text-xs font-semibold whitespace-nowrap text-right" style="color: var(--pw-text-tertiary); font-family: var(--pw-font-sans);" data-zh="操作" data-en="Actions">操作</th>
@@ -955,6 +956,13 @@ html.dark {
         var truncatedId = truncate(taskId, 12);
         var createdAt = formatTime(task.created_at);
         var phaseLabel = getPhaseLabel(task.phase);
+        var obs = task.observability || {};
+        var verifyProgress = task.verification_progress || {};
+        var observabilityCell = '<div class="text-xs font-medium" style="color: ' + (obs.task_state === 'task_stuck' ? 'var(--pw-state-error)' : 'var(--pw-text-primary)') + ';">' + escapeHtml(obs.task_state || 'unknown') + '</div>'
+          + '<div class="text-xs" style="color: var(--pw-text-tertiary);">Agent: ' + escapeHtml(obs.agent_state || 'unknown') + ' · Watcher: ' + escapeHtml(obs.watcher_state || task.watcher_status || 'unknown') + '</div>'
+          + '<div class="text-xs" style="color: var(--pw-text-tertiary);">HB ' + escapeHtml(obs.heartbeat_age_seconds == null ? '—' : String(obs.heartbeat_age_seconds) + 's') + ' · cmd ' + escapeHtml(truncate(obs.current_command || '—', 24)) + '</div>'
+          + '<div class="text-xs" style="color: var(--pw-text-tertiary);">src/gen/scope ' + escapeHtml(String(task.source_changes || 0)) + '/' + escapeHtml(String(task.generated_changes || 0)) + '/' + escapeHtml(String(task.scope_violations || 0)) + ' · verify ' + escapeHtml(String(verifyProgress.executed || 0)) + '/' + escapeHtml(String(verifyProgress.configured || 0)) + '</div>'
+          + '<div class="text-xs" style="color: var(--pw-text-tertiary);">Connector: ' + escapeHtml(obs.connector_state || task.connector_state || 'not_observable_server_side') + '</div>';
         var altBg = (idx % 2 === 1) ? ' background-color: var(--pw-bg-hover);' : '';
         var detailHref = '/pages/task-detail.html?id=' + encodeURIComponent(taskId);
         var canSelect = historyState === 'archived' || TERMINAL_STATUSES.has(task.status);
@@ -1044,6 +1052,7 @@ html.dark {
           +   '<td class="px-4 py-3">' + accCell + '</td>'
           +   '<td class="px-4 py-3 text-xs">' + verifyCell + '</td>'
           +   '<td class="px-4 py-3 text-xs whitespace-nowrap" style="color: var(--pw-text-secondary); font-family: var(--pw-font-sans);" data-phase="' + escapeAttr(task.phase || '') + '">' + escapeHtml(phaseLabel) + '</td>'
+          +   '<td class="px-4 py-3" style="min-width: 230px;">' + observabilityCell + '</td>'
           +   '<td class="px-4 py-3 text-xs whitespace-nowrap" style="color: var(--pw-text-secondary); font-family: var(--pw-font-mono);" title="' + escapeAttr(task.created_at || '') + '">' + escapeHtml(createdAt) + '</td>'
           +   '<td class="px-4 py-3 text-xs" style="font-family: var(--pw-font-sans);">' + nextActionCell + '</td>'
           +   '<td class="px-4 py-3 text-right">'

@@ -18,6 +18,10 @@ import { PatchWardenError } from "../errors.js";
 import { mutateGoalStatus, readGoalStatus } from "./goalStore.js";
 import { updateSubgoalStatus, type GoalStatus, type Subgoal } from "./goalStatus.js";
 import { getBlockedSubgoals } from "./goalGraph.js";
+import {
+  verifyTaskAttestation,
+  type AttestationStoreOptions,
+} from "../attestation/attestationStore.js";
 
 // ── 类型定义 ──────────────────────────────────────────────────────
 
@@ -53,6 +57,13 @@ function resolveTaskStatusPath(taskId: string, workspaceRoot?: string): string {
   const tasksDir = config.tasksDir;
   const resolvedTasksDir = isAbsolute(tasksDir) ? tasksDir : join(wsRoot, tasksDir);
   return join(resolvedTasksDir, taskId, "status.json");
+}
+
+function resolveTaskDirectory(taskId: string, workspaceRoot?: string): string {
+  const config = getConfig();
+  const wsRoot = resolveWorkspaceRoot(workspaceRoot);
+  const resolvedTasksDir = isAbsolute(config.tasksDir) ? config.tasksDir : join(wsRoot, config.tasksDir);
+  return join(resolvedTasksDir, taskId);
 }
 
 /**
@@ -95,7 +106,8 @@ function readTaskStatus(taskId: string, workspaceRoot?: string): { status: strin
 export function acceptSubgoal(
   goalId: string,
   subgoalId: string,
-  workspaceRoot?: string
+  workspaceRoot?: string,
+  attestationOptions: AttestationStoreOptions = {},
 ): { subgoal_id: string; status: "accepted"; accepted_at: string } {
   return mutateGoalStatus(goalId, (goalStatus) => {
 
@@ -125,13 +137,33 @@ export function acceptSubgoal(
   const unacceptedTasks: Array<{ task_id: string; current_status: string }> = [];
   for (const taskId of subgoal.task_ids) {
     const taskStatus = readTaskStatus(taskId, workspaceRoot);
-    const accepted = taskStatus?.status === "accepted"
+    const legacyAccepted = taskStatus?.status === "accepted"
       || (taskStatus?.status === "done_by_agent" && taskStatus.acceptance_status === "accepted");
+    let accepted = legacyAccepted;
+    let attestationReason = "legacy_unattested";
+    let attestationRequired = false;
+    try {
+      const verification = verifyTaskAttestation(
+        taskId,
+        resolveTaskDirectory(taskId, workspaceRoot),
+        resolveWorkspaceRoot(workspaceRoot),
+        attestationOptions,
+      );
+      attestationReason = verification.reason;
+      attestationRequired = verification.required;
+      if (verification.required) {
+        accepted = verification.valid && verification.decision === "accepted";
+      }
+    } catch {
+      accepted = false;
+      attestationRequired = true;
+      attestationReason = "attestation_verification_failed";
+    }
     if (!accepted) {
       unacceptedTasks.push({
         task_id: taskId,
         current_status: taskStatus
-          ? `${taskStatus.status}${taskStatus.acceptance_status ? `/${taskStatus.acceptance_status}` : ""}`
+          ? `${taskStatus.status}${taskStatus.acceptance_status ? `/${taskStatus.acceptance_status}` : ""}${attestationRequired ? `/${attestationReason}` : ""}`
           : "missing",
       });
     }

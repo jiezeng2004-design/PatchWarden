@@ -40,7 +40,7 @@ $ModeDefinitions = [ordered]@{
     Profile = "patchwarden"
     ToolProfile = "chatgpt_core"
     RuntimeDirectory = Join-Path $PatchWardenRuntimeRoot "runtime"
-    HealthBaseUrl = "http://127.0.0.1:8080"
+    HealthBaseUrl = if ($env:PATCHWARDEN_CORE_HEALTH_URL) { $env:PATCHWARDEN_CORE_HEALTH_URL } else { "http://127.0.0.1:8080" }
     LegacyPidFile = Join-Path $env:TEMP "patchwarden-core.pid"
     LegacyHealthUrlFile = Join-Path $env:TEMP "patchwarden-core-health.url"
     GenericLauncher = Join-Path $LauncherDirectory "Start-PatchWarden-Tunnel.cmd"
@@ -53,7 +53,7 @@ $ModeDefinitions = [ordered]@{
     Profile = "patchwarden-direct"
     ToolProfile = "chatgpt_direct"
     RuntimeDirectory = Join-Path $PatchWardenRuntimeRoot "runtime-direct"
-    HealthBaseUrl = "http://127.0.0.1:8081"
+    HealthBaseUrl = if ($env:PATCHWARDEN_DIRECT_HEALTH_URL) { $env:PATCHWARDEN_DIRECT_HEALTH_URL } else { "http://127.0.0.1:8081" }
     LegacyPidFile = Join-Path $env:TEMP "patchwarden-direct.pid"
     LegacyHealthUrlFile = Join-Path $env:TEMP "patchwarden-direct-health.url"
     GenericLauncher = Join-Path $LauncherDirectory "Start-PatchWarden-Direct-Tunnel.cmd"
@@ -203,6 +203,9 @@ function Test-TunnelProcessForMode {
 
 function Get-MatchingTunnelProcesses {
   param($Definition)
+  # Test-only isolation: control smoke owns temporary receipts and must never
+  # discover a live tunnel from another checkout by global profile name.
+  if ($env:PATCHWARDEN_TEST_DISABLE_PROFILE_PROCESS_SCAN -eq "1") { return @() }
   return @(
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
       Where-Object { Test-TunnelProcessForMode -Process $_ -Definition $Definition }

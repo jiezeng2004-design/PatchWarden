@@ -10,8 +10,18 @@
 4. 创建任务时优先采用 assess → execute 两步流程。execute 必须直接使用 assess 返回的 `next_tool_call`，不要重复发送 goal、plan、repo、agent 或验证命令。
 5. 短任务可以调用 `wait_for_task(timeout_seconds: 25)`；长任务使用 `list_tasks(repo_path=..., active_only=true)` 和 `get_task_status`。
 6. 终态先读取 `get_task_summary(view: "compact")` 和 `audit_task`；证据不足时才读取 standard 摘要、完整 diff 或日志。
-7. 构建验证与源码任务分开。`artifact_hygiene` 会区分源码、已跟踪构建物、忽略产物、运行态文件和可疑变更。
-8. PatchWarden 保留未提交改动供人工审核；提交、推送和发布不属于普通任务范围。
+7. 构建验证与源码任务分开。`artifact_hygiene` 统一提供 `source_changes`、`dependency_changes`、`generated_changes`、`runtime_changes` 和 `unexpected_changes`；旧的构建物字段继续兼容。默认识别 `.next`、`dist`、`build`、`coverage`、`*.tsbuildinfo` 等路径，并合并安全的 ignore 规则与本地 `generatedPaths` 配置。已跟踪或未忽略的生成物仍进入 `unexpected_changes`，不会被静默忽略。
+8. 网页项目需要运行态验收时，在本地配置中启用 `runtimeValidation`。启动命令必须已进入仓库验证白名单，URL 必须是字面量 loopback；PatchWarden 不会附着到已占用端口。结果在 `runtime-validation.json`，截图在任务目录的 `runtime-screenshots/`，最终摘要只返回有界计数。
+9. 查看 `completion` 分层状态：实现、静态验证、运行态验证、人工复核和用户验收彼此独立。`done_by_agent` 只说明 Agent 进程结束；当运行态证据缺失时必须保持 `manual_review_required=true`。
+10. 优先读取 `acceptance-report.json` 的低噪声结论，再按需展开 `project-facts-validation.json`、`framework-validation.json`、`svg-xml-validation.json` 和 `document-command-evidence.json`。文档中的叙述示例不会因脚本不存在而阻断，但代码块、行内命令和 shell 行会保留来源证据。
+11. 连接器重试必须复用稳定的 `request_id`。完全相同的请求可安全复用；若受锁定参数变化，PatchWarden 返回 `request_id_parameter_mismatch`。不要因 connector/Watcher 故障切换 Agent，也不要把这类故障计入 Agent retry。
+12. PatchWarden 保留未提交改动供人工审核；提交、推送和发布不属于普通任务范围。
+
+### 项目事实与框架覆盖
+
+可在仓库根目录新建 `.patchwarden/project-facts.json`（推荐）或 `PROJECT_FACTS.json`。该文件只应写入已核实事实，可包含 `contacts`、`domains`、`quantitative_claims`、`adoption_claims`、`licenses` 和 `prohibited_claims`。不要把 token、Cookie、密码或其他凭据写入事实文件。
+
+PatchWarden 会根据仓库文件识别 Next.js、Node.js、Python、Rust 和 Electron，并运行对应的结构化检查；无法可靠识别时回退到 generic 验证。SVG/XML 使用真实解析器，错误包含文件、行、列和原因。所有覆盖文件都是审计证据，不替代仓库真实的测试、构建或人工视觉验收。
 
 ### assess → execute
 

@@ -37,6 +37,8 @@ surface. See `docs/desktop-app.md`.
 - `checks/*-smoke.js`: targeted smoke tests.
 - `checks/unit-tests.js`: Node unit test entry.
 - `checks/mcp-manifest-check.js`: validates MCP manifest expectations.
+- `checks/release-metadata-check.js`: keeps local version declarations and
+  documented Core/Direct manifest counts synchronized with the built catalog.
 - `brand-check.js`: checks public brand strings.
 - `checks/package-manifest-check.js`: verifies package contents.
 - `checks/build-output-check.js`: verifies clean-output confinement and exact recursive unit-test compilation.

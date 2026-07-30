@@ -5,13 +5,15 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  lstatSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { deflateRawSync } from "node:zlib";
-import { join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scriptDir = resolve(fileURLToPath(new URL(".", import.meta.url)));
@@ -177,11 +179,19 @@ if (stageRelativeToRoot !== "release/package") {
   throw new Error(`Refusing to clean non-isolated release staging path: ${stageRelativeToRoot}`);
 }
 
+assertExistingPathBoundary(root, root, "repository root");
+assertExistingPathBoundary(releaseRoot, root, "release root");
+assertExistingPathBoundary(releaseDir, releaseRoot, "release staging directory");
+assertExistingPathBoundary(archivePath, root, "tar archive");
+assertExistingPathBoundary(zipArchivePath, root, "zip archive");
+
 console.log("[pack-clean] Preparing clean release directory...");
 rmSync(releaseDir, { recursive: true, force: true });
 rmSync(archivePath, { force: true });
 mkdirSync(releaseRoot, { recursive: true });
+assertExistingPathBoundary(releaseRoot, root, "release root");
 mkdirSync(releaseDir, { recursive: true });
+assertExistingPathBoundary(releaseDir, releaseRoot, "release staging directory");
 
 for (const item of include) {
   const source = resolve(root, item);
@@ -300,11 +310,16 @@ function listFiles(dir) {
   const entries = [];
   for (const name of readdirSync(dir)) {
     const fullPath = join(dir, name);
-    const stat = statSync(fullPath);
+    const stat = lstatSync(fullPath);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Refusing to enumerate symlink/junction in release staging: ${relative(releaseDir, fullPath)}`);
+    }
     if (stat.isDirectory()) {
       entries.push(...listFiles(fullPath));
-    } else {
+    } else if (stat.isFile()) {
       entries.push(fullPath);
+    } else {
+      throw new Error(`Refusing to package non-regular entry: ${relative(releaseDir, fullPath)}`);
     }
   }
   return entries;
@@ -316,15 +331,24 @@ function copyAllowedEntry(source, target) {
     return;
   }
 
-  const stat = statSync(source);
+  assertExistingPathBoundary(source, root, `package source ${rel}`);
+  const stat = lstatSync(source);
+  if (stat.isSymbolicLink()) {
+    throw new Error(`Refusing to follow symlink/junction package source: ${rel}`);
+  }
   if (stat.isDirectory()) {
     mkdirSync(target, { recursive: true });
+    assertExistingPathBoundary(target, releaseDir, `package target ${rel}`);
     for (const name of readdirSync(source)) {
       copyAllowedEntry(join(source, name), join(target, name));
     }
     return;
   }
 
+  if (!stat.isFile()) {
+    throw new Error(`Refusing to copy non-regular package source: ${rel}`);
+  }
+  assertExistingPathBoundary(resolve(target, ".."), releaseDir, `package target parent ${rel}`);
   copyFileSync(source, target);
 }
 
@@ -332,13 +356,35 @@ function pruneForbiddenEntries(dir) {
   for (const name of readdirSync(dir)) {
     const fullPath = join(dir, name);
     const rel = toPosix(relative(releaseDir, fullPath));
+    const metadata = lstatSync(fullPath);
+    if (metadata.isSymbolicLink()) {
+      throw new Error(`Refusing to prune through symlink/junction in release staging: ${rel}`);
+    }
     if (isForbidden(rel)) {
       rmSync(fullPath, { recursive: true, force: true });
       continue;
     }
-    if (statSync(fullPath).isDirectory()) {
+    if (metadata.isDirectory()) {
       pruneForbiddenEntries(fullPath);
     }
+  }
+}
+
+function assertExistingPathBoundary(path, allowedRoot, label) {
+  if (!existsSync(path)) return;
+  const lexicalRelative = relative(resolve(allowedRoot), resolve(path));
+  if (lexicalRelative === ".." || lexicalRelative.startsWith(`..${sep}`) || isAbsolute(lexicalRelative)) {
+    throw new Error(`Refusing ${label} outside its allowed root: ${path}`);
+  }
+  const metadata = lstatSync(path);
+  if (metadata.isSymbolicLink()) {
+    throw new Error(`Refusing symlink/junction ${label}: ${path}`);
+  }
+  const realRoot = realpathSync(allowedRoot);
+  const realPath = realpathSync(path);
+  const realRelative = relative(realRoot, realPath);
+  if (realRelative === ".." || realRelative.startsWith(`..${sep}`) || isAbsolute(realRelative)) {
+    throw new Error(`Refusing ${label} whose real path escapes its allowed root: ${path}`);
   }
 }
 

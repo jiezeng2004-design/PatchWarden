@@ -1,6 +1,6 @@
 {
   "name": "patchwarden-desktop",
-  "version": "1.6.7",
+  "version": "1.7.0",
   "description": "Windows desktop shell for the PatchWarden local Control Center.",
   "author": "PatchWarden contributors",
   "private": true,
@@ -19,7 +19,8 @@
     "test": "npm run build:ts && node scripts/test.mjs",
     "smoke:unpacked": "node scripts/smoke-unpacked.mjs",
     "prebuild:dir": "npm run stage && npm run build:ts",
-    "build:dir": "electron-builder --win dir --x64",
+    "build:dir": "electron-builder --win dir --x64 && node scripts/verify-unpacked.mjs",
+    "verify:unpacked": "node scripts/verify-unpacked.mjs",
     "prebuild": "npm run stage && npm run build:ts",
     "build": "electron-builder --win nsis zip --x64 && node scripts/checksum.mjs"
   },
@@ -36,6 +37,10 @@
     "appId": "io.github.jiezeng2004design.patchwarden",
     "productName": "PatchWarden",
     "asar": true,
+    "electronLanguages": [
+      "en-US",
+      "zh-CN"
+    ],
     "directories": {
       "output": "../release/desktop"
     },
