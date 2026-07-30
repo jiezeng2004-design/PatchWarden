@@ -45,6 +45,7 @@
     "npm run lint",
     "npm run format:check",
     "npm run build",
+    "npm run preview",
     "npm run dist",
     "npm run doctor",
     "pnpm test",
@@ -63,6 +64,36 @@
     "desktop-app": [
       "npm run release:check"
     ]
+  },
+  "agentPriority": ["opencode", "claude", "codex"],
+  "maxRetriesPerAgent": 1,
+  "fallbackOn": ["agent_execution_error", "agent_timeout", "verification_failure"],
+  "doNotFallbackOn": ["policy_block", "scope_violation", "user_confirmation_required", "connector_failure", "watcher_failure"],
+  "generatedPaths": [
+    ".next/**",
+    "dist/**",
+    "build/**",
+    "coverage/**",
+    "*.tsbuildinfo"
+  ],
+  "repoGeneratedPaths": {
+    "desktop-app": [
+      "custom-output/**"
+    ]
+  },
+  "runtimeValidation": {
+    "enabled": false,
+    "startCommand": "npm run preview",
+    "baseUrl": "http://127.0.0.1:4173",
+    "routes": ["/"],
+    "viewports": [
+      { "name": "desktop", "width": 1440, "height": 900 },
+      { "name": "mobile", "width": 390, "height": 844 }
+    ],
+    "checkConsoleErrors": true,
+    "checkBrokenImages": true,
+    "checkHorizontalOverflow": true,
+    "captureScreenshots": true
   },
   "maxReadFileBytes": 200000,
   "defaultTaskTimeoutSeconds": 900,

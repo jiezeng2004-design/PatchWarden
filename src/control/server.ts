@@ -34,7 +34,10 @@ import {
 // ── Request router ────────────────────────────────────────────────
 
 async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  res.setHeader("Content-Security-Policy", "frame-ancestors 'none'");
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; form-action 'self'; connect-src 'self'; img-src 'self' data:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+  );
   res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("X-Content-Type-Options", "nosniff");

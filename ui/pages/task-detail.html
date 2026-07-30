@@ -878,8 +878,14 @@ html.dark {
         } else {
           hide($('srWarningsBlock'));
         }
-        if (Array.isArray(sr.information) && sr.information.length > 0) {
-          $('srInformation').textContent = sr.information.join('\n');
+        var observabilityInfo = Array.isArray(sr.information) ? sr.information.slice() : [];
+        if (sr.completion_state) observabilityInfo.push('completion: ' + JSON.stringify(sr.completion_state));
+        if (sr.acceptance_report) observabilityInfo.push('acceptance report: ' + JSON.stringify(sr.acceptance_report));
+        if (sr.project_fact_validation) observabilityInfo.push('project facts: ' + JSON.stringify(sr.project_fact_validation));
+        if (sr.framework_validation) observabilityInfo.push('frameworks: ' + JSON.stringify(sr.framework_validation));
+        if (sr.svg_xml_validation) observabilityInfo.push('SVG/XML: ' + JSON.stringify(sr.svg_xml_validation));
+        if (observabilityInfo.length > 0) {
+          $('srInformation').textContent = observabilityInfo.join('\n');
           show($('srInformationBlock'));
         } else {
           hide($('srInformationBlock'));

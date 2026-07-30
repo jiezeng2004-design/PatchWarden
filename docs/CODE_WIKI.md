@@ -1,7 +1,7 @@
 # PatchWarden Code Wiki
 
 > 本文档是对 PatchWarden 仓库的结构化代码导览，覆盖项目整体架构、主要模块职责、关键类与函数说明、依赖关系、运行方式，以及现有缺陷分析。
-> 源码版本：**v1.6.7** · Schema Epoch：`2026-07-26-v16` · 复核日期：2026-07-28 · License：MIT
+> 源码版本：**v1.7.0** · Schema Epoch：`2026-07-26-v16` · 集成复核日期：2026-07-30 · License：MIT
 
 ## 目录
 
@@ -93,7 +93,7 @@ ChatGPT / Codex / OpenCode / 其他 MCP 客户端
 | --- | --- | --- |
 | `full` | 64 | 本地完整开发目录，包含核心、管理、Direct 工具 |
 | `chatgpt_core` | 26 | ChatGPT Tunnel 固定的核心工具集 |
-| `chatgpt_direct` | 14 | ChatGPT 直接编辑模式，需 `enableDirectProfile: true` |
+| `chatgpt_direct` | 18 | ChatGPT 直接编辑模式，需 `enableDirectProfile: true` |
 | `chatgpt_search` | 5 | 动态工具发现场景（discover/explain/invoke） |
 
 ### 2.4 两种执行模式
@@ -254,7 +254,7 @@ PatchWarden/
 │   └── release/                  # 发布打包
 ├── docs/                         # 文档
 ├── examples/                     # 配置与 Tunnel 示例
-├── package.json                  # v1.6.7，单一直接运行时依赖
+├── package.json                  # v1.7.0，本地集成候选版本
 ├── tsconfig.json
 └── PatchWarden.cmd               # Windows 统一控制入口
 ```
@@ -268,7 +268,8 @@ PatchWarden/
 | 文件 | 职责 |
 | --- | --- |
 | [src/index.ts](../src/index.ts) | stdio MCP Server 入口，加载配置、注册工具、连接 `StdioServerTransport` |
-| [src/httpServer.ts](../src/httpServer.ts) | HTTP MCP Server，绑定 `127.0.0.1:7331`，每请求独立 MCP 实例，支持 owner token 与 `/admin/tasks/:id/accept` 验收端点 |
+| [src/httpServer.ts](../src/httpServer.ts) | HTTP MCP Server，绑定 loopback，强制 owner token，并限制 body、并发和请求预算；HTTP 不签发人工验收 |
+| [src/attestation/attestationStore.ts](../src/attestation/attestationStore.ts) | 工作区外的签名验收 requirement/ledger，将本地人工决定绑定到当前任务证据摘要 |
 | [src/controlCenter.ts](../src/controlCenter.ts) | 本地 Dashboard 启动入口，仅 `import { startServer } from "./control/server.js"` |
 | [src/doctor.ts](../src/doctor.ts) | 只读诊断脚本，检查 15+ 项：Node/npm/Git 版本、配置、工作区、路径保护、敏感文件、Agent 命令、工具 Manifest、HTTP 端口、Watcher 目录、构建产物 |
 
@@ -278,7 +279,7 @@ PatchWarden/
 | --- | --- |
 | [src/config.ts](../src/config.ts) | 加载并校验 `patchwarden.config.json`，提供 `loadConfig`/`getConfig`/`getTasksDir`/`getPlansDir`/`resolveWorkspaceRoot`/`getRepoAllowedTestCommands`/`getRepoDirectAllowedCommands` 等路径解析；严格校验 `workspaceRoot`、`agents`、`allowedTestCommands`、`watcherStaleSeconds`、`toolProfile`、`tunnelProxy`、Direct 数值范围等字段；含 `normalizeRepoKey` 与 `comparablePath` 工具 |
 | [src/errors.ts](../src/errors.ts) | 定义 `PatchWardenError`（含 `reason`/`suggestion`/`blocked`/`details`）与 `errorPayload` 序列化 |
-| [src/version.ts](../src/version.ts) | 导出 `PATCHWARDEN_VERSION = "1.6.7"` 与 `TOOL_SCHEMA_EPOCH = "2026-07-26-v16"` |
+| [src/version.ts](../src/version.ts) | 导出 `PATCHWARDEN_VERSION = "1.7.0"` 与 `TOOL_SCHEMA_EPOCH = "2026-07-26-v16"` |
 | [src/logging.ts](../src/logging.ts) | `Logger` 类输出 stderr JSON 日志，记录 `audit`/`info`/`warn`/`error`；`logToolInvocation` 仅写参数 digest，不写原参数，并通过跨进程锁有界追加到 5 MiB；`installGlobalHandlers` 捕获未处理异常但不吞错 |
 
 ### 4.3 安全模块（src/security/）
@@ -324,7 +325,7 @@ MCP 工具实现与注册中枢，共 49 个工具文件。
 | 文件 | 职责 |
 | --- | --- |
 | [registry.ts](../src/tools/registry.ts) | **工具注册中枢**（约 170 行）：`registerTools` 绑定 `ListToolsRequestSchema`/`CallToolRequestSchema`，`handleToolCall` 分派到领域 handler map；工具定义由 `definitions/toolDefs.ts` 提供；启动时校验"每个已注册工具必有 handler"；冻结一次连接的 active tool list 防止 list/call 漂移 |
-| [catalog/toolCatalog.ts](../src/tools/catalog/toolCatalog.ts) | Profile 与 Manifest：`resolveToolProfile`/`selectToolsForProfile` 按 profile 过滤工具；`buildToolCatalogSnapshot` 计算 `tool_manifest_sha256` 用于漂移检测；导出 `CHATGPT_CORE_TOOL_NAMES`(26)/`CHATGPT_DIRECT_TOOL_NAMES`(14)/`CHATGPT_SEARCH_TOOL_NAMES`(5)；`chatgpt_direct` 在未启用时降级为仅 `health_check` |
+| [catalog/toolCatalog.ts](../src/tools/catalog/toolCatalog.ts) | Profile 与 Manifest：`resolveToolProfile`/`selectToolsForProfile` 按 profile 过滤工具；`buildToolCatalogSnapshot` 计算 `tool_manifest_sha256` 用于漂移检测；导出 `CHATGPT_CORE_TOOL_NAMES`(26)/`CHATGPT_DIRECT_TOOL_NAMES`(18)/`CHATGPT_SEARCH_TOOL_NAMES`(5)；`chatgpt_direct` 在未启用时降级为仅 `health_check` |
 | [catalog/toolRegistry.ts](../src/tools/catalog/toolRegistry.ts) | 工具元数据：`buildToolRegistry` 为每个工具补全 risk/modes/tags/aliases/schema_digest；稳定 JSON 实现来自 `src/utils/stableJson.ts` |
 | [catalog/toolSearch.ts](../src/tools/catalog/toolSearch.ts) | SafeToolSearch 搜索引擎（v0.9.0）：混合排序、意图分类、风险调整与历史成功率反馈 |
 | [catalog/toolUsageStats.ts](../src/tools/catalog/toolUsageStats.ts) | 从 `invocation.log` 聚合工具调用统计 |
@@ -1143,11 +1144,13 @@ PATCHWARDEN_TOOL_PROFILE = "full"
 | 端点 | 方法 | 用途 |
 | --- | --- | --- |
 | `/mcp` | POST | MCP 请求（需 owner token） |
-| `/healthz` | GET | 健康检查 |
+| `/healthz` | GET | 匿名最小健康状态；`?detail=full` 需要 owner token |
 | `/readyz` | GET | 就绪检查（不就绪返回 503） |
-| `/admin/tasks/:id/accept` | POST | 人工接受任务 |
-| `/admin/tasks/:id/reject` | POST | 人工拒绝任务 |
-| `/admin/tasks/:id/acceptance` | GET | 读取验收状态 |
+| `/admin/tasks/:id/accept` | POST | 返回 `local_attestation_required`；改用本地 `patchwarden-attest` |
+| `/admin/tasks/:id/reject` | POST | 返回 `local_attestation_required`；改用本地 `patchwarden-attest` |
+| `/admin/tasks/:id/acceptance` | GET | 读取已验证的权威验收状态 |
+
+HTTP MCP 在 owner token 未配置时拒绝启动。新任务只有在机器 audit 通过后，由真实交互式终端运行 `patchwarden-attest <task_id> --accept` 才能成为权威 accepted；工作区内的 status/acceptance 文件只是镜像，不能替代外部 ledger。
 
 ### 8.9 Control Center API 端点（127.0.0.1:8090）
 

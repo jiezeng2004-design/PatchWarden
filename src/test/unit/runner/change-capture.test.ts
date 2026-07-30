@@ -1,12 +1,15 @@
 import { strict as assert } from "node:assert";
-import { mkdtempSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
   captureRepoSnapshot,
+  classifyArtifactHygiene,
   compareSnapshots,
   findNewExternalDirtyFiles,
+  resolveGeneratedPathPatterns,
   sanitizeDiffEvidence,
   type ExternalDirtyFile,
   type FileFingerprint,
@@ -19,6 +22,12 @@ const fingerprint = (sha256: string): FileFingerprint => ({
   tracked: true,
   ignored: false,
 });
+
+const classifiedFingerprint = (
+  sha256: string,
+  tracked: boolean,
+  ignored: boolean,
+): FileFingerprint => ({ size: 1, sha256, tracked, ignored });
 
 describe("change evidence safety", () => {
   it("redacts credential-like diff content before persistence", () => {
@@ -58,6 +67,36 @@ describe("change capture cancellation", () => {
         captureRepoSnapshot(root, controller.signal),
         /snapshot canceled/
       );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records sensitive path metadata without fingerprinting its content", async () => {
+    const root = mkdtempSync(join(tmpdir(), "patchwarden-sensitive-snapshot-"));
+    try {
+      writeFileSync(join(root, ".env"), "PRIVATE_VALUE=do-not-read\n", "utf8");
+      writeFileSync(join(root, "safe.txt"), "safe\n", "utf8");
+      const captured = await captureRepoSnapshot(root);
+      assert.equal(captured.integrity?.complete, true);
+      assert.equal(captured.files[".env"], undefined);
+      assert.equal(captured.sensitive_files?.[".env"]?.size, 26);
+      assert.equal(typeof captured.sensitive_files?.[".env"]?.mtime_ms, "number");
+      assert.equal(captured.files["safe.txt"]?.sha256.length, 64);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("marks a Git-reported sensitive dirty path incomplete", async () => {
+    const root = mkdtempSync(join(tmpdir(), "patchwarden-sensitive-git-"));
+    try {
+      const initialized = spawnSync("git", ["init", "--quiet"], { cwd: root, encoding: "utf8", windowsHide: true });
+      assert.equal(initialized.status, 0, initialized.stderr);
+      writeFileSync(join(root, ".env"), "PRIVATE_VALUE=blocked\n", "utf8");
+      const captured = await captureRepoSnapshot(root);
+      assert.equal(captured.integrity?.complete, false);
+      assert.ok(captured.integrity?.failure_codes.includes("sensitive_path_dirty"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -143,5 +182,55 @@ describe("change capture path comparison", () => {
     const changes = findNewExternalDirtyFiles(baseline, current, "win32");
     assert.equal(changes.length, 1);
     assert.equal(changes[0].path, "Shared/state.json");
+  });
+});
+
+describe("generated path classification", () => {
+  it("separates source, dependency, generated, runtime, and unexpected changes", () => {
+    const root = mkdtempSync(join(tmpdir(), "patchwarden-generated-paths-"));
+    try {
+      writeFileSync(join(root, ".gitignore"), "generated/\nsrc/\n", "utf-8");
+      writeFileSync(join(root, ".npmignore"), "coverage/\nexamples/\n", "utf-8");
+      const rules = resolveGeneratedPathPatterns(root, ["custom-output/**"]);
+      assert.ok(rules.includes("**/generated/**"));
+      assert.ok(rules.includes("**/coverage/**"));
+      assert.equal(rules.includes("src/**"), false);
+      assert.equal(rules.includes("examples/**"), false);
+
+      const before = snapshot({});
+      const after = snapshot({
+        "src/app.ts": classifiedFingerprint("source", true, false),
+        "package-lock.json": classifiedFingerprint("lock", true, false),
+        "tsconfig.tsbuildinfo": classifiedFingerprint("tsbuild", false, true),
+        ".next/static/old.js": classifiedFingerprint("next-ignored", false, true),
+        ".next/static/tracked.js": classifiedFingerprint("next-tracked", true, false),
+        "custom-output/result.bin": classifiedFingerprint("custom", false, true),
+        "packages/app/generated/output.js": classifiedFingerprint("nested-generated", false, true),
+        "server.log": classifiedFingerprint("runtime", false, true),
+      });
+
+      const changes = compareSnapshots(before, after, "linux", rules);
+      const hygiene = classifyArtifactHygiene(changes);
+      assert.deepEqual(hygiene.source_changes.map((entry) => entry.path), ["src/app.ts"]);
+      assert.deepEqual(hygiene.dependency_changes?.map((entry) => entry.path), ["package-lock.json"]);
+      assert.equal(hygiene.generated_changes?.length, 5);
+      assert.deepEqual(hygiene.runtime_changes?.map((entry) => entry.path), ["server.log"]);
+      assert.deepEqual(hygiene.unexpected_changes?.map((entry) => entry.path), [".next/static/tracked.js"]);
+      assert.equal(hygiene.counts.generated_changes, 5);
+      assert.equal(hygiene.counts.source_changes, 1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a source rename into a generated directory classified as source", () => {
+    const before = snapshot({ "src/draft.ts": classifiedFingerprint("same", false, false) });
+    const after = snapshot({ ".next/draft.ts": classifiedFingerprint("same", false, true) });
+    const changes = compareSnapshots(before, after, "linux");
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].change, "renamed");
+    assert.equal(changes[0].kind, "source");
+    assert.equal(changes[0].old_kind, "source");
+    assert.equal(classifyArtifactHygiene(changes).source_changes.length, 1);
   });
 });

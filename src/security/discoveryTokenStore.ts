@@ -88,17 +88,21 @@ export function issueToken(input: IssueTokenInput): string {
   const expiresAt = new Date(nowMs + (input.ttlMs ?? DEFAULT_TTL_MS)).toISOString();
   const token = generateTokenId();
 
-  const record: DiscoveryTokenRecord = {
+  const allowedScope = input.allowedScope?.map((scope) => {
+    normalizeAllowedScope(scope);
+    return scope;
+  });
+  const record: DiscoveryTokenRecord = Object.freeze({
     token,
     toolName: input.toolName,
     risk: input.risk,
-    allowedScope: input.allowedScope,
+    allowedScope: allowedScope ? Object.freeze([...allowedScope]) as unknown as string[] : undefined,
     issuedAt,
     expiresAt,
     query: input.query,
     schemaDigest: input.schemaDigest,
     profile: input.profile,
-  };
+  });
 
   tokenStore.set(token, record);
   return token;
@@ -146,7 +150,24 @@ export function consumeToken(tokenId: string): DiscoveryTokenRecord {
  */
 export function peekToken(tokenId: string): DiscoveryTokenRecord | null {
   const record = tokenStore.get(tokenId);
-  return record ?? null;
+  return record ? { ...record, allowedScope: record.allowedScope ? [...record.allowedScope] : undefined } : null;
+}
+
+function normalizeAllowedScope(value: string): string {
+  const normalized = String(value).trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+  if (
+    !normalized
+    || normalized.startsWith("/")
+    || /^[A-Za-z]:\//.test(normalized)
+    || normalized.split("/").some((part) => part === "" || part === "." || part === "..")
+  ) {
+    throw new PatchWardenError(
+      "token_scope_invalid",
+      "Discovery token scopes must be non-empty workspace-relative paths.",
+      "Use a relative scope such as src or docs/public.",
+    );
+  }
+  return normalized;
 }
 
 /**

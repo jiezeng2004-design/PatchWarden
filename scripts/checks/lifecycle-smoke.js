@@ -17,6 +17,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 const isDoneStatus = (s) => s === "done" || s === "done_by_agent";
 
 const tempRoot = mkdtempSync(join(tmpdir(), "patchwarden-lifecycle-"));
+process.env.PATCHWARDEN_ATTESTATION_DIR = join(tempRoot, "external-attestations");
 const workspaceRoot = join(tempRoot, "workspace");
 const repoPath = join(workspaceRoot, "repo");
 const plainRepoPath = join(workspaceRoot, "plain-repo");
@@ -66,6 +67,28 @@ async function raceWithTimeout(promise, ms, msg) {
     return await Promise.race([promise, timeout]);
   } finally {
     clearTimeout(timer);
+  }
+}
+
+function assertManualScopeReview(task, result, structured, getTaskSummary, auditTask) {
+  if (!isDoneStatus(result.status)) throw new Error(`Expected task completion pending manual review, got: ${JSON.stringify(result)}`);
+  if (structured.verify_status === "failed") throw new Error(`Manual scope review must not fail verification: ${structured.verify_status}`);
+  const attribution = structured.change_attribution;
+  if (!attribution?.manual_scope_review_required || attribution?.counts?.task_owned_change !== 0 || attribution?.counts?.unattributed_change < 1) {
+    throw new Error(`Missing conservative change attribution: ${JSON.stringify(attribution)}`);
+  }
+  const rollback = JSON.parse(readFileSync(join(task.path, "rollback-plan.json"), "utf-8"));
+  if (rollback.status !== "manual_scope_review" || rollback.auto_rollback_safe !== false) {
+    throw new Error(`Unexpected rollback posture: ${JSON.stringify(rollback)}`);
+  }
+  const summary = getTaskSummary(task.task_id);
+  if (summary.acceptance_status === "failed" || !summary.manual_scope_review_required) {
+    throw new Error(`Scope summary must require manual review instead of failure: ${JSON.stringify(summary)}`);
+  }
+  const audit = auditTask(task.task_id);
+  const scopeCheck = audit.checks.find((check) => check.name === "scope_changes");
+  if (scopeCheck?.result !== "warn" || !audit.manual_verification_required) {
+    throw new Error(`Scope audit must warn and request manual review: ${JSON.stringify(audit)}`);
   }
 }
 
@@ -441,7 +464,7 @@ try {
     }
   });
 
-  await test("out-of-scope workspace changes fail the task and generate a rollback plan", async () => {
+  await test("unattributed workspace changes require manual scope review without rollback", async () => {
     const plan = savePlan({ title: "Scope violation", content: "Do not leave the repository." });
     const task = await createTask({
       plan_id: plan.plan_id,
@@ -450,22 +473,17 @@ try {
       verify_commands: ["node --check main.js"],
     });
     const result = await runTask(task.task_id);
-    if (result.status !== "failed_scope_violation") throw new Error(`Unexpected result: ${JSON.stringify(result)}`);
     const structured = JSON.parse(readFileSync(join(task.path, "result.json"), "utf-8"));
     if (!structured.out_of_scope_changes?.some((file) => file.path === "outside-scope.txt")) {
       throw new Error(`Missing scope evidence: ${JSON.stringify(structured.out_of_scope_changes)}`);
     }
-    if (structured.verify_status !== "failed") throw new Error(`Scope violation verify status must fail: ${structured.verify_status}`);
     const rollbackPath = join(task.path, "rollback_scope_violation_plan.md");
     if (!existsSync(rollbackPath)) throw new Error("rollback_scope_violation_plan.md missing");
     const rollback = readFileSync(rollbackPath, "utf-8");
     if (!rollback.includes("outside-scope.txt") || rollback.includes("README.md") || rollback.includes("new-file.txt")) {
       throw new Error(`Rollback plan contains wrong files: ${rollback}`);
     }
-    const summary = getTaskSummary(task.task_id);
-    if (summary.verify_status !== "failed" || summary.out_of_scope_changes.length === 0 || summary.acceptance_status !== "failed") {
-      throw new Error(`Scope summary mismatch: ${JSON.stringify(summary)}`);
-    }
+    assertManualScopeReview(task, result, structured, getTaskSummary, auditTask);
   });
 
   // ═══════════════════════════════════════════════════════════
@@ -558,7 +576,7 @@ try {
     console.log(`    [result.json] status=${structured.status}, verify_status=${structured.verify_status}, new_out_of_scope=${JSON.stringify(structured.new_out_of_scope_changes)}, preexisting=${JSON.stringify(structured.preexisting_external_dirty_files)}, warnings=${JSON.stringify(structured.warnings)}`);
   });
 
-  await test("pre-existing tracked external dirty changed during task → failed_scope_violation", async () => {
+  await test("pre-existing tracked external dirty changed during task → manual scope review", async () => {
     const ws2 = join(tempRoot, "workspace-tracked-dirty2");
     const repo2 = join(ws2, "repo");
     const ext2 = join(ws2, "external");
@@ -602,9 +620,6 @@ try {
     const task = await createTask({ plan_id: plan.plan_id, agent: "extmod", repo_path: "repo", verify_commands: ["node --check main.js"] });
     const result = await runTask(task.task_id);
 
-    if (result.status !== "failed_scope_violation") {
-      throw new Error(`Expected failed_scope_violation, got: ${JSON.stringify(result)}`);
-    }
     const structured = JSON.parse(readFileSync(join(task.path, "result.json"), "utf-8"));
 
     // new_out_of_scope_changes must contain the external tracked file
@@ -612,30 +627,7 @@ try {
       throw new Error(`Missing new out-of-scope change: ${JSON.stringify(structured.new_out_of_scope_changes)}`);
     }
 
-    // verify_status must be failed
-    if (structured.verify_status !== "failed") {
-      throw new Error(`verify_status must be failed: ${structured.verify_status}`);
-    }
-
-    // rollback plan must contain the file
-    const rollbackPath = join(task.path, "rollback_scope_violation_plan.md");
-    if (!existsSync(rollbackPath)) throw new Error("rollback_scope_violation_plan.md missing");
-    const rollback = readFileSync(rollbackPath, "utf-8");
-    if (!rollback.includes("external-tracked.txt")) {
-      throw new Error(`Rollback plan missing external-tracked.txt: ${rollback}`);
-    }
-
-    // get_task_summary acceptance_status must be failed
-    const summary = getTaskSummary(task.task_id);
-    if (summary.acceptance_status !== "failed") {
-      throw new Error(`acceptance_status must be failed: ${summary.acceptance_status}`);
-    }
-
-    // audit_task verdict must be fail
-    const audit = auditTask(task.task_id);
-    if (audit.verdict !== "fail") {
-      throw new Error(`audit verdict must be fail: ${audit.verdict}`);
-    }
+    assertManualScopeReview(task, result, structured, getTaskSummary, auditTask);
 
     // Restore config AFTER all assertions
     process.env.PATCHWARDEN_CONFIG = oldConfig;
@@ -644,7 +636,7 @@ try {
     console.log(`    [result.json] status=${structured.status}, verify_status=${structured.verify_status}, new_out_of_scope=${JSON.stringify(structured.new_out_of_scope_changes)}, preexisting=${JSON.stringify(structured.preexisting_external_dirty_files)}, warnings=${JSON.stringify(structured.warnings)}`);
   });
 
-  await test("clean tracked external file changed during task → failed_scope_violation", async () => {
+  await test("clean tracked external file changed during task → manual scope review", async () => {
     const ws2 = join(tempRoot, "workspace-tracked-dirty3");
     const repo2 = join(ws2, "repo");
     const ext2 = join(ws2, "external");
@@ -687,9 +679,6 @@ try {
     const task = await createTask({ plan_id: plan.plan_id, agent: "extmod", repo_path: "repo", verify_commands: ["node --check main.js"] });
     const result = await runTask(task.task_id);
 
-    if (result.status !== "failed_scope_violation") {
-      throw new Error(`Expected failed_scope_violation, got: ${JSON.stringify(result)}`);
-    }
     const structured = JSON.parse(readFileSync(join(task.path, "result.json"), "utf-8"));
 
     // new_out_of_scope_changes must contain the external tracked file (clean→dirty)
@@ -697,22 +686,7 @@ try {
       throw new Error(`Missing new out-of-scope change: ${JSON.stringify(structured.new_out_of_scope_changes)}`);
     }
 
-    // verify_status must be failed
-    if (structured.verify_status !== "failed") {
-      throw new Error(`verify_status must be failed: ${structured.verify_status}`);
-    }
-
-    // get_task_summary acceptance_status must be failed
-    const summary = getTaskSummary(task.task_id);
-    if (summary.acceptance_status !== "failed") {
-      throw new Error(`acceptance_status must be failed: ${summary.acceptance_status}`);
-    }
-
-    // audit_task verdict must be fail
-    const audit = auditTask(task.task_id);
-    if (audit.verdict !== "fail") {
-      throw new Error(`audit verdict must be fail: ${audit.verdict}`);
-    }
+    assertManualScopeReview(task, result, structured, getTaskSummary, auditTask);
 
     // Restore config AFTER all assertions
     process.env.PATCHWARDEN_CONFIG = oldConfig;
@@ -721,7 +695,7 @@ try {
     console.log(`    [result.json] status=${structured.status}, verify_status=${structured.verify_status}, new_out_of_scope=${JSON.stringify(structured.new_out_of_scope_changes)}, preexisting=${JSON.stringify(structured.preexisting_external_dirty_files)}, warnings=${JSON.stringify(structured.warnings)}`);
   });
 
-  await test("tracked external file rename → failed_scope_violation", async () => {
+  await test("tracked external file rename → manual scope review", async () => {
     const ws2 = join(tempRoot, "workspace-tracked-rename");
     const repo2 = join(ws2, "repo");
     const ext2 = join(ws2, "external");
@@ -764,9 +738,6 @@ try {
     const task = await createTask({ plan_id: plan.plan_id, agent: "extrenamer", repo_path: "repo", verify_commands: ["node --check main.js"] });
     const result = await runTask(task.task_id);
 
-    if (result.status !== "failed_scope_violation") {
-      throw new Error(`Expected failed_scope_violation, got: ${JSON.stringify(result)}`);
-    }
     const structured = JSON.parse(readFileSync(join(task.path, "result.json"), "utf-8"));
 
     // new_out_of_scope_changes must contain rename evidence (old or new path)
@@ -777,22 +748,7 @@ try {
       throw new Error(`Missing rename evidence in new_out_of_scope_changes: ${JSON.stringify(structured.new_out_of_scope_changes)}`);
     }
 
-    // verify_status must be failed
-    if (structured.verify_status !== "failed") {
-      throw new Error(`verify_status must be failed: ${structured.verify_status}`);
-    }
-
-    // get_task_summary acceptance_status must be failed
-    const summary = getTaskSummary(task.task_id);
-    if (summary.acceptance_status !== "failed") {
-      throw new Error(`acceptance_status must be failed: ${summary.acceptance_status}`);
-    }
-
-    // audit_task verdict must be fail
-    const audit = auditTask(task.task_id);
-    if (audit.verdict !== "fail") {
-      throw new Error(`audit verdict must be fail: ${audit.verdict}`);
-    }
+    assertManualScopeReview(task, result, structured, getTaskSummary, auditTask);
 
     // Restore config AFTER all assertions
     process.env.PATCHWARDEN_CONFIG = oldConfig;

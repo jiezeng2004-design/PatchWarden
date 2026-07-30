@@ -45,6 +45,7 @@ function depsFor(options: {
   tasks?: string[];
   statuses?: Record<string, string>;
   verifications?: Record<string, string>;
+  failureCategories?: Record<string, string>;
   audits?: Record<string, { verdict: string; fail?: string[]; warn?: string[] }>;
   directEnabled?: boolean;
   directBundleStatus?: "passed" | "failed";
@@ -66,6 +67,24 @@ function depsFor(options: {
           assessment_id: `assessment-${calls.length}`,
           decision,
           reason_codes: decision === "allow" ? ["repo_scoped"] : ["release_template_needs_confirm"],
+          rules: decision === "allow" ? [] : [
+            {
+              rule_id: "release_template_needs_confirm",
+              risk_level: "medium",
+              trigger_text: "template=release_check",
+              blocked_capability: "release preparation",
+              confirmation_supported: decision === "needs_confirm",
+              safe_alternative: "Confirm locally before retrying.",
+            },
+            {
+              rule_id: "snapshot_truncated",
+              risk_level: "medium",
+              trigger_text: "snapshot_truncated=true",
+              blocked_capability: "write without complete baseline",
+              confirmation_supported: decision === "needs_confirm",
+              safe_alternative: "Narrow the repository scope.",
+            },
+          ],
         };
       }
       return {
@@ -100,6 +119,9 @@ function depsFor(options: {
       status: options.statuses?.[taskId] || "done_by_agent",
       terminal: true,
       verification: { status: options.verifications?.[taskId] || "passed" },
+      failure_category: options.failureCategories?.[taskId] || null,
+      counts_against_agent: Boolean(options.failureCategories?.[taskId]),
+      fallback_eligible: Boolean(options.failureCategories?.[taskId]),
       next_action: "audit_or_accept",
     })) as any,
     safeTestSummary: ((taskId: string) => ({
@@ -615,6 +637,84 @@ describe("runTaskLoop", () => {
     assert.equal(result.stop_reason, "user_confirmation_required");
     assert.equal(result.stopped_before_execution, true);
     assert.deepEqual(calls, ["assess"]);
+    assert.equal(result.policy_rules.length, 2);
+    const persisted = getTaskLineage(result.lineage_id);
+    assert.deepEqual(persisted.policy_rules, result.policy_rules);
+  });
+
+  it("retries one Agent, then switches by configured priority and records every attempt", async () => {
+    const configPath = join(tempDir, "patchwarden.config.json");
+    writeFileSync(configPath, JSON.stringify({
+      workspaceRoot: tempDir,
+      tasksDir: ".patchwarden/tasks",
+      plansDir: ".patchwarden/plans",
+      assessmentsDir: ".patchwarden/assessments",
+      agents: {
+        opencode: { command: "opencode", args: [] },
+        claude: { command: "claude", args: [] },
+        codex: { command: "codex", args: [] },
+      },
+      agentPriority: ["opencode", "claude", "codex"],
+      maxRetriesPerAgent: 1,
+      fallbackOn: ["agent_execution_error"],
+      allowedTestCommands: ["npm test"],
+      directAllowedCommands: ["npm test"],
+      defaultTaskTimeoutSeconds: 30,
+      maxTaskTimeoutSeconds: 120,
+      enableDirectProfile: true,
+    }), "utf-8");
+    reloadConfig();
+    const { deps, inputs } = depsFor({
+      tasks: ["task-main", "task-retry", "task-fallback"],
+      statuses: { "task-main": "failed", "task-retry": "failed", "task-fallback": "done_by_agent" },
+      failureCategories: { "task-main": "agent_execution_error", "task-retry": "agent_execution_error" },
+      audits: {
+        "task-main": { verdict: "warn" },
+        "task-retry": { verdict: "warn" },
+        "task-fallback": { verdict: "pass" },
+      },
+    });
+
+    const result = await runTaskLoopWithDeps({
+      repo_path: ".",
+      goal: "Retry and safely fall back",
+      agent: "auto",
+      verify_commands: ["npm test"],
+      max_iterations: 3,
+    }, deps);
+
+    assert.equal(result.final_status, "accepted");
+    assert.deepEqual(inputs.filter((entry) => entry.execution_mode === "assess_only").map((entry) => entry.agent), [
+      "opencode", "opencode", "claude",
+    ]);
+    assert.deepEqual(result.rounds.map((round) => [round.agent, round.agent_attempt, round.routing_action]), [
+      ["opencode", 1, "initial"],
+      ["opencode", 2, "retry_same_agent"],
+      ["claude", 1, "switch_agent"],
+    ]);
+    assert.deepEqual(result.agent_attempts, [
+      { agent: "opencode", attempts: 2, last_failure_category: "agent_execution_error" },
+      { agent: "claude", attempts: 1, last_failure_category: null },
+    ]);
+  });
+
+  it("persists and returns every structured rule when assessment blocks execution", async () => {
+    const { deps, calls } = depsFor({ decisions: ["blocked"] });
+    const result = await runTaskLoopWithDeps({
+      repo_path: ".",
+      goal: "Blocked policy request",
+      agent: "fake",
+      verify_commands: ["npm test"],
+    }, deps);
+
+    assert.equal(result.stop_reason, "high_risk_blocked");
+    assert.equal(result.stopped_before_execution, true);
+    assert.deepEqual(calls, ["assess"]);
+    assert.equal(result.policy_rules.length, 2);
+    assert.equal(result.policy_block?.rule_id, "release_template_needs_confirm");
+    const persisted = getTaskLineage(result.lineage_id);
+    assert.equal(persisted.policy_rules.length, 2);
+    assert.deepEqual(persisted.policy_rules, result.policy_rules);
   });
 
   it("returns max_iterations_reached when verification keeps failing", async () => {

@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { reserveLoopbackPort } from "../lib/loopback-port.js";
 
 if (process.platform !== "win32") {
   console.log("ok - tunnel supervisor smoke skipped outside Windows");
@@ -17,6 +18,7 @@ const mockCmd = join(temp, "mock-tunnel-client.cmd");
 const mockConfig = join(temp, "patchwarden.config.json");
 const stateFile = join(temp, "attempt.txt");
 const secretMarker = "smoke-secret-must-not-appear";
+const fixtureHealthPort = await reserveLoopbackPort();
 
 try {
   writeFileSync(mockConfig, JSON.stringify({
@@ -43,7 +45,8 @@ if(command==='run'){
   if(attempt===1){console.error('fixture first attempt failed');process.exit(7)}
   const urlFile=flag('--health.url-file');const pidFile=flag('--pid.file');
   const server=http.createServer((req,res)=>{res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({ok:true}))});
-  server.listen(18888,'127.0.0.1',()=>{fs.writeFileSync(urlFile,'http://127.0.0.1:18888');fs.writeFileSync(pidFile,String(process.pid))});
+  const port=Number(process.env.MOCK_TUNNEL_HEALTH_PORT);
+  server.listen(port,'127.0.0.1',()=>{fs.writeFileSync(urlFile,'http://127.0.0.1:'+port);fs.writeFileSync(pidFile,String(process.pid))});
   setTimeout(()=>server.close(()=>{for(let i=1;i<=35;i++)console.error('fixture stderr line '+i);console.error('CONTROL_PLANE_API_KEY='+process.env.CONTROL_PLANE_API_KEY);process.exit(9)}),6500);
 }
 `, "utf-8");
@@ -55,6 +58,7 @@ if(command==='run'){
     CONTROL_PLANE_API_KEY: secretMarker,
     MOCK_TUNNEL_JS: mockJs,
     MOCK_TUNNEL_STATE: stateFile,
+    MOCK_TUNNEL_HEALTH_PORT: String(fixtureHealthPort),
   };
   const result = spawnSync("powershell.exe", [
     "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(root, "scripts", "control", "start-patchwarden-tunnel.ps1"),

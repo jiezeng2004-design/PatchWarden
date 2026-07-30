@@ -20,8 +20,9 @@ const root = resolve(__dirname, "..", "..");
 const serverPath = resolve(root, "dist", "httpServer.js");
 
 const host = "127.0.0.1";
-const port = 17331;
+const port = await findAvailablePort();
 const mcpUrl = `http://${host}:${port}/mcp`;
+const OWNER_TOKEN = "test-token-secure-abc123";
 
 const tempRoot = mkdtempSync(join(tmpdir(), "patchwarden-http-"));
 const workspaceRoot = join(tempRoot, "workspace");
@@ -31,6 +32,18 @@ let passed = 0;
 let failed = 0;
 let serverProcess = null;
 let serverStderr = "";
+
+function findAvailablePort() {
+  return new Promise((resolvePort, rejectPort) => {
+    const probe = http.createServer();
+    probe.once("error", rejectPort);
+    probe.listen(0, host, () => {
+      const address = probe.address();
+      const selected = address && typeof address === "object" ? address.port : 0;
+      probe.close((error) => error ? rejectPort(error) : resolvePort(selected));
+    });
+  });
+}
 
 function ok(name) {
   console.log(`  ok - ${name}`);
@@ -69,6 +82,7 @@ async function rpc(method, params = {}, extraHeaders = {}) {
     headers: {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
+      Authorization: `Bearer ${OWNER_TOKEN}`,
       ...extraHeaders,
     },
     body: JSON.stringify({
@@ -153,6 +167,9 @@ try {
       ...process.env,
       PATCHWARDEN_CONFIG: configPath,
       PATCHWARDEN_HTTP_PORT: String(port),
+      PATCHWARDEN_OWNER_TOKEN: OWNER_TOKEN,
+      PATCHWARDEN_ATTESTATION_DIR: join(tempRoot, "external-attestations"),
+      PATCHWARDEN_TOOL_PROFILE: "chatgpt_core",
     },
     stdio: ["ignore", "ignore", "pipe"],
   });
@@ -176,11 +193,23 @@ try {
     }
   });
 
-  await test("healthz returns structured local readiness", async () => {
+  await test("healthz returns only minimal anonymous readiness", async () => {
     const response = await fetch(`http://${host}:${port}/healthz`);
     const data = await response.json();
-    if (!response.ok || data.mcp_server?.available !== true || data.workspace_root?.available !== true) {
+    if (!response.ok || data.service !== "patchwarden" || data.ready !== true || data.workspace_root !== undefined) {
       throw new Error(`Unexpected health response: ${JSON.stringify(data)}`);
+    }
+  });
+
+  await test("detailed health requires authentication", async () => {
+    const denied = await fetch(`http://${host}:${port}/healthz?detail=full`);
+    if (denied.status !== 401) throw new Error(`Expected 401, got ${denied.status}`);
+    const response = await fetch(`http://${host}:${port}/healthz?detail=full`, {
+      headers: { Authorization: `Bearer ${OWNER_TOKEN}` },
+    });
+    const data = await response.json();
+    if (!response.ok || data.workspace_root?.available !== true) {
+      throw new Error(`Unexpected detailed health response: ${JSON.stringify(data)}`);
     }
   });
 
@@ -204,7 +233,6 @@ try {
     const toolNames = result.tools.map((tool) => tool.name);
     for (const expected of [
       "save_plan",
-      "get_plan",
       "create_task",
       "get_task_status",
       "get_result",
@@ -279,42 +307,9 @@ try {
   // Section: Owner Token Authentication
   // ═══════════════════════════════════════════════════════════
 
-  // Kill the no-token server
-  serverProcess.kill("SIGKILL");
-  await Promise.race([
-    new Promise((resolve) => serverProcess.once("exit", resolve)),
-    sleep(2000),
-  ]);
-
-  const OWNER_TOKEN = "test-token-secure-abc123";
-
-  // Start server WITH owner token
-  console.log("\n  Starting server with owner token...");
-  serverProcess = spawn(process.execPath, [serverPath], {
-    cwd: root,
-    env: {
-      ...process.env,
-      PATCHWARDEN_CONFIG: configPath,
-      PATCHWARDEN_HTTP_PORT: String(port),
-      PATCHWARDEN_OWNER_TOKEN: OWNER_TOKEN,
-      PATCHWARDEN_TOOL_PROFILE: "chatgpt_core",
-    },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  serverProcess.stderr.on("data", (chunk) => { serverStderr += chunk.toString(); });
-  await sleep(3000);
-  // Wait for server to be ready
-  for (let i = 0; i < 10; i++) {
-    try {
-      const r = await fetch(`http://${host}:${port}/healthz`);
-      if (r.status === 200) break;
-    } catch {}
-    await sleep(500);
-  }
-
   await test("token: no token returns 401", async () => {
     try {
-      await rpc("tools/list");
+      await rpc("tools/list", {}, { Authorization: "" });
       throw new Error("Should have been rejected");
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -350,7 +345,7 @@ try {
   });
 
   await test("token: correct x-patchwarden-token header succeeds", async () => {
-    const result = await rpc("tools/list", {}, { "x-patchwarden-token": OWNER_TOKEN });
+    const result = await rpc("tools/list", {}, { Authorization: "", "x-patchwarden-token": OWNER_TOKEN });
     if (!result.tools || result.tools.length === 0) {
       throw new Error("Expected tools list with valid custom header token");
     }
@@ -374,34 +369,33 @@ try {
     if (response.status !== 401) throw new Error(`Expected 401, got ${response.status}`);
   });
 
-  await test("admin acceptance writes bounded atomic evidence", async () => {
-    const secret = `ghp_${"a".repeat(24)}`;
+  await test("owner token cannot forge authoritative human acceptance", async () => {
     const response = await fetch(`http://${host}:${port}/admin/tasks/${acceptanceTaskId}/accept`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         Authorization: `Bearer ${OWNER_TOKEN}`,
       },
-      body: JSON.stringify({ notes: `reviewed ${secret}` }),
+      body: JSON.stringify({ notes: "reviewed" }),
     });
-    if (response.status !== 200) throw new Error(`Expected 200, got ${response.status}: ${await response.text()}`);
-    const acceptance = JSON.parse(readFileSync(join(acceptanceTaskDir, "acceptance.json"), "utf-8"));
-    const status = JSON.parse(readFileSync(join(acceptanceTaskDir, "status.json"), "utf-8"));
-    if (acceptance.status !== "accepted" || status.acceptance_status !== "accepted") {
-      throw new Error("Acceptance state was not persisted consistently");
+    const data = await response.json();
+    if (response.status !== 409 || data.error_code !== "local_attestation_required") {
+      throw new Error(`Expected local attestation requirement, got ${response.status}: ${JSON.stringify(data)}`);
     }
-    if (JSON.stringify(acceptance).includes(secret)) throw new Error("Acceptance notes persisted a token");
-    if (existsSync(join(acceptanceTaskDir, "status.json.lock"))) throw new Error("Status lock was not released");
+    const status = JSON.parse(readFileSync(join(acceptanceTaskDir, "status.json"), "utf-8"));
+    if (status.acceptance_status !== "pending" || existsSync(join(acceptanceTaskDir, "acceptance.json"))) {
+      throw new Error("HTTP owner token changed authoritative acceptance state");
+    }
   });
 
-  await test("admin acceptance rejects oversized request bodies", async () => {
-    const response = await fetch(`http://${host}:${port}/admin/tasks/${acceptanceTaskId}/reject`, {
+  await test("MCP rejects oversized request bodies", async () => {
+    const response = await fetch(mcpUrl, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         Authorization: `Bearer ${OWNER_TOKEN}`,
       },
-      body: JSON.stringify({ reason: "x".repeat(70 * 1024) }),
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "x".repeat(1024 * 1024 + 1) }),
     });
     if (response.status !== 413) throw new Error(`Expected 413, got ${response.status}`);
   });

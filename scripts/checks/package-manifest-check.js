@@ -35,6 +35,7 @@ try {
 }
 
 const files = metadata?.[0]?.files?.map((entry) => String(entry.path).replace(/\\/g, "/")) || [];
+const packageMetadata = metadata?.[0] || {};
 const forbidden = [
   /(^|\/)\.local(\/|$)/i,
   /\.local\.(cmd|ps1)$/i,
@@ -46,6 +47,10 @@ const forbidden = [
   /(^|\/)kill-patchwarden\.(cmd|ps1)$/i,
   /^(?:dist|src)\/test\//i,
   /^docs\/archive\//i,
+  /^docs\/assets\//i,
+  /^src\//i,
+  /^dist\/smoke-test\.(?:js|d\.ts)$/i,
+  /^scripts\/checks\/(?!mcp-manifest-check\.js$)/i,
 ];
 const leaked = files.filter((file) => forbidden.some((pattern) => pattern.test(file)));
 if (leaked.length > 0) {
@@ -71,6 +76,13 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
+const maxFiles = 400;
+const maxUnpackedBytes = 6 * 1024 * 1024;
+if (files.length > maxFiles || Number(packageMetadata.unpackedSize || 0) > maxUnpackedBytes) {
+  console.error(`[package-manifest-check] Package budget exceeded: ${files.length}/${maxFiles} files, ${packageMetadata.unpackedSize}/${maxUnpackedBytes} unpacked bytes.`);
+  process.exit(1);
+}
+
 const publicControlFiles = [
   "PatchWarden.cmd",
   "scripts/launchers/Start-PatchWarden-Tunnel.cmd",
@@ -90,4 +102,4 @@ if (privatePathLeaks.length > 0) {
   process.exit(1);
 }
 
-console.log(`[package-manifest-check] OK: ${files.length} package files, no private local launchers.`);
+console.log(`[package-manifest-check] OK: ${files.length} files, ${packageMetadata.unpackedSize} unpacked bytes, no private local launchers.`);

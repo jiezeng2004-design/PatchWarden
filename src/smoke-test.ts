@@ -71,6 +71,7 @@ if (!nodeBin || nodeBin === "node") {
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const smokeRoot = mkdtempSync(join(tmpdir(), "patchwarden-smoke-"));
+process.env.PATCHWARDEN_ATTESTATION_DIR = join(smokeRoot, "external-attestations");
 const smokeWorkspace = join(smokeRoot, "workspace");
 const smokeConfigPath = join(smokeRoot, "patchwarden.config.json");
 
@@ -593,7 +594,7 @@ await test("D8b. tool profiles are exact and schema changes alter the manifest h
   try {
     process.env.PATCHWARDEN_TOOL_PROFILE = "full";
     const fullTools = getToolDefs();
-    if (fullTools.length !== 66) throw new Error(`Expected 66 full tools, got ${fullTools.length}`);
+    if (fullTools.length !== 70) throw new Error(`Expected 70 full tools, got ${fullTools.length}`);
 
     const coreTools = selectToolsForProfile(fullTools, "chatgpt_core", getConfig().enableDirectProfile);
     const names = coreTools.map((tool) => tool.name);
@@ -1953,7 +1954,7 @@ await test("M2. chatgpt_direct disabled exposes only health_check", () => {
   if (disabledTools[0].name !== "health_check") throw new Error(`Expected health_check, got ${disabledTools[0].name}`);
 });
 
-await test("M3. chatgpt_direct enabled has 14 tools", () => {
+await test("M3. chatgpt_direct enabled has 18 tools", () => {
   const tools = getToolDefs();
   const directTools = selectToolsForProfile(tools, "chatgpt_direct", true);
   if (directTools.length !== CHATGPT_DIRECT_TOOL_NAMES.length) throw new Error(`Expected ${CHATGPT_DIRECT_TOOL_NAMES.length}, got ${directTools.length}`);

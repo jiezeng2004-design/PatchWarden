@@ -30,11 +30,11 @@ describe("Control Center profile selection", () => {
       tunnel_id_masked: "tun_***1234",
     }, {
       tool_profile: "chatgpt_direct",
-      tool_count: 14,
+      tool_count: 18,
       tool_manifest_sha256: "a".repeat(64),
     });
     assert.equal(summary.ready, true);
-    assert.equal(summary.tool_count, 14);
+    assert.equal(summary.tool_count, 18);
     assert.equal(summary.tunnel_id_masked, "tun_***1234");
     assert.match(summary.reconnect_guidance, /new chat/);
     assert.equal(Object.hasOwn(summary, "tunnel_id"), false);

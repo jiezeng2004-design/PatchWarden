@@ -73,4 +73,85 @@ describe("configuration security defaults", () => {
       assert.throws(() => reloadConfig(configPath), /taskArchive/);
     }
   });
+
+  it("normalizes bounded Agent fallback policy and rejects unsafe overlaps", () => {
+    const agents = {
+      opencode: { command: process.execPath, args: ["{prompt}"] },
+      claude: { command: process.execPath, args: ["{prompt}"] },
+      codex: { command: process.execPath, args: ["{prompt}"] },
+    };
+    writeFileSync(configPath, JSON.stringify({
+      workspaceRoot: root,
+      agents,
+      agent_priority: ["opencode", "claude", "codex"],
+      max_retries_per_agent: 1,
+      fallback_on: ["agent_execution_error", "verification_failure"],
+      do_not_fallback_on: ["policy_block"],
+    }), "utf-8");
+    const config = reloadConfig(configPath);
+    assert.deepEqual(config.agentPriority, ["opencode", "claude", "codex"]);
+    assert.equal(config.maxRetriesPerAgent, 1);
+    assert.deepEqual(config.fallbackOn, ["agent_execution_error", "verification_failure"]);
+    assert.ok(config.doNotFallbackOn?.includes("scope_violation"));
+    assert.ok(config.doNotFallbackOn?.includes("connector_failure"));
+
+    for (const invalid of [
+      { agentPriority: ["missing"] },
+      { agentPriority: ["codex", "codex"] },
+      { maxRetriesPerAgent: 4 },
+      { fallbackOn: ["policy_block"] },
+      { fallbackOn: ["not_a_category"] },
+    ]) {
+      writeFileSync(configPath, JSON.stringify({ workspaceRoot: root, agents, ...invalid }), "utf-8");
+      assert.throws(() => reloadConfig(configPath), /agentPriority|maxRetriesPerAgent|fallbackOn/);
+    }
+  });
+
+  it("normalizes generated path aliases and rejects unsafe patterns", () => {
+    writeFileSync(configPath, JSON.stringify({
+      workspaceRoot: root,
+      generated_paths: [".next/**", "*.tsbuildinfo"],
+      repo_generated_paths: { app: ["custom-output/**"] },
+    }), "utf-8");
+    const config = reloadConfig(configPath);
+    assert.deepEqual(config.generatedPaths, [".next/**", "*.tsbuildinfo"]);
+    assert.deepEqual(config.repoGeneratedPaths, { app: ["custom-output/**"] });
+
+    for (const generatedPaths of [["**"], ["../outside/**"], ["C:/outside/**"], ["src/**"], ["**/*.ts"]]) {
+      writeFileSync(configPath, JSON.stringify({ workspaceRoot: root, generatedPaths }), "utf-8");
+      assert.throws(() => reloadConfig(configPath), /generatedPaths/);
+    }
+  });
+
+  it("normalizes runtime browser validation and rejects non-loopback targets", () => {
+    writeFileSync(configPath, JSON.stringify({
+      workspaceRoot: root,
+      runtime_validation: {
+        enabled: true,
+        start_command: "npm run preview",
+        base_url: "http://127.0.0.1:4173",
+        routes: ["/", "/about"],
+        check_broken_images: true,
+      },
+    }), "utf-8");
+    const config = reloadConfig(configPath);
+    assert.equal(config.runtimeValidation?.startCommand, "npm run preview");
+    assert.equal(config.runtimeValidation?.baseUrl, "http://127.0.0.1:4173");
+    assert.deepEqual(config.runtimeValidation?.routes, ["/", "/about"]);
+
+    for (const base_url of ["https://example.com", "http://localhost:4173", "http://user:pass@127.0.0.1:4173"]) {
+      writeFileSync(configPath, JSON.stringify({
+        workspaceRoot: root,
+        runtimeValidation: { enabled: true, start_command: "npm run preview", base_url, routes: ["/"] },
+      }), "utf-8");
+      assert.throws(() => reloadConfig(configPath), /literal HTTP loopback URL/);
+    }
+    for (const routes of [["//example.com"], ["/../escape"], ["/bad\\path"]]) {
+      writeFileSync(configPath, JSON.stringify({
+        workspaceRoot: root,
+        runtimeValidation: { enabled: true, start_command: "npm run preview", base_url: "http://127.0.0.1:4173", routes },
+      }), "utf-8");
+      assert.throws(() => reloadConfig(configPath), /root-relative route/);
+    }
+  });
 });

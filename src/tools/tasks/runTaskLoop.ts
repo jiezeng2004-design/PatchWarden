@@ -30,9 +30,12 @@ import { atomicWriteJsonFileSync } from "../../utils/atomicFile.js";
 import { withFileLock, withFileLockSync } from "../../utils/lockedJsonFile.js";
 import { PatchWardenError } from "../../errors.js";
 import { sanitizeModelSelectionEvidence, validateRequestedModel } from "../../agents/modelSelection.js";
+import { buildAgentPriority, decideAgentTransition, type AgentTransitionAction } from "../../runner/agentFallbackPolicy.js";
+import { isTaskFailureCategory } from "../../runner/failureCategories.js";
 
 export interface RunTaskLoopInput {
   repo_path: string;
+  confirm_workspace_root?: boolean;
   goal: string;
   verify_commands: string[];
   agent?: string;
@@ -65,6 +68,7 @@ export interface RunTaskLoopOutput extends SafeTaskLineage {
   request_id: string;
   continuation_required: boolean;
   reused_request: boolean;
+  policy_block?: Record<string, unknown> | null;
 }
 
 interface RunTaskLoopExecutionOptions {
@@ -193,9 +197,17 @@ export async function runTaskLoopWithDeps(
   options: RunTaskLoopExecutionOptions = {},
 ): Promise<RunTaskLoopOutput> {
   const normalized = normalizeInput(input);
-  const resolvedRepoPath = guardWorkspacePath(normalized.repo_path, getConfig().workspaceRoot);
+  const config = getConfig();
+  const resolvedRepoPath = guardWorkspacePath(normalized.repo_path, config.workspaceRoot);
   const routing = resolveAgentRouting(normalized, deps);
-  const selectedAgent = routing.selected_agent;
+  let currentAgent = routing.selected_agent;
+  const agentPriority = buildAgentPriority(config, currentAgent);
+  const fallbackOn = config.fallbackOn || [];
+  const doNotFallbackOn = config.doNotFallbackOn || [];
+  const fallbackPolicyConfigured = fallbackOn.length > 0;
+  const agentAttempts = new Map<string, { attempts: number; last_failure_category: string | null }>();
+  let routingAction: "initial" | "retry_same_agent" | "switch_agent" = "initial";
+  let transitionReason: string | null = null;
   const now = deps.now().toISOString();
   const lineage: TaskLineageRecord = {
     lineage_id: options.lineageId || deps.createLineageId(deps.now()),
@@ -225,6 +237,7 @@ export async function runTaskLoopWithDeps(
     },
     agent_routing: routing,
     model_selection: undefined,
+    agent_attempts: [],
   };
 
   const finalize = (
@@ -276,12 +289,15 @@ export async function runTaskLoopWithDeps(
   let latestFailurePrompt = normalized.goal;
 
   for (let iteration = 1; iteration <= normalized.max_iterations; iteration++) {
+    const currentAgentAttempt = (agentAttempts.get(currentAgent)?.attempts || 0) + 1;
+    agentAttempts.set(currentAgent, { attempts: currentAgentAttempt, last_failure_category: null });
     const assessmentInput: CreateTaskInput = {
       [MODEL_SELECTION_REPO_PATH]: resolvedRepoPath,
       template: role === "main" ? normalized.template : "fix_tests",
       goal: role === "main" ? normalized.goal : latestFailurePrompt,
       repo_path: taskRepoPath,
-      agent: selectedAgent,
+      confirm_workspace_root: normalized.confirm_workspace_root,
+      agent: currentAgent,
       requested_model: normalized.requested_model,
       verify_commands: normalized.verify_commands,
       timeout_seconds: normalized.task_timeout_seconds,
@@ -289,14 +305,17 @@ export async function runTaskLoopWithDeps(
     };
     const assessment = asRecord(await deps.createTask(assessmentInput));
     if (assessment.decision === "blocked") {
-      return finalize(
+      lineage.policy_rules = normalizeAssessmentRules(assessment.rules);
+      const blocked = finalize(
         "blocked",
         "high_risk_blocked",
-        "Risk assessment blocked task execution.",
+        "Review the structured policy_block evidence and use its safe_alternative before reassessing.",
         asArray(assessment.reason_codes).map(String).join(", "),
       );
+      return { ...blocked, policy_block: asRecord(lineage.policy_rules[0]), policy_rules: lineage.policy_rules };
     }
     if (assessment.decision === "needs_confirm") {
+      lineage.policy_rules = normalizeAssessmentRules(assessment.rules);
       return finalize("blocked", "user_confirmation_required", "Ask the user to confirm the assessment before executing the loop.");
     }
 
@@ -307,8 +326,8 @@ export async function runTaskLoopWithDeps(
       lineage_id: lineage.lineage_id,
       agent_routing_metadata: {
         requested_agent: routing.requested_agent,
-        selected_agent: routing.selected_agent,
-        fallback_used: routing.fallback,
+        selected_agent: currentAgent,
+        fallback_used: routing.fallback || currentAgent !== routing.selected_agent,
       },
     }));
     const taskId = String(created.task_id || "");
@@ -332,6 +351,14 @@ export async function runTaskLoopWithDeps(
     const tests = asRecord(deps.safeTestSummary(taskId));
     const audit = asRecord(deps.safeAudit(taskId, { max_items: 8 }));
     const round = buildRound(iteration, taskId, role, result, tests, audit);
+    round.agent = currentAgent;
+    round.agent_attempt = currentAgentAttempt;
+    round.retry_index = currentAgentAttempt - 1;
+    round.routing_action = routingAction;
+    round.transition_reason = transitionReason;
+    const failureCategory = isTaskFailureCategory(round.failure_category) ? round.failure_category : null;
+    agentAttempts.set(currentAgent, { attempts: currentAgentAttempt, last_failure_category: failureCategory });
+    lineage.agent_attempts = [...agentAttempts].map(([agent, evidence]) => ({ agent, ...evidence }));
     lineage.rounds.push(round);
     lineage.updated_at = deps.now().toISOString();
 
@@ -349,6 +376,31 @@ export async function runTaskLoopWithDeps(
       return successfulRound
         ? finalize("accepted", "audit_accepted", "none")
         : finalize("ready_for_audit", "verification_passed", "audit_task");
+    }
+
+    if (fallbackPolicyConfigured && failureCategory) {
+      const transition = decideAgentTransition({
+        failure_category: failureCategory,
+        current_agent: currentAgent,
+        current_agent_attempt: currentAgentAttempt,
+        priority: agentPriority,
+        max_retries_per_agent: config.maxRetriesPerAgent || 0,
+        fallback_on: fallbackOn,
+        do_not_fallback_on: doNotFallbackOn,
+        requested_model: normalized.requested_model,
+      });
+      if (transition.action === "recover_connector" || transition.action === "recover_watcher") {
+        lineage.warnings.push(`${transition.action}:${transition.reason}`);
+        return finalize("failed", "recovery_required", recoveryNextAction(transition.action), transition.reason);
+      }
+      if ((transition.action === "retry_same_agent" || transition.action === "switch_agent") && transition.next_agent) {
+        latestFailurePrompt = buildFixGoal(normalized.goal, result, round);
+        role = "fix_tests";
+        currentAgent = transition.next_agent;
+        routingAction = transition.action;
+        transitionReason = transition.reason;
+        continue;
+      }
     }
 
     if (isHardStop(round, result, audit, normalized.stop_on_high_risk)) {
@@ -372,6 +424,28 @@ export async function runTaskLoopWithDeps(
       error instanceof Error ? error.message : String(error),
     );
   }
+}
+
+function recoveryNextAction(action: AgentTransitionAction): string {
+  return action === "recover_connector"
+    ? "Restore the connector, then resume with the same request_id; do not create a duplicate task or switch Agent."
+    : "Restore Watcher health, then resume with the same request_id; do not create a duplicate task or switch Agent.";
+}
+
+function normalizeAssessmentRules(value: unknown): SafeTaskLineage["policy_rules"] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 20).flatMap((entry) => {
+    const rule = asRecord(entry);
+    if (!rule.rule_id || !["low", "medium", "high"].includes(String(rule.risk_level))) return [];
+    return [{
+      rule_id: String(rule.rule_id).slice(0, 120),
+      risk_level: String(rule.risk_level) as "low" | "medium" | "high",
+      trigger_text: String(rule.trigger_text || "").slice(0, 160),
+      blocked_capability: String(rule.blocked_capability || "").slice(0, 160),
+      confirmation_supported: rule.confirmation_supported === true,
+      safe_alternative: String(rule.safe_alternative || "").slice(0, 240),
+    }];
+  });
 }
 
 function buildLoopOutput(
@@ -516,6 +590,11 @@ function buildRound(
     verification_status: String(tests.status || resultVerification.status || "not_available"),
     audit_verdict: String(audit.verdict || auditAcceptance.verdict || "unknown"),
     failure_category: String(result.failure_category || "") || null,
+    agent_failure_category: String(result.agent_failure_category || "") || null,
+    failure_source: String(result.failure_source || "") || null,
+    counts_against_agent: result.counts_against_agent === true,
+    fallback_eligible: result.fallback_eligible === true,
+    retryable: result.retryable === true,
     provider_error_reference: safeProviderErrorReference(result.provider_error_reference),
     fail_checks: failChecks,
     warn_checks: warnChecks,
@@ -588,6 +667,15 @@ function resolveAgentRouting(
       requested_agent: normalized.agent,
       selected_agent: normalized.agent,
       reason: "explicit agent supplied",
+      fallback: false,
+    };
+  }
+  const configuredPriority = getConfig().agentPriority || [];
+  if (configuredPriority.length > 0) {
+    return {
+      requested_agent: normalized.agent || null,
+      selected_agent: configuredPriority[0],
+      reason: "selected by configured agentPriority",
       fallback: false,
     };
   }
@@ -760,6 +848,7 @@ function normalizeInput(input: RunTaskLoopInput): Required<Omit<RunTaskLoopInput
   }
   return {
     repo_path: repoPath,
+    confirm_workspace_root: input.confirm_workspace_root === true,
     goal,
     verify_commands: input.verify_commands.map((command) => String(command).trim()),
     agent: requestedAgent || undefined,

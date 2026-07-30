@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { resolve } from "node:path";
+import { resolve, join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { collectMatchingFiles } from "../lib/file-discovery.js";
 
@@ -22,9 +23,16 @@ if (testFiles.length === 0) {
   process.exit(1);
 }
 
-const result = spawnSync(process.execPath, ["--test", ...testFiles], {
-  stdio: "inherit",
-});
+const attestationDir = mkdtempSync(join(tmpdir(), "patchwarden-unit-attestations-"));
+let result;
+try {
+  result = spawnSync(process.execPath, ["--test", ...testFiles], {
+    stdio: "inherit",
+    env: { ...process.env, PATCHWARDEN_ATTESTATION_DIR: attestationDir },
+  });
+} finally {
+  rmSync(attestationDir, { recursive: true, force: true });
+}
 
 if (result.error) {
   console.error(`[unit-tests] Failed to run unit tests: ${result.error.message}`);

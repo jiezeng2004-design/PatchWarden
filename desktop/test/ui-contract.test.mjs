@@ -161,6 +161,50 @@ describe("desktop UI contracts", () => {
     assert.doesNotMatch(smoke, /taskkill|Stop-Process|kill all/i);
   });
 
+  it("localizes onboarding in Chinese and English without unsafe HTML rendering", () => {
+    const html = read("desktop/onboarding/index.html");
+    const client = read("desktop/onboarding/onboarding.js");
+    const i18n = read("desktop/onboarding/i18n.js");
+    assert.match(html, /<script src="\.\/i18n\.js"><\/script>/);
+    assert.match(html, /data-i18n="workspaceTitle"/);
+    assert.match(html, /data-i18n-aria-label="chooseWorkspace"/);
+    assert.match(i18n, /"zh-CN"/);
+    assert.match(i18n, /\ben:\s*\{/);
+    assert.match(client, /i18n\?\.setLocale\(state\.resolvedLanguage\)/);
+    assert.doesNotMatch(client, /[\p{Script=Han}]/u);
+    assert.doesNotMatch(client, /innerHTML/);
+    assert.match(client, /aria-current/);
+    assert.match(html, /role="status" aria-live="polite"/);
+  });
+
+  it("enforces strict onboarding CSP and an exact external HTTPS host allowlist", () => {
+    const html = read("desktop/onboarding/index.html");
+    const main = read("desktop/src/main.ts");
+    const navigation = read("desktop/src/external-navigation.ts");
+    const controlServer = read("src/control/server.ts");
+    for (const directive of ["base-uri 'none'", "object-src 'none'", "frame-src 'none'", "connect-src 'none'", "form-action 'none'"]) {
+      assert.ok(html.includes(directive), directive);
+    }
+    assert.match(main, /isAllowedExternalNavigation\(url\)/);
+    assert.doesNotMatch(main, /\/\^https\?:\\\/\\\//);
+    for (const host of ["platform.openai.com", "developers.openai.com", "chatgpt.com", "github.com"]) assert.ok(navigation.includes(`"${host}"`), host);
+    assert.match(navigation, /url\.protocol === "https:"/);
+    assert.match(controlServer, /default-src 'self'/);
+    assert.match(controlServer, /object-src 'none'/);
+  });
+
+  it("packages and validates Desktop deliverables from one Electron build pass", () => {
+    const preflight = read("scripts/release/desktop-preflight.js");
+    const workflow = read(".github/workflows/ci.yml");
+    const manifest = JSON.parse(read("desktop/package.json"));
+    assert.match(preflight, /const electronTargets = withInstallers \? \["dir", "nsis", "zip"\] : \["dir"\]/);
+    assert.match(preflight, /Electron single-pass package/);
+    assert.match(preflight, /unpacked_size_bytes/);
+    assert.match(preflight, /report\.deliverables/);
+    assert.doesNotMatch(workflow, /npm run desktop:package\s*$/m);
+    assert.deepEqual(manifest.build.electronLanguages, ["en-US", "zh-CN"]);
+  });
+
   it("destroys the tray before asynchronous quit cleanup begins", () => {
     const desktopMain = read("desktop/src/main.ts");
     const start = desktopMain.indexOf('app.on("before-quit"');

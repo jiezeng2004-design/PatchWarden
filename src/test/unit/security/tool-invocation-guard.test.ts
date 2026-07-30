@@ -120,9 +120,35 @@ describe("toolInvocationGuard", () => {
       const input = makeInput({
         toolMeta: makeToolMeta({ profiles: ["full", "chatgpt_direct"] }),
         profile: "chatgpt_direct",
+        discoveryTokenRecord: makeTokenRecord({ profile: "chatgpt_direct" }),
       });
       const result = checkInvocation(input);
       assert.deepEqual(result, { allowed: true });
+    });
+  });
+
+  describe("discovery token bindings", () => {
+    it("rejects a token issued under a different active profile", () => {
+      const input = makeInput({
+        profile: "chatgpt_direct",
+        discoveryTokenRecord: makeTokenRecord({ profile: "full" }),
+      });
+      assertPatchWardenError(() => checkInvocation(input), "token_profile_mismatch");
+    });
+
+    it("rejects a token whose schema digest no longer matches the tool", () => {
+      const input = makeInput({
+        discoveryTokenRecord: makeTokenRecord({ schemaDigest: "sha256:stale" }),
+      });
+      assertPatchWardenError(() => checkInvocation(input), "token_schema_mismatch");
+    });
+
+    it("enforces the token's allowed path scope", () => {
+      const input = makeInput({
+        args: { path: "docs/private.txt" },
+        discoveryTokenRecord: makeTokenRecord({ allowedScope: ["src/"] }),
+      });
+      assertPatchWardenError(() => checkInvocation(input), "token_scope_mismatch");
     });
   });
 
@@ -447,6 +473,7 @@ describe("toolInvocationGuard", () => {
         discoveryTokenRecord: makeTokenRecord({
           toolName: "health_check",
           risk: "readonly",
+          profile: "chatgpt_core",
         }),
         profile: "chatgpt_core",
         args: {},
@@ -466,6 +493,7 @@ describe("toolInvocationGuard", () => {
         discoveryTokenRecord: makeTokenRecord({
           toolName: "create_task",
           risk: "workspace_write",
+          profile: "chatgpt_core",
         }),
         profile: "chatgpt_core",
         assessmentId: "asm_success_write",
@@ -486,6 +514,7 @@ describe("toolInvocationGuard", () => {
         discoveryTokenRecord: makeTokenRecord({
           toolName: "read_workspace_file",
           risk: "workspace_read_sensitive",
+          profile: "chatgpt_direct",
         }),
         profile: "chatgpt_direct",
         args: { path: "src/index.ts", file: "README.md" },
@@ -505,6 +534,7 @@ describe("toolInvocationGuard", () => {
         discoveryTokenRecord: makeTokenRecord({
           toolName: "run_verification",
           risk: "command",
+          profile: "chatgpt_direct",
         }),
         profile: "chatgpt_direct",
         args: { command: "npm.cmd test" },

@@ -22,6 +22,18 @@ export interface TaskEntry {
   requested_model: string | null;
   model_selection: Record<string, unknown> | null;
   failure_category: string | null;
+  agent_failure_category: string | null;
+  failure_source: string | null;
+  counts_against_agent: boolean;
+  fallback_eligible: boolean;
+  retryable: boolean;
+  lineage_id: string | null;
+  source_changes: number;
+  generated_changes: number;
+  scope_violations: number;
+  verification_progress: { status: string; configured: number; executed: number };
+  completion_state: Record<string, unknown> | null;
+  connector_state: "not_observable_server_side";
   provider_error_reference: string | null;
   status: TaskStatus;
   phase: TaskPhase;
@@ -155,6 +167,22 @@ function scanTasks(input?: Omit<ListTasksInput, "limit"> | ListTasksInput): List
         requested_model: typeof data.requested_model === "string" ? data.requested_model : null,
         model_selection: data.model_selection && typeof data.model_selection === "object" ? data.model_selection : null,
         failure_category: data.failure_category || data.agent_failure_category || null,
+        agent_failure_category: data.agent_failure_category || null,
+        failure_source: data.failure_source || null,
+        counts_against_agent: data.counts_against_agent === true,
+        fallback_eligible: data.fallback_eligible === true,
+        retryable: data.retryable === true,
+        lineage_id: typeof data.lineage_id === "string" ? data.lineage_id : null,
+        source_changes: Number(data.acceptance_report?.source_changes || 0),
+        generated_changes: Number(data.acceptance_report?.generated_changes || 0),
+        scope_violations: Number(data.acceptance_report?.scope_violations || 0),
+        verification_progress: {
+          status: String(data.verify_status || "not_run"),
+          configured: Array.isArray(data.configured_verify_commands ?? data.verify_commands) ? (data.configured_verify_commands ?? data.verify_commands).length : 0,
+          executed: Array.isArray(data.executed_verify_commands) ? data.executed_verify_commands.length : 0,
+        },
+        completion_state: data.completion_state && typeof data.completion_state === "object" && !Array.isArray(data.completion_state) ? data.completion_state : null,
+        connector_state: "not_observable_server_side",
         provider_error_reference: typeof data.provider_error_reference === "string"
           && /^err_[A-Za-z0-9_-]{4,120}$/.test(data.provider_error_reference)
           ? data.provider_error_reference

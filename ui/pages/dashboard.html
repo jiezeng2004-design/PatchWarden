@@ -1465,6 +1465,8 @@ html.dark {
           + '<span class="text-xs" style="color: var(--pw-text-tertiary);">iter ' + escapeHtml(String(r.iteration || 0)) + '</span>'
           + '</div>'
           + '<div class="text-xs mb-0.5" style="color: var(--pw-text-secondary);">verification: ' + escapeHtml(r.verification_status || '—') + '</div>'
+          + '<div class="text-xs mb-0.5" style="color: var(--pw-text-secondary);">agent: ' + escapeHtml(r.agent || 'unknown') + ' · attempt ' + escapeHtml(String(r.agent_attempt || 0)) + ' · routing ' + escapeHtml(r.routing_action || 'initial') + '</div>'
+          + (r.transition_reason ? '<div class="text-xs mb-0.5" style="color: var(--pw-state-warning);">switch reason: ' + escapeHtml(r.transition_reason) + '</div>' : '')
           + '<div class="text-xs mb-0.5" style="color: var(--pw-text-secondary);">audit: ' + escapeHtml(r.audit_verdict || '—') + '</div>'
           + (r.next_action ? '<div class="text-xs" style="color: var(--pw-text-tertiary);">next: ' + escapeHtml(r.next_action) + '</div>' : '')
           + '</div>';
@@ -1490,6 +1492,11 @@ html.dark {
           + '</div>';
       }
 
+      const recovery = d.connection_recovery || {};
+      const connector = recovery.connector || {};
+      const recoveryTask = recovery.task || {};
+      const recoveryAgent = recovery.agent || {};
+      const recoveryWatcher = recovery.watcher || {};
       const header =
         '<div class="mb-2">'
         + '<div class="text-xs mb-1" style="color: var(--pw-text-secondary);"><span style="color: var(--pw-text-tertiary);">goal:</span> ' + escapeHtml(d.goal || '—') + '</div>'
@@ -1499,6 +1506,7 @@ html.dark {
         + '</div>'
         + '<div class="text-xs mb-1" style="color: var(--pw-text-tertiary);">iterations: ' + escapeHtml(String(d.iterations != null ? d.iterations : rounds.length)) + ' · warnings: ' + escapeHtml(String(d.warnings_count != null ? d.warnings_count : (Array.isArray(d.warnings) ? d.warnings.length : 0))) + '</div>'
         + '<div class="text-xs mb-1" style="color: var(--pw-text-tertiary);">main: ' + escapeHtml(String(d.main_task_count != null ? d.main_task_count : 0)) + ' · fix: ' + escapeHtml(String(d.fix_task_count != null ? d.fix_task_count : 0)) + ' · cleanup: ' + escapeHtml(String(d.cleanup_task_count != null ? d.cleanup_task_count : 0)) + '</div>'
+        + '<div class="text-xs mb-1" style="color: var(--pw-text-tertiary);">connector: ' + escapeHtml(connector.state || 'not_observable_server_side') + ' · task: ' + escapeHtml(recoveryTask.state || 'unknown') + ' · agent: ' + escapeHtml(recoveryAgent.state || 'unknown') + ' · watcher: ' + escapeHtml(recoveryWatcher.state || 'unknown') + '</div>'
         + '<div class="text-xs" style="color: var(--pw-text-tertiary);">final_recommended_next_action: ' + escapeHtml(d.next_action || '—') + '</div>'
         + '</div>';
 

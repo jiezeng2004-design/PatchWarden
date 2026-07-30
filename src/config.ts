@@ -14,6 +14,9 @@ import {
   validateRequestedModel,
   type ModelSelectionEvidence,
 } from "./agents/modelSelection.js";
+import { failureCategoryEvidence, isTaskFailureCategory, type TaskFailureCategory } from "./runner/failureCategories.js";
+
+const GENERATED_PATH_PATTERN_HINT = /(^|\/)(?:\.next|dist|build|out|output|coverage|\.cache|cache|target|__pycache__|generated|release|artifacts?)(?:\/|$)|(?:^|[-_.])(?:generated|output|cache|artifact)(?:[-_.\/]|$)|\.(?:tsbuildinfo|pyc|log|tmp|temp|map|exe|dll|zip|tgz|tar\.gz)(?:$|[*?])/i;
 
 // ── Type definitions ──────────────────────────────────────────────
 
@@ -30,6 +33,26 @@ export interface AgentConfig {
   settings_policy?: "inherit" | "isolated";
 }
 
+export interface RuntimeValidationViewport {
+  name: string;
+  width: number;
+  height: number;
+}
+
+export interface RuntimeValidationConfig {
+  enabled: boolean;
+  startCommand: string;
+  baseUrl: string;
+  routes: string[];
+  viewports: RuntimeValidationViewport[];
+  checkConsoleErrors: boolean;
+  checkBrokenImages: boolean;
+  checkHorizontalOverflow: boolean;
+  captureScreenshots: boolean;
+  startupTimeoutSeconds: number;
+  navigationTimeoutSeconds: number;
+}
+
 export interface PatchWardenConfig {
   workspaceRoot: string;
   plansDir: string;
@@ -37,9 +60,16 @@ export interface PatchWardenConfig {
   assessmentsDir: string;
   assessmentTtlSeconds: number;
   agents: Record<string, AgentConfig>;
+  agentPriority?: string[];
+  maxRetriesPerAgent?: number;
+  fallbackOn?: TaskFailureCategory[];
+  doNotFallbackOn?: TaskFailureCategory[];
   repoAgentDefaults?: Record<string, Record<string, string | null>>;
   allowedTestCommands: string[];
   repoAllowedTestCommands?: Record<string, string[]>;
+  generatedPaths?: string[];
+  repoGeneratedPaths?: Record<string, string[]>;
+  runtimeValidation?: RuntimeValidationConfig;
   maxReadFileBytes: number;
   defaultTaskTimeoutSeconds: number;
   maxTaskTimeoutSeconds: number;
@@ -80,6 +110,10 @@ const DEFAULT_CONFIG: PatchWardenConfig = {
   assessmentsDir: ".patchwarden/assessments",
   assessmentTtlSeconds: 3600,
   agents: {},
+  agentPriority: [],
+  maxRetriesPerAgent: 0,
+  fallbackOn: [],
+  doNotFallbackOn: ["policy_block", "scope_violation", "user_confirmation_required", "connector_failure", "watcher_failure"],
   repoAgentDefaults: {},
   allowedTestCommands: [
     "npm test",
@@ -100,6 +134,8 @@ const DEFAULT_CONFIG: PatchWardenConfig = {
     "cargo test",
   ],
   repoAllowedTestCommands: {},
+  generatedPaths: [],
+  repoGeneratedPaths: {},
   maxReadFileBytes: 200_000,
   defaultTaskTimeoutSeconds: 900,
   maxTaskTimeoutSeconds: 3600,
@@ -190,7 +226,7 @@ function loadConfigInternal(configPath?: string): PatchWardenConfig {
     if (existsSync(p)) {
       try {
         const rawText = stripBom(readFileSync(p, "utf-8"));
-        const raw = JSON.parse(rawText);
+        const raw = normalizeConfigAliases(JSON.parse(rawText));
         _config = normalizeConfig({ ...DEFAULT_CONFIG, ...raw } as PatchWardenConfig);
         return _config;
       } catch (err) {
@@ -226,7 +262,7 @@ export function refreshAgentConfig(): PatchWardenConfig {
   let candidate: PatchWardenConfig;
   try {
     const rawText = stripBom(readFileSync(configPath, "utf-8"));
-    const raw = JSON.parse(rawText);
+    const raw = normalizeConfigAliases(JSON.parse(rawText));
     candidate = normalizeConfig({ ...DEFAULT_CONFIG, ...raw } as PatchWardenConfig);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -302,6 +338,29 @@ export function getAssessmentsDir(config: PatchWardenConfig): string {
 
 function stripBom(value: string): string {
   return value.charCodeAt(0) === 0xfeff ? value.slice(1) : value;
+}
+
+function normalizeConfigAliases(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("configuration root must be an object");
+  }
+  const raw = { ...(value as Record<string, unknown>) };
+  for (const [legacy, canonical] of [
+    ["generated_paths", "generatedPaths"],
+    ["repo_generated_paths", "repoGeneratedPaths"],
+    ["runtime_validation", "runtimeValidation"],
+    ["agent_priority", "agentPriority"],
+    ["max_retries_per_agent", "maxRetriesPerAgent"],
+    ["fallback_on", "fallbackOn"],
+    ["do_not_fallback_on", "doNotFallbackOn"],
+  ] as const) {
+    if (raw[legacy] !== undefined && raw[canonical] !== undefined) {
+      throw new Error(`Configure only ${canonical}; do not also set legacy alias ${legacy}`);
+    }
+    if (raw[canonical] === undefined && raw[legacy] !== undefined) raw[canonical] = raw[legacy];
+    delete raw[legacy];
+  }
+  return raw;
 }
 
 function findActiveConfigPath(): string | null {
@@ -401,6 +460,24 @@ function normalizeConfig(config: PatchWardenConfig): PatchWardenConfig {
     };
   }
   const repoAgentDefaults = normalizeRepoAgentDefaults(config.repoAgentDefaults, config.workspaceRoot);
+  const agentPriority = normalizeAgentPriority(config.agentPriority, agents);
+  const maxRetriesPerAgent = config.maxRetriesPerAgent ?? 0;
+  if (!Number.isSafeInteger(maxRetriesPerAgent) || maxRetriesPerAgent < 0 || maxRetriesPerAgent > 3) {
+    throw new Error("maxRetriesPerAgent must be an integer from 0 to 3");
+  }
+  const fallbackOn = normalizeFailureCategoryList(config.fallbackOn, "fallbackOn");
+  const hardNoFallback: TaskFailureCategory[] = [
+    "policy_block", "scope_violation", "user_confirmation_required", "connector_failure", "watcher_failure",
+  ];
+  for (const category of fallbackOn) {
+    if (!failureCategoryEvidence(category).fallback_eligible || hardNoFallback.includes(category)) {
+      throw new Error(`fallbackOn cannot include non-fallback category "${category}"`);
+    }
+  }
+  const configuredDoNotFallback = normalizeFailureCategoryList(config.doNotFallbackOn, "doNotFallbackOn");
+  const doNotFallbackOn = [...new Set([...hardNoFallback, ...configuredDoNotFallback])];
+  const conflict = fallbackOn.find((category) => doNotFallbackOn.includes(category));
+  if (conflict) throw new Error(`fallbackOn and doNotFallbackOn cannot both include "${conflict}"`);
   for (const [repoKey, defaults] of Object.entries(repoAgentDefaults)) {
     for (const [agentName, model] of Object.entries(defaults)) {
       if (model === null) continue;
@@ -439,6 +516,21 @@ function normalizeConfig(config: PatchWardenConfig): PatchWardenConfig {
     }
     repoAllowedTestCommands[normalizedKey] = [...new Set(commands.map((command) => command.trim()))];
   }
+  const generatedPaths = normalizeGeneratedPathList(config.generatedPaths ?? [], "generatedPaths");
+  if (!config.repoGeneratedPaths || typeof config.repoGeneratedPaths !== "object" || Array.isArray(config.repoGeneratedPaths)) {
+    throw new Error("repoGeneratedPaths must be an object mapping workspace-relative repository paths to generated path arrays");
+  }
+  const repoGeneratedPaths: Record<string, string[]> = {};
+  for (const [repoKey, patterns] of Object.entries(config.repoGeneratedPaths)) {
+    const normalizedKey = normalizeRepoKey(repoKey);
+    const resolvedRepo = resolve(config.workspaceRoot, normalizedKey);
+    const relativeRepo = relative(resolve(config.workspaceRoot), resolvedRepo);
+    if (isAbsolute(repoKey) || relativeRepo === ".." || relativeRepo.startsWith(`..${sep}`) || isAbsolute(relativeRepo)) {
+      throw new Error(`repoGeneratedPaths key must stay inside workspaceRoot: "${repoKey}"`);
+    }
+    repoGeneratedPaths[normalizedKey] = normalizeGeneratedPathList(patterns, `repoGeneratedPaths["${repoKey}"]`);
+  }
+  const runtimeValidation = normalizeRuntimeValidation(config.runtimeValidation);
   if (!Number.isFinite(config.maxReadFileBytes) || config.maxReadFileBytes <= 0) {
     throw new Error("maxReadFileBytes must be a positive number");
   }
@@ -610,11 +702,137 @@ function normalizeConfig(config: PatchWardenConfig): PatchWardenConfig {
   return {
     ...config,
     agents,
+    agentPriority,
+    maxRetriesPerAgent,
+    fallbackOn,
+    doNotFallbackOn,
     repoAgentDefaults,
     workspaceRoot: resolve(config.workspaceRoot),
     allowedTestCommands: [...new Set(config.allowedTestCommands.map((command) => command.trim()))],
     repoAllowedTestCommands,
+    generatedPaths,
+    repoGeneratedPaths,
+    runtimeValidation,
   };
+}
+
+function normalizeAgentPriority(value: unknown, agents: Record<string, AgentConfig>): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 20) throw new Error("agentPriority must be an array with at most 20 entries");
+  const normalized = value.map((entry, index) => {
+    if (typeof entry !== "string" || !entry.trim()) throw new Error(`agentPriority[${index}] must be a non-empty Agent name`);
+    const name = entry.trim();
+    if (!agents[name]) throw new Error(`agentPriority references unknown Agent "${name}"`);
+    return name;
+  });
+  if (new Set(normalized).size !== normalized.length) throw new Error("agentPriority entries must be unique");
+  return normalized;
+}
+
+function normalizeFailureCategoryList(value: unknown, field: string): TaskFailureCategory[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 10) throw new Error(`${field} must be an array with at most 10 entries`);
+  const categories = value.map((entry, index) => {
+    if (!isTaskFailureCategory(entry)) throw new Error(`${field}[${index}] is not a supported task failure category`);
+    return entry;
+  });
+  if (new Set(categories).size !== categories.length) throw new Error(`${field} entries must be unique`);
+  return categories;
+}
+
+function normalizeRuntimeValidation(value: unknown): RuntimeValidationConfig | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("runtimeValidation must be an object");
+  const raw = value as Record<string, unknown>;
+  const field = <T>(camel: string, snake: string, fallback: T): T => (raw[camel] ?? raw[snake] ?? fallback) as T;
+  const enabled = field("enabled", "enabled", false);
+  if (typeof enabled !== "boolean") throw new Error("runtimeValidation.enabled must be boolean");
+  const startCommand = String(field("startCommand", "start_command", "")).trim();
+  const baseUrl = String(field("baseUrl", "base_url", "")).trim();
+  if (enabled && !startCommand) throw new Error("runtimeValidation.startCommand is required when enabled");
+  if (enabled && !baseUrl) throw new Error("runtimeValidation.baseUrl is required when enabled");
+  if (startCommand.length > 500) throw new Error("runtimeValidation.startCommand is too long");
+  if (baseUrl) assertLoopbackRuntimeUrl(baseUrl);
+
+  const routesValue = field<unknown>("routes", "routes", ["/"]);
+  if (!Array.isArray(routesValue) || routesValue.length === 0 || routesValue.length > 50) throw new Error("runtimeValidation.routes must contain 1-50 routes");
+  const routes = routesValue.map((route, index) => {
+    if (typeof route !== "string" || !route.startsWith("/") || route.startsWith("//") || route.includes("\\") || route.split(/[/?#]/).includes("..") || route.length > 500 || /[\r\n\0]/.test(route)) {
+      throw new Error(`runtimeValidation.routes[${index}] must be a safe root-relative route`);
+    }
+    return route;
+  });
+  const viewportsValue = field<unknown>("viewports", "viewports", [
+    { name: "desktop", width: 1440, height: 900 },
+    { name: "mobile", width: 390, height: 844 },
+  ]);
+  if (!Array.isArray(viewportsValue) || viewportsValue.length === 0 || viewportsValue.length > 8) throw new Error("runtimeValidation.viewports must contain 1-8 entries");
+  const viewports = viewportsValue.map((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error(`runtimeValidation.viewports[${index}] must be an object`);
+    const viewport = entry as Record<string, unknown>;
+    const name = String(viewport.name || "").trim();
+    const width = Number(viewport.width);
+    const height = Number(viewport.height);
+    if (!/^[A-Za-z0-9_-]{1,40}$/.test(name) || !Number.isSafeInteger(width) || width < 240 || width > 3840 || !Number.isSafeInteger(height) || height < 240 || height > 2160) {
+      throw new Error(`runtimeValidation.viewports[${index}] is invalid`);
+    }
+    return { name, width, height };
+  });
+  const booleanField = (camel: string, snake: string, fallback: boolean) => {
+    const result = field<unknown>(camel, snake, fallback);
+    if (typeof result !== "boolean") throw new Error(`runtimeValidation.${camel} must be boolean`);
+    return result;
+  };
+  const integerField = (camel: string, snake: string, fallback: number, minimum: number, maximum: number) => {
+    const result = Number(field<unknown>(camel, snake, fallback));
+    if (!Number.isSafeInteger(result) || result < minimum || result > maximum) throw new Error(`runtimeValidation.${camel} must be an integer from ${minimum} to ${maximum}`);
+    return result;
+  };
+  return {
+    enabled,
+    startCommand,
+    baseUrl,
+    routes: [...new Set(routes)],
+    viewports,
+    checkConsoleErrors: booleanField("checkConsoleErrors", "check_console_errors", true),
+    checkBrokenImages: booleanField("checkBrokenImages", "check_broken_images", true),
+    checkHorizontalOverflow: booleanField("checkHorizontalOverflow", "check_horizontal_overflow", true),
+    captureScreenshots: booleanField("captureScreenshots", "capture_screenshots", true),
+    startupTimeoutSeconds: integerField("startupTimeoutSeconds", "startup_timeout_seconds", 60, 5, 300),
+    navigationTimeoutSeconds: integerField("navigationTimeoutSeconds", "navigation_timeout_seconds", 30, 1, 120),
+  };
+}
+
+function assertLoopbackRuntimeUrl(value: string): void {
+  let parsed: URL;
+  try { parsed = new URL(value); } catch { throw new Error("runtimeValidation.baseUrl must be a valid URL"); }
+  const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (parsed.protocol !== "http:" || !["127.0.0.1", "::1"].includes(hostname) || parsed.username || parsed.password || parsed.hash) {
+    throw new Error("runtimeValidation.baseUrl must be a credential-free literal HTTP loopback URL without a fragment");
+  }
+}
+
+function normalizeGeneratedPathList(value: unknown, field: string): string[] {
+  if (!Array.isArray(value)) throw new Error(`${field} must be an array of repository-relative glob patterns`);
+  if (value.length > 128) throw new Error(`${field} cannot contain more than 128 patterns`);
+  const normalized = value.map((entry, index) => {
+    if (typeof entry !== "string") throw new Error(`${field}[${index}] must be a string`);
+    const pattern = entry.trim().replace(/\\/g, "/").replace(/^\.\//, "");
+    if (!pattern || pattern.length > 256 || pattern.includes("\0")) {
+      throw new Error(`${field}[${index}] must be a non-empty pattern no longer than 256 characters`);
+    }
+    if (pattern.startsWith("/") || /^[A-Za-z]:\//.test(pattern) || pattern.split("/").includes("..")) {
+      throw new Error(`${field}[${index}] must stay relative to the repository`);
+    }
+    if (["*", "**", "**/*", "."].includes(pattern)) {
+      throw new Error(`${field}[${index}] is too broad to classify safely`);
+    }
+    if (!GENERATED_PATH_PATTERN_HINT.test(pattern)) {
+      throw new Error(`${field}[${index}] must identify a generated-output path or artifact extension`);
+    }
+    return pattern;
+  });
+  return [...new Set(normalized)];
 }
 
 export function getRepoAllowedTestCommands(config: PatchWardenConfig, repoPath: string): string[] {
@@ -623,6 +841,15 @@ export function getRepoAllowedTestCommands(config: PatchWardenConfig, repoPath: 
     if (comparablePath(resolve(config.workspaceRoot, repoKey)) === target) return [...commands];
   }
   return [];
+}
+
+export function getRepoGeneratedPaths(config: PatchWardenConfig, repoPath: string): string[] {
+  const target = comparablePath(resolve(repoPath));
+  const patterns = [...(config.generatedPaths || [])];
+  for (const [repoKey, configured] of Object.entries(config.repoGeneratedPaths || {})) {
+    if (comparablePath(resolve(config.workspaceRoot, repoKey)) === target) patterns.push(...configured);
+  }
+  return [...new Set(patterns)];
 }
 
 export function getAllConfiguredTestCommands(config: PatchWardenConfig): string[] {

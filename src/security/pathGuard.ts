@@ -7,7 +7,17 @@ import {
   resolve,
   sep,
 } from "node:path";
-import { lstatSync, readlinkSync, realpathSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import { PatchWardenError } from "../errors.js";
 
 export function guardPath(
@@ -55,6 +65,64 @@ export function guardReadPath(
   } catch {
     throw new Error(`File not found: "${requestedPath}"`);
   }
+}
+
+/**
+ * Open and read a file only after validating the path both before and after
+ * the descriptor is acquired. The descriptor identity must match the final
+ * validated path, preventing a symlink/junction swap from redirecting bytes
+ * between path validation and readFileSync.
+ */
+export function readValidatedFileSync(
+  resolveValidatedPath: () => string,
+): { path: string; content: Buffer; size: number; mode: number } {
+  const initialPath = resolveValidatedPath();
+  const initialMetadata = lstatSync(initialPath);
+  if (initialMetadata.isSymbolicLink() || !initialMetadata.isFile()) {
+    throw pathChangedDuringRead(initialPath);
+  }
+  const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+  const descriptor = openSync(initialPath, constants.O_RDONLY | noFollow);
+  try {
+    const opened = fstatSync(descriptor);
+    if (!opened.isFile()) throw pathChangedDuringRead(initialPath);
+    const finalPath = resolveValidatedPath();
+    const finalLinkMetadata = lstatSync(finalPath);
+    const finalMetadata = statSync(finalPath);
+    if (
+      finalLinkMetadata.isSymbolicLink()
+      || !finalMetadata.isFile()
+      || !samePath(initialPath, finalPath)
+      || opened.dev !== finalMetadata.dev
+      || opened.ino !== finalMetadata.ino
+    ) {
+      throw pathChangedDuringRead(initialPath);
+    }
+    return {
+      path: finalPath,
+      content: readFileSync(descriptor),
+      size: opened.size,
+      mode: opened.mode,
+    };
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function pathChangedDuringRead(path: string): PatchWardenError {
+  return new PatchWardenError(
+    "path_changed_during_read",
+    `Path changed while PatchWarden was opening "${path}".`,
+    "Retry only after concurrent filesystem or link changes stop.",
+    true,
+    { path, operation: "read" },
+  );
+}
+
+function samePath(left: string, right: string): boolean {
+  return process.platform === "win32"
+    ? normalize(left).toLowerCase() === normalize(right).toLowerCase()
+    : normalize(left) === normalize(right);
 }
 
 export function guardWorkspacePath(

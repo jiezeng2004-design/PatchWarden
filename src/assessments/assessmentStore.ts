@@ -18,9 +18,10 @@ import {
 } from "../tools/catalog/toolCatalog.js";
 import { getToolDefs } from "../tools/definitions/toolDefs.js";
 import { captureRepoSnapshot, type RepoSnapshot } from "../runner/changeCapture.js";
-import type { RiskAssessmentResult } from "../security/riskEngine.js";
+import type { RiskAssessmentResult, RiskRuleEvidence } from "../security/riskEngine.js";
 import type { TaskTemplateName, ChangePolicy } from "../tools/taskTemplates.js";
 import type { ModelSelectionEvidence } from "../agents/modelSelection.js";
+import type { ProjectPreflightReport } from "../runner/projectPreflight.js";
 import { getProjectPolicySummary, type ProjectPolicy } from "../policy/projectPolicy.js";
 import {
   ASSESSMENT_SECURITY_SNAPSHOT_VERSION,
@@ -74,6 +75,8 @@ export interface AssessmentRecord {
   risk_hints: string[];
   hard_rule_hits: string[];
   reason_codes: string[];
+  rules?: RiskRuleEvidence[];
+  preflight?: ProjectPreflightReport;
   plan_hash: string | null;
   plan_id: string | null;
   policy_hash: string;
@@ -90,6 +93,8 @@ export interface AssessmentRecord {
     file_count: number;
     workspace_dirty: boolean;
     snapshot_truncated: boolean;
+    snapshot_complete?: boolean;
+    snapshot_failure_codes?: string[];
   };
   expires_at: string;
   created_at: string;
@@ -108,6 +113,7 @@ export interface AssessmentRecord {
   forbidden?: string[];
   verification?: string[];
   done_evidence?: string[];
+  confirm_workspace_root?: boolean;
   requires_confirm: boolean;
   confirmed: boolean;
   confirmed_at: string | null;
@@ -122,6 +128,8 @@ export interface AssessmentCreateInput {
   risk_hints: string[];
   hard_rule_hits: string[];
   reason_codes: string[];
+  rules?: RiskRuleEvidence[];
+  preflight?: ProjectPreflightReport;
   repo_path: string;
   resolved_repo_path: string;
   plan_id: string | null;
@@ -139,6 +147,7 @@ export interface AssessmentCreateInput {
   forbidden?: string[];
   verification?: string[];
   done_evidence?: string[];
+  confirm_workspace_root?: boolean;
   snapshot: RepoSnapshot;
   assessment_id?: string;
   assessment_dir?: string;
@@ -180,10 +189,10 @@ export function createAssessmentDir(assessmentId: string): string {
   const config = getConfig();
   const assessmentsDir = getAssessmentsDir(config);
   guardPath(assessmentsDir, config.workspaceRoot, config.assessmentsDir);
-  mkdirSync(assessmentsDir, { recursive: true });
+  mkdirSync(assessmentsDir, { recursive: true, mode: 0o700 });
   const dir = resolve(assessmentsDir, assessmentId);
   guardPath(dir, config.workspaceRoot, config.assessmentsDir);
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
   return dir;
 }
 
@@ -243,6 +252,8 @@ export function createAssessment(
     risk_hints: input.risk_hints,
     hard_rule_hits: input.hard_rule_hits,
     reason_codes: input.reason_codes,
+    rules: input.rules || [],
+    preflight: input.preflight,
     plan_hash: planHash,
     plan_id: input.plan_id,
     policy_hash: policyHash,
@@ -259,6 +270,8 @@ export function createAssessment(
       file_count: Object.keys(input.snapshot.files).length,
       workspace_dirty: input.snapshot.workspace_dirty,
       snapshot_truncated: snapshotTruncated,
+      snapshot_complete: input.snapshot.integrity?.complete ?? true,
+      snapshot_failure_codes: input.snapshot.integrity?.failure_codes ?? [],
     },
     expires_at: expiresAt,
     created_at: now.toISOString(),
@@ -277,6 +290,7 @@ export function createAssessment(
     forbidden: input.forbidden || [],
     verification: input.verification || [],
     done_evidence: input.done_evidence || [],
+    confirm_workspace_root: input.confirm_workspace_root === true,
     requires_confirm: input.decision === "needs_confirm",
     confirmed: false,
     confirmed_at: null,
@@ -356,6 +370,13 @@ export function validateAssessmentFreshness(
   currentSnapshot: RepoSnapshot,
   options: AssessmentValidationOptions = {}
 ): AssessmentValidationResult {
+  if (currentSnapshot.integrity?.complete === false) {
+    return {
+      valid: false,
+      failure_reason: "assessment_snapshot_incomplete",
+      assessment: null,
+    };
+  }
   if (!/^assessment_\d{8}_\d{6}_[0-9a-f]{32}$/.test(assessmentId)) {
     return { valid: false, failure_reason: "assessment_id_invalid", assessment: null };
   }
@@ -561,8 +582,15 @@ export function computeWorkspaceFingerprint(snapshot: RepoSnapshot): string {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([path, fp]) => `${path}:${fp.sha256}`)
     .join("\n");
+  const sensitiveMetadata = Object.entries(snapshot.sensitive_files ?? {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([path, metadata]) => `${path}:${metadata.file_type}:${metadata.size}:${metadata.mtime_ms}`)
+    .join("\n");
+  const integrity = snapshot.integrity
+    ? `${snapshot.integrity.complete}:${snapshot.integrity.truncated}:${snapshot.integrity.failure_codes.join(",")}`
+    : "legacy-integrity";
   return createHash("sha256")
-    .update(`${snapshot.head || "null"}\n${snapshot.status}\n${fileHashes}`)
+    .update(`${snapshot.head || "null"}\n${snapshot.status}\n${fileHashes}\n${sensitiveMetadata}\n${integrity}`)
     .digest("hex");
 }
 

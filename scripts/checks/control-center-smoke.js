@@ -6,7 +6,7 @@
  *   - Does NOT open a browser.
  *   - Does NOT call manage-patchwarden.ps1 for real start/stop operations.
  *   - Does NOT kill any process other than the controlCenter child it spawned.
- *   - Uses test port 18090 via PATCHWARDEN_CONTROL_PORT.
+ *   - Uses an OS-assigned loopback port via PATCHWARDEN_CONTROL_PORT.
  *   - Always shuts down the spawned server (even on failure).
  *
  * Run: node scripts/checks/control-center-smoke.js
@@ -17,6 +17,7 @@ import http from "node:http";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { reserveLoopbackPort } from "../lib/loopback-port.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(__dirname, "..", "..");
@@ -24,7 +25,9 @@ const serverPath = join(projectRoot, "dist", "controlCenter.js");
 const uiRoot = join(projectRoot, "ui");
 const trayScriptPath = join(projectRoot, "scripts", "control", "control-center-tray.ps1");
 
-const TEST_PORT = 18090;
+const TEST_PORT = await reserveLoopbackPort();
+const TEST_CORE_PORT = await reserveLoopbackPort();
+const TEST_DIRECT_PORT = await reserveLoopbackPort();
 const BASE_URL = `http://127.0.0.1:${TEST_PORT}`;
 // Redirect control-center status/events/log files into a project-local temp
 // dir so the smoke test can write them even when LOCALAPPDATA is restricted
@@ -1909,8 +1912,8 @@ async function main() {
       // smoke test does NOT depend on the real 8080/8081 being free on the host.
       // The probes will get ECONNREFUSED -> available:false with a reason, which
       // is exactly the fault-tolerance path we want to exercise.
-      PATCHWARDEN_CORE_URL: "http://127.0.0.1:18080",
-      PATCHWARDEN_DIRECT_URL: "http://127.0.0.1:18081",
+      PATCHWARDEN_CORE_URL: `http://127.0.0.1:${TEST_CORE_PORT}`,
+      PATCHWARDEN_DIRECT_URL: `http://127.0.0.1:${TEST_DIRECT_PORT}`,
     },
     stdio: ["pipe", "pipe", "pipe"],
   });

@@ -1,6 +1,6 @@
 {
   "name": "patchwarden",
-  "version": "1.6.7",
+  "version": "1.7.0",
   "description": "Secure local MCP bridge for ChatGPT and local agents, with workspace-scoped task loops, safe summaries, audits, and Direct editing.",
   "type": "module",
   "main": "dist/index.js",
@@ -8,18 +8,27 @@
   "bin": {
     "patchwarden": "dist/index.js",
     "patchwarden-confirm": "dist/assessments/confirmCli.js",
+    "patchwarden-attest": "dist/attestation/cli.js",
     "patchwarden-runner": "dist/runner/cli.js"
   },
   "files": [
     "dist/",
     "!dist/test/",
-    "docs/",
-    "!docs/archive/",
-    "!docs/optimization-proposal.md",
-    "src/",
-    "!src/test/",
+    "!dist/smoke-test.js",
+    "!dist/smoke-test.d.ts",
+    "docs/architecture.md",
+    "docs/chatgpt-usage.md",
+    "docs/desktop-app.md",
+    "docs/direct-session-workflow.md",
+    "docs/evidence-pack-schema.md",
+    "docs/migration-from-safe-bifrost.md",
+    "docs/task-safe-review-workflow.md",
+    "docs/threat-model.md",
     "examples/",
-    "scripts/",
+    "scripts/control/",
+    "scripts/launchers/",
+    "scripts/mcp/",
+    "scripts/checks/mcp-manifest-check.js",
     "!scripts/control/kill-patchwarden.ps1",
     "!scripts/launchers/Kill-PatchWarden.cmd",
     "!.local/",
@@ -28,8 +37,7 @@
     "README.md",
     "README.en.md",
     "CONTRIBUTORS.md",
-    "LICENSE",
-    "tsconfig.json"
+    "LICENSE"
   ],
   "scripts": {
     "build": "node scripts/build.js",
@@ -43,7 +51,8 @@
     "doctor": "node dist/doctor.js",
     "doctor:ci": "node dist/doctor.js --allow-default-config",
     "test:unit": "node scripts/checks/unit-tests.js",
-    "test": "node scripts/checks/build-output-check.js && node dist/smoke-test.js && node scripts/checks/unit-tests.js && node scripts/checks/lifecycle-smoke.js && node scripts/checks/doctor-smoke.js && node scripts/checks/tunnel-supervisor-smoke.js && node scripts/checks/watcher-supervisor-smoke.js && node scripts/checks/control-smoke.js && node scripts/checks/mcp-manifest-check.js && node scripts/checks/brand-check.js && node scripts/checks/release-retention-smoke.js && node scripts/checks/ui-version-smoke.js && node scripts/checks/tasks-filter-smoke.js && node scripts/checks/task-acceptance-ui-smoke.js && node scripts/checks/audit-ui-smoke.js && node scripts/checks/direct-sessions-ui-smoke.js && node scripts/checks/logs-ui-smoke.js && node scripts/checks/control-center-smoke.js",
+    "test:coverage": "npm run build && c8 --exclude=dist/test/** --exclude=dist/smoke-test.js --exclude=scripts/** --check-coverage --lines 72 --branches 72 --functions 69 --statements 72 --reporter=text-summary node scripts/checks/unit-tests.js",
+    "test": "node scripts/checks/build-output-check.js && node dist/smoke-test.js && node scripts/checks/unit-tests.js && node scripts/checks/lifecycle-smoke.js && node scripts/checks/doctor-smoke.js && node scripts/checks/tunnel-supervisor-smoke.js && node scripts/checks/watcher-supervisor-smoke.js && node scripts/checks/control-smoke.js && node scripts/checks/mcp-manifest-check.js && node scripts/checks/brand-check.js && node scripts/checks/pack-clean-security-smoke.js && node scripts/checks/release-retention-smoke.js && node scripts/checks/ui-version-smoke.js && node scripts/checks/tasks-filter-smoke.js && node scripts/checks/task-acceptance-ui-smoke.js && node scripts/checks/audit-ui-smoke.js && node scripts/checks/direct-sessions-ui-smoke.js && node scripts/checks/logs-ui-smoke.js && node scripts/checks/control-center-smoke.js",
     "test:lifecycle": "npm run build && node scripts/checks/lifecycle-smoke.js",
     "test:doctor": "npm run build && node scripts/checks/doctor-smoke.js",
     "test:tunnel-supervisor": "npm run build && node scripts/checks/tunnel-supervisor-smoke.js",
@@ -59,9 +68,11 @@
     "pretest": "npm run build",
     "pack:clean": "npm run build && node scripts/release/pack-clean.js",
     "pack:clean:built": "node scripts/release/pack-clean.js",
-    "verify:package": "npm run build && node scripts/checks/package-manifest-check.js",
-    "verify:package:built": "node scripts/checks/package-manifest-check.js",
+    "verify:package": "npm run build && node scripts/checks/package-manifest-check.js && node scripts/checks/package-install-smoke.js",
+    "verify:package:built": "node scripts/checks/package-manifest-check.js && node scripts/checks/package-install-smoke.js",
+    "test:package-install": "node scripts/checks/package-install-smoke.js",
     "test:release-retention": "node scripts/checks/release-retention-smoke.js",
+    "test:pack-security": "node scripts/checks/pack-clean-security-smoke.js",
     "test:ui-version": "node scripts/checks/ui-version-smoke.js",
     "test:tasks-filter": "node scripts/checks/tasks-filter-smoke.js",
     "test:task-acceptance-ui": "node scripts/checks/task-acceptance-ui-smoke.js",
@@ -75,16 +86,20 @@
     "desktop:stage": "npm run build && npm.cmd --prefix desktop run stage",
     "desktop:dev": "npm run build && npm.cmd --prefix desktop run dev",
     "desktop:package:dir": "npm run build && npm.cmd --prefix desktop run build:dir",
+    "desktop:verify:unpacked": "npm.cmd --prefix desktop run verify:unpacked",
     "desktop:package": "npm run build && npm.cmd --prefix desktop run build && npm run desktop:shortcut",
     "desktop:shortcut": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/release/update-desktop-shortcut.ps1",
     "desktop:preflight": "node scripts/release/desktop-preflight.js",
-    "desktop:preflight:release": "node scripts/release/desktop-preflight.js --require-clean"
+    "desktop:preflight:release": "node scripts/release/desktop-preflight.js --require-clean --with-installers"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "saxes": "6.0.0"
   },
   "devDependencies": {
     "@types/node": "^26.1.0",
+    "c8": "^12.0.0",
+    "playwright-core": "^1.60.0",
     "typescript": "^7.0.2"
   },
   "overrides": {
@@ -93,7 +108,7 @@
     "fast-uri": "4.1.1"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "keywords": [
     "mcp",

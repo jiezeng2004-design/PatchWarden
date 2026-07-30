@@ -1,5 +1,79 @@
 # PatchWarden CHANGELOG
 
+## Unreleased
+
+> Local `1.7.0` release candidate; this does not assert a GitHub or npm release.
+
+### Security, evidence, and packaging
+
+- Fail closed on incomplete Git or filesystem snapshots, preserve sensitive-path
+  change evidence without reading sensitive contents, and bound fingerprint work.
+- Require external, signed local-human attestation for authoritative acceptance;
+  machine audit results can no longer forge a final workspace acceptance.
+- Require an HTTP owner token outside minimal health checks and enforce bounded
+  body, concurrency, header, keep-alive, and request-time budgets.
+- Bind discovery authorization to the assessed invocation, harden path and lock
+  handling against links and replacement races, and preserve private evidence
+  permissions.
+- Reject links and junctions during clean packaging, verify isolated npm installs,
+  and reduce the published package surface.
+- Build and verify Desktop artifacts from the same staged content, retain only
+  `en-US` and `zh-CN` locales, and enforce CSP, accessible bilingual onboarding,
+  and an exact HTTPS navigation allowlist.
+
+### Post-task cleanup safety
+
+- Preserve cleanup candidates whose files were already present in the task's
+  before-snapshot, including ignored release packages and artifacts inside
+  non-Git workspaces.
+- Limit automatic post-task deletion to candidates with explicit
+  `task_owned_change` evidence; preserve unattributed candidates as
+  `no_process_ownership_evidence` skips.
+
+### Controlled browser runtime validation
+
+- Add opt-in Playwright-based route and viewport checks for console errors,
+  broken images, horizontal overflow, and screenshots after static validation.
+- Keep `playwright-core` as a development/opt-in local dependency so ordinary npm
+  and Desktop installs do not carry the optional browser automation runtime.
+- Require an exact allow-listed server command and a literal loopback URL,
+  reject occupied URLs, and record termination of the validation-owned process
+  tree in `runtime-validation.json`.
+
+### Guarded execution and Direct operations
+
+- Add workspace-confined Direct create, mkdir, move, and delete operations with
+  sensitive-name, link/reparse-point, confirmation, and audit enforcement.
+- Make multi-patch application atomic and report the exact failed patch index
+  and structured reason without committing partial changes.
+- Add repository preflight, structured top-level failure categories, bounded
+  Agent priority/retry/fallback policy, and connector recovery semantics.
+- Keep policy, scope, and confirmation failures non-fallbackable; connector and
+  Watcher failures neither switch Agents nor consume Agent retry budgets.
+
+### Acceptance evidence and validation
+
+- Add layered completion state so implementation, static verification, runtime
+  validation, manual review, user-acceptance readiness, and acceptance cannot be
+  conflated. Missing required runtime evidence forces manual review.
+- Add `.patchwarden/project-facts.json` and `PROJECT_FACTS.json` validation for
+  verified contacts, domains, claims, licenses, and prohibited statements.
+- Add structured Next.js, Node.js, Python, Rust, and Electron framework checks,
+  with generic fallback for unrecognized repositories.
+- Parse SVG/XML with `saxes`, reporting file, line, column, and reason, and
+  classify documentation commands by code-block, inline, shell-line, or
+  narrative-example source before checking package scripts.
+- Generate bounded `acceptance-report.json` summaries for change attribution,
+  validation, runtime evidence, audit outcome, manual items, and final status.
+
+### Task observability
+
+- Expose task, Agent, Watcher, and connector states independently with heartbeat
+  age, current command, source/generated/scope counts, and verification progress.
+- Show Agent attempts, routing action, switch reason, completion state, project
+  facts, framework checks, SVG/XML results, and acceptance evidence in the
+  Control Center without treating Agent termination as acceptance.
+
 ## v1.6.7 (2026-07-28)
 
 > Release preparation only. This entry does not assert that v1.6.7 has been published to GitHub or npm.

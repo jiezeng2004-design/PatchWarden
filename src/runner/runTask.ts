@@ -25,6 +25,8 @@ import type { TaskPhase, TaskStatus } from "../tools/tasks/createTask.js";
 import {
   buildChangeArtifacts,
   captureRepoSnapshot,
+  assertSnapshotComplete,
+  compareSensitiveSnapshots,
   compareSnapshots,
   emptyArtifactHygiene,
   writeSnapshot,
@@ -39,6 +41,14 @@ import {
   type RepoSnapshot,
   type ChangedFileGroups,
 } from "./changeCapture.js";
+import { buildExternalChangeAttribution, type ChangeAttributionReport } from "./changeAttribution.js";
+import { runRuntimeValidation, type RuntimeValidationReport } from "../validation/runtimeValidation.js";
+import { failureCategoryEvidence, type TaskFailureCategory } from "./failureCategories.js";
+import { deriveCompletionState } from "./completionState.js";
+import { validateProjectFacts, type ProjectFactValidation } from "../validation/projectFacts.js";
+import { validateFrameworks, type FrameworkValidationReport } from "../validation/frameworkPlugins.js";
+import { validateChangedSvgXml, type SvgXmlValidationReport } from "../validation/svgXmlValidation.js";
+import { buildLowNoiseAcceptanceReport, type LowNoiseAcceptanceReport } from "./lowNoiseReport.js";
 import { PatchWardenError, errorPayload } from "../errors.js";
 import { ARTIFACT_SCHEMA_VERSION } from "../version.js";
 import { diagnoseAndroidBuild } from "../tools/workspace/androidDoctor.js";
@@ -68,6 +78,7 @@ interface TaskRunResult {
 type TerminationReason = "canceled" | "killed" | "timeout" | null;
 
 interface ManagedProcessResult {
+  childPid: number | null;
   exitCode: number | null;
   stdout: string;
   stderr: string;
@@ -131,11 +142,13 @@ interface TaskContext {
 interface ExecutionState {
   agentResult: ManagedProcessResult | null;
   agentFailureCategory: string | null;
+  failureCategory: TaskFailureCategory | null;
   providerErrorReference: string | null;
   agentFailureStderrTail: string | null;
   agentRuntime: import("../config.js").AgentRuntimeMetadata | null;
   testResult: TestExecutionResult;
   verifyResults: TestExecutionResult[];
+  runtimeValidation: RuntimeValidationReport | null;
   finalStatus: TaskStatus;
   finalError: string | null;
   lastCaughtError: unknown;
@@ -154,6 +167,10 @@ interface ArtifactEvidence {
   cleanupReport: PostTaskCleanupReport;
   artifactManifest: ArtifactManifest;
   changedFileGroups: ChangedFileGroups;
+  changeAttribution: ChangeAttributionReport;
+  projectFacts: ProjectFactValidation;
+  frameworkValidation: FrameworkValidationReport;
+  svgXmlValidation: SvgXmlValidationReport;
 }
 
 export async function runTask(taskId: string): Promise<TaskRunResult> {
@@ -162,6 +179,7 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
   const ctx: TaskContext = prepared;
   const state = await executeAgent(ctx);
   await runVerification(ctx, state);
+  await runRuntimeValidationAfterStaticChecks(ctx, state);
   const evidence = await collectArtifacts(ctx, state);
   return finalizeTask(ctx, state, evidence);
 }
@@ -270,6 +288,8 @@ async function prepareTask(taskId: string): Promise<TaskContext | TaskRunResult>
   try {
     beforeSnapshot = await captureRepoSnapshot(repoPath);
     beforeWorkspaceSnapshot = repoPath === wsRoot ? beforeSnapshot : await captureRepoSnapshot(wsRoot);
+    assertSnapshotComplete(beforeSnapshot);
+    assertSnapshotComplete(beforeWorkspaceSnapshot);
     writeSnapshot(taskDir, "git-before.json", beforeSnapshot);
     writeSnapshot(taskDir, "workspace-before.json", beforeWorkspaceSnapshot);
     externalDirtyBaseline = extractExternalDirtyFiles(beforeWorkspaceSnapshot, repoPath, wsRoot);
@@ -289,11 +309,13 @@ async function executeAgent(ctx: TaskContext): Promise<ExecutionState> {
   const state: ExecutionState = {
     agentResult: null,
     agentFailureCategory: null,
+    failureCategory: null,
     providerErrorReference: null,
     agentFailureStderrTail: null,
     agentRuntime: null,
     testResult: skippedTest(ctx.testCommand, ctx.repoPath, "Agent did not complete successfully."),
     verifyResults: [],
+    runtimeValidation: null,
     finalStatus: "failed",
     finalError: null,
     lastCaughtError: null,
@@ -347,12 +369,15 @@ async function executeAgent(ctx: TaskContext): Promise<ExecutionState> {
         ? "Task was terminated by kill_task."
         : "Task was canceled by user request.";
     } else if (agentResult.terminationReason === "timeout") {
+      state.failureCategory = "agent_timeout";
       state.finalStatus = "timeout";
       state.finalError = `Task timed out after ${ctx.timeoutSeconds} seconds during agent execution.`;
     } else if (agentResult.spawnError) {
+      state.failureCategory = "agent_execution_error";
       state.agentFailureCategory = "agent_process_error";
       state.finalError = `Agent spawn failed: ${agentResult.spawnError}`;
     } else if (agentResult.exitCode !== 0) {
+      state.failureCategory = "agent_execution_error";
       const failure = classifyAgentFailureDetails(`${agentResult.stderr}\n${agentResult.stdout}`);
       state.agentFailureCategory = failure.failure_category;
       state.providerErrorReference = failure.provider_error_reference;
@@ -365,6 +390,28 @@ async function executeAgent(ctx: TaskContext): Promise<ExecutionState> {
   }
 
   return state;
+}
+
+async function runRuntimeValidationAfterStaticChecks(ctx: TaskContext, state: ExecutionState): Promise<void> {
+  const settings = ctx.config.runtimeValidation;
+  if (!settings?.enabled || state.finalStatus !== "done_by_agent") return;
+  setTaskPhase(ctx.taskDir, "runtime_validation", settings.baseUrl, "Running controlled browser validation.");
+  state.runtimeValidation = await runRuntimeValidation({
+    repoPath: ctx.repoPath,
+    taskDir: ctx.taskDir,
+    config: ctx.config,
+    settings,
+  });
+  updateStatus(ctx.taskDir, {
+    runtime_validation: summarizeRuntimeValidation(state.runtimeValidation),
+  });
+  if (state.runtimeValidation.status !== "passed") {
+    state.failureCategory = "verification_failure";
+    state.finalStatus = "failed_verification";
+    state.finalError = state.runtimeValidation.error
+      ? `Runtime validation failed: ${state.runtimeValidation.error}`
+      : `Runtime validation failed for ${state.runtimeValidation.route_results.filter((result) => result.status === "failed").length} route/viewport check(s).`;
+  }
 }
 
 async function runVerification(ctx: TaskContext, state: ExecutionState): Promise<ExecutionState> {
@@ -394,9 +441,11 @@ async function runVerification(ctx: TaskContext, state: ExecutionState): Promise
           ? "Task was terminated by kill_task during verification."
           : "Task was canceled during verification.";
       } else if (interrupted?.terminationReason === "timeout" || Date.now() >= ctx.deadlineMs) {
+        state.failureCategory = "verification_failure";
         state.finalStatus = "timeout";
         state.finalError = `Task timed out after ${ctx.timeoutSeconds} seconds during verification.`;
       } else if (failedVerification) {
+        state.failureCategory = "verification_failure";
         state.finalStatus = "failed_verification";
         state.finalError = failedVerification.spawnError
           ? `Verification command "${failedVerification.command}" could not start: ${failedVerification.spawnError}`
@@ -420,20 +469,6 @@ async function runVerification(ctx: TaskContext, state: ExecutionState): Promise
 
 async function collectArtifacts(ctx: TaskContext, state: ExecutionState): Promise<ArtifactEvidence> {
   let cleanupReport: PostTaskCleanupReport = { enabled: true, removed: [], skipped: [], source_files_touched: 0 };
-  if (state.finalStatus !== "canceled") {
-    try {
-      cleanupReport = runPostTaskCleanup(ctx.repoPath, ctx.taskDir);
-      updateStatus(ctx.taskDir, { cleanup: cleanupReport });
-    } catch (error) {
-      cleanupReport = {
-        enabled: true, removed: [],
-        skipped: [{ path: ".", reason: "post_task_cleanup", skip_reason: errorMessage(error) }],
-        source_files_touched: 0,
-      };
-      atomicWriteJsonFileSync(join(ctx.taskDir, "post-task-cleanup.json"), cleanupReport);
-      updateStatus(ctx.taskDir, { cleanup: cleanupReport });
-    }
-  }
 
   setTaskPhase(ctx.taskDir, "collecting_artifacts", null, "Capturing post-task state and writing reports.");
   const artifactCollectionStartedAt = new Date().toISOString();
@@ -447,6 +482,7 @@ async function collectArtifacts(ctx: TaskContext, state: ExecutionState): Promis
       artifactController.abort(new Error("Artifact collection timed out"));
     }, ARTIFACT_COLLECTION_TIMEOUT_MS);
     const afterSnapshot = await captureRepoSnapshot(ctx.repoPath, artifactController.signal);
+    assertSnapshotComplete(afterSnapshot);
     writeSnapshot(ctx.taskDir, "git-after.json", afterSnapshot);
     changes = await buildChangeArtifacts(
       ctx.repoPath,
@@ -454,6 +490,12 @@ async function collectArtifacts(ctx: TaskContext, state: ExecutionState): Promis
       afterSnapshot,
       artifactController.signal,
     );
+    const sensitiveChanges = compareSensitiveSnapshots(ctx.beforeSnapshot, afterSnapshot);
+    if (sensitiveChanges.length > 0) {
+      state.finalStatus = "failed_policy_violation";
+      state.finalError = `Detected ${sensitiveChanges.length} sensitive path change(s) during task execution.`;
+      changes.unavailable_reason = state.finalError;
+    }
   } catch (error) {
     state.lastCaughtError = error;
     artifactCollectionError = errorMessage(error);
@@ -510,9 +552,20 @@ async function collectArtifacts(ctx: TaskContext, state: ExecutionState): Promis
   let newOutOfScopeChanges: ExternalDirtyFile[] = [];
   try {
     const afterWorkspaceSnapshot = ctx.repoPath === ctx.wsRoot ? await captureRepoSnapshot(ctx.repoPath) : await captureRepoSnapshot(ctx.wsRoot);
+    assertSnapshotComplete(afterWorkspaceSnapshot);
     writeSnapshot(ctx.taskDir, "workspace-after.json", afterWorkspaceSnapshot);
     const allExternalDirty = extractExternalDirtyFiles(afterWorkspaceSnapshot, ctx.repoPath, ctx.wsRoot);
     newOutOfScopeChanges = findNewExternalDirtyFiles(ctx.externalDirtyBaseline, allExternalDirty);
+    const sensitiveWorkspaceChanges = compareSensitiveSnapshots(ctx.beforeWorkspaceSnapshot, afterWorkspaceSnapshot)
+      .filter((path) => !isPathInside(resolve(ctx.wsRoot, path), ctx.repoPath));
+    for (const path of sensitiveWorkspaceChanges) {
+      newOutOfScopeChanges.push({
+        path,
+        change: "modified",
+        before_sha256: "sensitive-metadata-only",
+        after_sha256: "sensitive-metadata-changed",
+      });
+    }
     outOfScopeChanges = compareSnapshots(ctx.beforeWorkspaceSnapshot, afterWorkspaceSnapshot)
       .filter((file) =>
         !isPathInside(resolve(ctx.wsRoot, file.path), ctx.repoPath) ||
@@ -527,7 +580,38 @@ async function collectArtifacts(ctx: TaskContext, state: ExecutionState): Promis
     ? [`Pre-existing external dirty files (not caused by this task): ${preexistingExternalDirty.length} file(s)`]
     : [];
 
-  applyScopeViolationVerdict(ctx, state, changes, newOutOfScopeChanges, preexistingExternalDirty);
+  const changeAttribution = buildExternalChangeAttribution({
+    taskId: ctx.taskId,
+    runnerPid: process.pid,
+    agentChildPid: state.agentResult?.childPid,
+    preexisting: preexistingExternalDirty,
+    duringTask: newOutOfScopeChanges,
+  });
+  atomicWriteJsonFileSync(join(ctx.taskDir, "change-attribution.json"), changeAttribution);
+  applyScopeViolationVerdict(ctx, state, changes, newOutOfScopeChanges, preexistingExternalDirty, changeAttribution);
+
+  if (state.finalStatus !== "canceled") {
+    try {
+      const taskOwnedPaths = new Set(changeAttribution.changes
+        .filter((change) => change.attribution === "task_owned_change")
+        .map((change) => change.path));
+      cleanupReport = runPostTaskCleanup(
+        ctx.repoPath,
+        ctx.taskDir,
+        new Set(Object.keys(ctx.beforeSnapshot.files)),
+        taskOwnedPaths,
+      );
+      updateStatus(ctx.taskDir, { cleanup: cleanupReport });
+    } catch (error) {
+      cleanupReport = {
+        enabled: true, removed: [],
+        skipped: [{ path: ".", reason: "post_task_cleanup", skip_reason: errorMessage(error) }],
+        source_files_touched: 0,
+      };
+      atomicWriteJsonFileSync(join(ctx.taskDir, "post-task-cleanup.json"), cleanupReport);
+      updateStatus(ctx.taskDir, { cleanup: cleanupReport });
+    }
+  }
 
   atomicWriteFileSync(join(ctx.taskDir, "git.diff"), changes.diff);
   atomicWriteFileSync(join(ctx.taskDir, "diff.patch"), changes.diff);
@@ -535,6 +619,22 @@ async function collectArtifacts(ctx: TaskContext, state: ExecutionState): Promis
   const artifactManifest = await buildArtifactManifest(changes.changed_files, ctx.repoPath, ctx.taskId);
   atomicWriteJsonFileSync(join(ctx.taskDir, "artifact_manifest.json"), artifactManifest);
   const changedFileGroups = groupChangedFiles(changes.changed_files);
+  const projectFacts = validateProjectFacts(ctx.repoPath, changes.changed_files);
+  atomicWriteJsonFileSync(join(ctx.taskDir, "project-fact-validation.json"), projectFacts);
+  const frameworkValidation = validateFrameworks(ctx.repoPath);
+  atomicWriteJsonFileSync(join(ctx.taskDir, "framework-validation.json"), frameworkValidation);
+  const svgXmlValidation = validateChangedSvgXml(ctx.repoPath, changes.changed_files);
+  atomicWriteJsonFileSync(join(ctx.taskDir, "svg-xml-validation.json"), svgXmlValidation);
+  if (svgXmlValidation.errors > 0 && state.finalStatus === "done_by_agent") {
+    state.failureCategory = "verification_failure";
+    state.finalStatus = "failed_verification";
+    state.finalError = `SVG/XML validation failed with ${svgXmlValidation.errors} parser finding(s).`;
+  }
+  if (projectFacts.errors > 0 && state.finalStatus === "done_by_agent") {
+    state.failureCategory = "policy_block";
+    state.finalStatus = "failed_policy_violation";
+    state.finalError = `Project fact validation failed with ${projectFacts.errors} blocking finding(s).`;
+  }
   atomicWriteJsonFileSync(join(ctx.taskDir, "file-stats.json"), {
     task_id: ctx.taskId,
     additions: changes.additions,
@@ -545,7 +645,7 @@ async function collectArtifacts(ctx: TaskContext, state: ExecutionState): Promis
   return {
     changes, artifactStatus, artifactCollectionError, artifactCollectionStartedAt, artifactCollectionFinishedAt,
     outOfScopeChanges, newOutOfScopeChanges, preexistingExternalDirty, preexistingWarnings, cleanupReport,
-    artifactManifest, changedFileGroups,
+    artifactManifest, changedFileGroups, changeAttribution, projectFacts, frameworkValidation, svgXmlValidation,
   };
 }
 
@@ -555,8 +655,10 @@ function applyScopeViolationVerdict(
   changes: ChangeArtifacts,
   newOutOfScopeChanges: ExternalDirtyFile[],
   preexistingExternalDirty: ExternalDirtyFile[],
+  changeAttribution: ChangeAttributionReport,
 ): void {
-  if (newOutOfScopeChanges.length > 0) {
+  if (changeAttribution.counts.task_owned_change > 0) {
+    state.failureCategory = "scope_violation";
     state.finalStatus = "failed_scope_violation";
     state.finalError = `Detected ${newOutOfScopeChanges.length} new change(s) outside resolved_repo_path during task execution.`;
     atomicWriteJsonFileSync(join(ctx.taskDir, "rollback-plan.json"), {
@@ -574,14 +676,34 @@ function applyScopeViolationVerdict(
       "",
       "PatchWarden did not automatically roll back any file. Review concurrent or user-owned edits before acting.",
       "",
-      "## New out-of-scope files (caused by this task)",
+      "## Confirmed task-owned out-of-scope files",
       ...newOutOfScopeChanges.map((file) => `- ${file.change}: ${file.path}`),
       "",
     ].join("\n"));
+  } else if (changeAttribution.manual_scope_review_required) {
+    atomicWriteJsonFileSync(join(ctx.taskDir, "rollback-plan.json"), {
+      task_id: ctx.taskId,
+      status: "manual_scope_review",
+      automatic_rollback_performed: false,
+      auto_rollback_safe: false,
+      warning: "External changes lack process-scoped ownership evidence and were preserved for manual review.",
+      change_attribution: changeAttribution,
+    });
+    atomicWriteFileSync(join(ctx.taskDir, "rollback_scope_violation_plan.md"), [
+      "# Manual Scope Review",
+      "",
+      `Task: ${ctx.taskId}`,
+      "",
+      "No process-scoped filesystem event proves which process wrote these paths. PatchWarden did not roll back or delete them.",
+      ...newOutOfScopeChanges.map((file) => `- unattributed_change: ${file.path}`),
+      "",
+    ].join("\n"));
   } else if (changes.diff_redacted) {
+    state.failureCategory = "policy_block";
     state.finalStatus = "failed_policy_violation";
     state.finalError = "Credential-like content was detected in the task diff. PatchWarden redacted the evidence; remove the sensitive content before retrying.";
   } else if (ctx.changePolicy === "no_changes" && changes.changed_files.length > 0) {
+    state.failureCategory = "policy_block";
     state.finalStatus = "failed_policy_violation";
     state.finalError = `Task policy requires no repository changes, but detected ${changes.changed_files.length} change(s).`;
   }
@@ -590,11 +712,11 @@ function applyScopeViolationVerdict(
 function finalizeTask(ctx: TaskContext, state: ExecutionState, evidence: ArtifactEvidence): TaskRunResult {
   const { changes, artifactStatus, artifactCollectionError, artifactCollectionStartedAt, artifactCollectionFinishedAt,
     outOfScopeChanges, newOutOfScopeChanges, preexistingExternalDirty, preexistingWarnings, cleanupReport,
-    artifactManifest, changedFileGroups } = evidence;
+    artifactManifest, changedFileGroups, changeAttribution, projectFacts, frameworkValidation, svgXmlValidation } = evidence;
 
   atomicWriteFileSync(join(ctx.taskDir, "test.log"), buildTestLog(state.testResult));
   const verifyJson = buildVerifyJson(ctx.verifyCommands, state.verifyResults, ctx.repoPath, state.finalError !== null);
-  if (newOutOfScopeChanges.length > 0) {
+  if (changeAttribution.counts.task_owned_change > 0) {
     verifyJson.status = "failed";
     verifyJson.failure_reason = "scope_violation";
   } else if (state.finalStatus === "failed_policy_violation") {
@@ -607,7 +729,36 @@ function finalizeTask(ctx: TaskContext, state: ExecutionState, evidence: Artifac
   atomicWriteFileSync(join(ctx.taskDir, "verify.log"), buildVerifyLog(verifyJson));
 
   if (!["canceled", "timeout", "done_by_agent", "failed_verification", "failed_scope_violation", "failed_policy_violation"].includes(state.finalStatus)) state.finalStatus = "failed";
+  if (!state.failureCategory) {
+    if (state.finalStatus === "failed_verification") state.failureCategory = "verification_failure";
+    else if (state.finalStatus === "failed_scope_violation") state.failureCategory = "scope_violation";
+    else if (state.finalStatus === "failed_policy_violation") state.failureCategory = "policy_block";
+    else if (state.finalStatus === "failed") state.failureCategory = "environment_bootstrap_failure";
+  }
+  const failureEvidence = state.failureCategory ? failureCategoryEvidence(state.failureCategory) : null;
   const finalPhase: TaskPhase = state.finalStatus === "done_by_agent" ? "done_by_agent" : (state.finalStatus as TaskPhase);
+  const completionState = deriveCompletionState({
+    status: state.finalStatus,
+    verify_status: verifyJson.status,
+    runtime_validation: summarizeRuntimeValidation(state.runtimeValidation),
+    manual_scope_review_required: changeAttribution.manual_scope_review_required,
+    acceptance_status: state.finalStatus === "done_by_agent" ? "pending" : null,
+  });
+  const acceptanceReport = buildLowNoiseAcceptanceReport({
+    source_changes: changedFileGroups.source_changes.length + changedFileGroups.docs_changes.length + changedFileGroups.config_changes.length + changedFileGroups.test_changes.length,
+    generated_changes: (changes.artifact_hygiene.generated_changes?.length || 0) + (changes.artifact_hygiene.runtime_changes?.length || 0),
+    scope_violations: changeAttribution.counts.task_owned_change,
+    verification_commands: verifyJson.commands,
+    runtime_validation: summarizeRuntimeValidation(state.runtimeValidation),
+    completion_state: completionState,
+    audit: "not_run",
+    manual_items: [
+      ...(changeAttribution.manual_scope_review_required ? ["Review external change attribution before acceptance."] : []),
+      ...(projectFacts.warnings > 0 ? ["Review project fact warnings before publishing."] : []),
+      ...(frameworkValidation.warnings.length > 0 ? ["Review framework-specific validation warnings."] : []),
+    ],
+  });
+  atomicWriteJsonFileSync(join(ctx.taskDir, "acceptance-report.json"), acceptanceReport);
   const followup = buildFailureFollowup(state.finalStatus, state.finalError, verifyJson.commands);
 
   const androidDiagnostic = diagnoseAndroidBuild(ctx.repoPath);
@@ -640,11 +791,13 @@ function finalizeTask(ctx: TaskContext, state: ExecutionState, evidence: Artifac
     androidDiagnostic,
     androidWarning,
     preexistingWarnings,
+    changeAttribution,
+    runtimeValidation: state.runtimeValidation,
   });
   atomicWriteFileSync(join(ctx.taskDir, "result.md"), resultMd);
 
   const resultJson = buildResultJson({
-    ctx, state, evidence, verifyJson, followup, androidDiagnostic, androidWarning,
+    ctx, state, evidence, verifyJson, followup, androidDiagnostic, androidWarning, acceptanceReport,
   });
   atomicWriteJsonFileSync(join(ctx.taskDir, "result.json"), resultJson);
 
@@ -668,7 +821,13 @@ function finalizeTask(ctx: TaskContext, state: ExecutionState, evidence: Artifac
       ? "timeout"
       : state.finalStatus === "canceled" ? "canceled" : null,
     agent_failure_category: state.agentFailureCategory,
-    failure_category: state.agentFailureCategory,
+    failure_category: state.failureCategory,
+    failure_source: failureEvidence?.failure_source ?? null,
+    counts_against_agent: failureEvidence?.counts_against_agent ?? false,
+    fallback_eligible: failureEvidence?.fallback_eligible ?? false,
+    retryable: failureEvidence?.retryable ?? false,
+    completion_state: completionState,
+    acceptance_report: acceptanceReport,
     provider_error_reference: state.providerErrorReference,
     agent_failure_stderr_tail: state.agentFailureStderrTail,
     agent_runtime: state.agentRuntime,
@@ -682,6 +841,12 @@ function finalizeTask(ctx: TaskContext, state: ExecutionState, evidence: Artifac
     out_of_scope_changes: outOfScopeChanges,
     new_out_of_scope_changes: newOutOfScopeChanges,
     preexisting_external_dirty_files: preexistingExternalDirty,
+    change_attribution: changeAttribution,
+    manual_scope_review_required: changeAttribution.manual_scope_review_required,
+    runtime_validation: summarizeRuntimeValidation(state.runtimeValidation),
+    project_fact_validation: projectFacts,
+    framework_validation: frameworkValidation,
+    svg_xml_validation: svgXmlValidation,
     verify_status: verifyJson.status,
     verify_commands: ctx.verifyCommands,
     configured_verify_commands: ctx.verifyCommands,
@@ -726,11 +891,12 @@ function buildResultJson(input: {
   followup: ReturnType<typeof buildFailureFollowup>;
   androidDiagnostic: ReturnType<typeof diagnoseAndroidBuild>;
   androidWarning: string | null;
+  acceptanceReport: LowNoiseAcceptanceReport;
 }): Record<string, unknown> {
-  const { ctx, state, evidence, verifyJson, followup, androidDiagnostic, androidWarning } = input;
+  const { ctx, state, evidence, verifyJson, followup, androidDiagnostic, androidWarning, acceptanceReport } = input;
   const { changes, artifactStatus, artifactCollectionError, artifactCollectionStartedAt,
     artifactCollectionFinishedAt, outOfScopeChanges, newOutOfScopeChanges,
-    preexistingExternalDirty, cleanupReport, artifactManifest, changedFileGroups } = evidence;
+    preexistingExternalDirty, cleanupReport, artifactManifest, changedFileGroups, changeAttribution, projectFacts, frameworkValidation, svgXmlValidation } = evidence;
 
   return {
     schema_version: ARTIFACT_SCHEMA_VERSION,
@@ -748,10 +914,22 @@ function buildResultJson(input: {
       ? "timeout"
       : state.finalStatus === "canceled" ? "canceled" : null,
     agent_failure_category: state.agentFailureCategory,
-    failure_category: state.agentFailureCategory,
+    failure_category: state.failureCategory,
+    failure_source: state.failureCategory ? failureCategoryEvidence(state.failureCategory).failure_source : null,
+    counts_against_agent: state.failureCategory ? failureCategoryEvidence(state.failureCategory).counts_against_agent : false,
+    fallback_eligible: state.failureCategory ? failureCategoryEvidence(state.failureCategory).fallback_eligible : false,
+    retryable: state.failureCategory ? failureCategoryEvidence(state.failureCategory).retryable : false,
+    completion_state: deriveCompletionState({
+      status: state.finalStatus,
+      verify_status: verifyJson.status,
+      runtime_validation: summarizeRuntimeValidation(state.runtimeValidation),
+      manual_scope_review_required: changeAttribution.manual_scope_review_required,
+      acceptance_status: state.finalStatus === "done_by_agent" ? "pending" : null,
+    }),
+    acceptance_report: acceptanceReport,
     provider_error_reference: state.providerErrorReference,
     agent_failure: state.agentFailureCategory ? {
-      failure_category: state.agentFailureCategory,
+      agent_failure_category: state.agentFailureCategory,
       provider_error_reference: state.providerErrorReference,
       exit_code: state.agentRuntime?.exit_code ?? null,
       provider: state.agentRuntime?.provider ?? null,
@@ -760,6 +938,9 @@ function buildResultJson(input: {
     } : null,
     agent_runtime: state.agentRuntime,
     model_selection: state.agentRuntime ?? ctx.initialStatus.model_selection ?? null,
+    project_fact_validation: projectFacts,
+    framework_validation: frameworkValidation,
+    svg_xml_validation: svgXmlValidation,
     changed_files: changes.changed_files,
     changed_file_groups: {
       source_changes: changedFileGroups.source_changes.length,
@@ -779,6 +960,9 @@ function buildResultJson(input: {
     out_of_scope_changes: outOfScopeChanges,
     new_out_of_scope_changes: newOutOfScopeChanges,
     preexisting_external_dirty_files: preexistingExternalDirty,
+    change_attribution: changeAttribution,
+    manual_scope_review_required: changeAttribution.manual_scope_review_required,
+    runtime_validation: summarizeRuntimeValidation(state.runtimeValidation),
     target_repo_status: changes.workspace_dirty_after ? "dirty" : "clean",
     workspace_status: changes.workspace_dirty_after ? "dirty" : "clean",
     android_diagnostic: androidDiagnostic,
@@ -794,7 +978,8 @@ function buildResultJson(input: {
     commands_observed: [],
     verify: verifyJson,
     artifacts: [
-      "result.md", "result.json", "diff.patch", "git.diff", "test.log", "verify.log", "verify.json", "changed-files.json", "file-stats.json", "artifact_manifest.json", "post-task-cleanup.json",
+      "result.md", "result.json", "diff.patch", "git.diff", "test.log", "verify.log", "verify.json", "changed-files.json", "file-stats.json", "artifact_manifest.json", "post-task-cleanup.json", "change-attribution.json",
+      ...(state.runtimeValidation ? ["runtime-validation.json", ...state.runtimeValidation.screenshots] : []),
       ...(outOfScopeChanges.length > 0 ? ["rollback_scope_violation_plan.md", "rollback-plan.json"] : []),
       ...(artifactStatus !== "collected" ? ["partial_result.md"] : []),
     ],
@@ -805,6 +990,7 @@ function buildResultJson(input: {
         `Credential-like diff content was redacted (${(changes.diff_redaction_categories ?? []).join(", ") || "sensitive_content"}).`,
       ] : []),
       ...evidence.preexistingWarnings,
+      ...(changeAttribution.manual_scope_review_required ? ["External changes require manual scope review because process-scoped ownership evidence is unavailable."] : []),
       ...(androidWarning ? [androidWarning] : []),
     ],
     errors: state.finalError ? [state.finalError] : [],
@@ -878,6 +1064,22 @@ function buildFailureFollowup(
   };
 }
 
+function summarizeRuntimeValidation(report: RuntimeValidationReport | null): Record<string, unknown> | null {
+  if (!report) return null;
+  return {
+    status: report.status,
+    routes_checked: report.routes_checked,
+    viewports_checked: report.viewports_checked,
+    console_error_count: report.console_error_count,
+    broken_image_count: report.broken_image_count,
+    overflow_count: report.overflow_count,
+    screenshot_count: report.screenshots.length,
+    server_ready: report.server.ready,
+    server_terminated: report.server.terminated,
+    error: report.error,
+  };
+}
+
 async function runManagedProcess(options: {
   command: string;
   args: string[];
@@ -896,7 +1098,7 @@ async function runManagedProcess(options: {
   runnerInstanceId: string;
 }): Promise<ManagedProcessResult> {
   if (Date.now() >= options.deadlineMs) {
-    return { exitCode: null, stdout: "", stderr: "", spawnError: null, terminationReason: "timeout" };
+    return { childPid: null, exitCode: null, stdout: "", stderr: "", spawnError: null, terminationReason: "timeout" };
   }
 
   const exactRedactionValues = allowedEnvironmentValues(options.environmentVariableNames);
@@ -921,7 +1123,7 @@ async function runManagedProcess(options: {
       env,
     });
   } catch (error) {
-    return { exitCode: null, stdout: "", stderr: "", spawnError: errorMessage(error), terminationReason: null };
+    return { childPid: null, exitCode: null, stdout: "", stderr: "", spawnError: errorMessage(error), terminationReason: null };
   }
   // v0.7.0: record child_started_at immediately so diagnose_task can detect
   // PID reuse by comparing this timestamp with the live process start time.
@@ -1032,6 +1234,7 @@ async function runManagedProcess(options: {
   const safeStderr = redactProcessOutput(stderr, exactRedactionValues);
 
   return {
+    childPid: child.pid ?? null,
     exitCode,
     stdout: safeStdout.length > MAX_CAPTURE_CHARS ? safeStdout.slice(-MAX_CAPTURE_CHARS) : safeStdout,
     stderr: safeStderr.length > MAX_CAPTURE_CHARS ? safeStderr.slice(-MAX_CAPTURE_CHARS) : safeStderr,
@@ -1114,6 +1317,8 @@ function buildResultMarkdown(input: {
   androidDiagnostic?: { status: string; checks?: Array<{ check: string; status: string; reason: string }> };
   androidWarning?: string | null;
   preexistingWarnings?: string[];
+  changeAttribution?: ChangeAttributionReport;
+  runtimeValidation?: RuntimeValidationReport | null;
 }): string {
   const changed = input.changes.changed_files.length
     ? input.changes.changed_files.map((file) => `- ${file.change}: ${file.path}`).join("\n")
@@ -1159,6 +1364,32 @@ function buildResultMarkdown(input: {
   const preexistingSection = input.preexistingWarnings && input.preexistingWarnings.length > 0
     ? ["## Pre-existing Warnings", ...input.preexistingWarnings, ""].join("\n")
     : "";
+  const attributionSection = input.changeAttribution
+    ? [
+      "## External Change Attribution",
+      `- task_owned_change: ${input.changeAttribution.counts.task_owned_change}`,
+      `- concurrent_external_change: ${input.changeAttribution.counts.concurrent_external_change}`,
+      `- preexisting_change: ${input.changeAttribution.counts.preexisting_change}`,
+      `- unattributed_change: ${input.changeAttribution.counts.unattributed_change}`,
+      `- manual_scope_review_required: ${input.changeAttribution.manual_scope_review_required}`,
+      "- evidence: change-attribution.json",
+      "",
+    ].join("\n")
+    : "";
+  const runtimeSection = input.runtimeValidation
+    ? [
+      "## Runtime Validation",
+      `- status: ${input.runtimeValidation.status}`,
+      `- routes_checked: ${input.runtimeValidation.routes_checked}`,
+      `- viewports_checked: ${input.runtimeValidation.viewports_checked}`,
+      `- console_errors: ${input.runtimeValidation.console_error_count}`,
+      `- broken_images: ${input.runtimeValidation.broken_image_count}`,
+      `- horizontal_overflow_failures: ${input.runtimeValidation.overflow_count}`,
+      `- service_terminated: ${input.runtimeValidation.server.terminated}`,
+      "- evidence: runtime-validation.json",
+      "",
+    ].join("\n")
+    : "";
 
   return [
     "# PatchWarden Task Result",
@@ -1197,6 +1428,8 @@ function buildResultMarkdown(input: {
     "## Out-of-scope changes",
     outOfScope,
     "",
+    attributionSection,
+    runtimeSection,
     preexistingSection,
     androidSection,
     "## Summary",
@@ -1232,6 +1465,7 @@ function skippedTest(command: string, cwd: string, reason: string): TestExecutio
     finished_at: now,
     duration_ms: 0,
     skipped: true,
+    childPid: null,
     exitCode: null,
     stdout: "",
     stderr: reason,
@@ -1336,6 +1570,10 @@ function failBeforeExecution(taskId: string, taskDir: string, message: string, c
     ...structuredError,
   });
   const current = readStatus(join(taskDir, "status.json"));
+  const category: TaskFailureCategory = caughtError instanceof PatchWardenError && /sensitive|policy|self_modification|scope/i.test(caughtError.reason)
+    ? "policy_block"
+    : "environment_bootstrap_failure";
+  const categoryEvidence = failureCategoryEvidence(category);
   const now = new Date().toISOString();
   const verify: VerifyReport = {
     status: Array.isArray(current.verify_commands) && current.verify_commands.length > 0 ? "not_run" : "skipped",
@@ -1365,6 +1603,7 @@ function failBeforeExecution(taskId: string, taskDir: string, message: string, c
     repo_path: current.repo_path || "",
     resolved_repo_path: current.resolved_repo_path || "",
     summary: message,
+    ...categoryEvidence,
     changed_files: [],
     out_of_scope_changes: [],
     verify_status: verify.status,
@@ -1390,6 +1629,7 @@ function failBeforeExecution(taskId: string, taskDir: string, message: string, c
     status: "failed",
     phase: "failed",
     error: message,
+    ...categoryEvidence,
     finished_at: now,
     verify_status: verify.status,
     verify_commands: verify.configured_commands,

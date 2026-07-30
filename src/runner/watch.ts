@@ -314,6 +314,11 @@ async function tick() {
             const next = {
               ...current,
               status: "failed",
+              failure_category: "policy_block",
+              failure_source: "policy",
+              counts_against_agent: false,
+              fallback_eligible: false,
+              retryable: false,
               error: errMsg,
               updated_at: new Date().toISOString(),
             };

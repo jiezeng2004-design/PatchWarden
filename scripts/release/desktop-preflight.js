@@ -12,6 +12,7 @@ const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 const argv = process.argv.slice(2);
 const requireClean = argv.includes("--require-clean");
 const skipUiSmoke = argv.includes("--skip-ui-smoke");
+const withInstallers = argv.includes("--with-installers");
 
 function option(name) {
   const index = argv.indexOf(name);
@@ -100,7 +101,7 @@ const report = {
     electron: desktopPackage.devDependencies.electron,
     electron_builder: desktopPackage.devDependencies["electron-builder"],
   },
-  options: { require_clean: requireClean, skip_ui_smoke: skipUiSmoke },
+  options: { require_clean: requireClean, skip_ui_smoke: skipUiSmoke, with_installers: withInstallers },
   checks: [],
   package: null,
   runtime_manifest: null,
@@ -155,10 +156,11 @@ try {
   const desktopOutput = run("desktop tests", npmCommand, ["run", "desktop:test"]);
   const packageOutput = run("npm package surface", npmCommand, ["run", "verify:package"]);
   run("desktop staging", npmCommand, ["run", "desktop:stage"]);
-  run("Electron directory package", npmCommand, ["exec", "electron-builder", "--", "--win", "dir", "--x64", `--config.directories.output=${outputRoot}`], desktopRoot);
+  const electronTargets = withInstallers ? ["dir", "nsis", "zip"] : ["dir"];
+  run("Electron single-pass package", npmCommand, ["exec", "electron-builder", "--", "--win", ...electronTargets, "--x64", `--config.directories.output=${outputRoot}`], desktopRoot);
 
   report.package = {
-    npm_file_count: Number(packageOutput.match(/OK:\s+(\d+) package files/)?.[1] || 0),
+    npm_file_count: Number(packageOutput.match(/OK:\s+(\d+) (?:package )?files/)?.[1] || 0),
     root_unit_tests: Number([...unitOutput.matchAll(/tests\s+(\d+)/g)].at(-1)?.[1] || 0),
     desktop_tests: Number([...desktopOutput.matchAll(/tests\s+(\d+)/g)].at(-1)?.[1] || 0),
   };
@@ -175,8 +177,21 @@ try {
     throw new Error(`Packaged core has unexpected check scripts: ${packagedChecks.join(", ")}`);
   }
   const coreStats = directoryStats(packagedCore);
+  const unpackedStats = directoryStats(unpackedRoot);
+  const maxUnpackedBytes = 325 * 1024 * 1024;
+  if (unpackedStats.bytes > maxUnpackedBytes) {
+    throw new Error(`Desktop unpacked size budget exceeded: ${unpackedStats.bytes}/${maxUnpackedBytes} bytes.`);
+  }
+  const locales = readdirSync(join(unpackedRoot, "locales"), { withFileTypes: true })
+    .filter((entry) => entry.isFile()).map((entry) => entry.name).sort();
+  if (JSON.stringify(locales) !== JSON.stringify(["en-US.pak", "zh-CN.pak"])) {
+    throw new Error(`Unexpected Electron locales: ${locales.join(", ")}`);
+  }
   report.package.packaged_core_file_count = coreStats.files;
   report.package.packaged_core_size_bytes = coreStats.bytes;
+  report.package.unpacked_file_count = unpackedStats.files;
+  report.package.unpacked_size_bytes = unpackedStats.bytes;
+  report.package.electron_locales = locales;
 
   isolatedRoot = join(tmpdir(), `patchwarden-preflight-${process.pid}-${Date.now()}`);
   cpSync(packagedCore, isolatedRoot, { recursive: true });
@@ -197,6 +212,21 @@ try {
     size_bytes: readFileSync(executable).length,
     sha256: sha256(readFileSync(executable)),
   };
+  if (withInstallers) {
+    const deliverableNames = readdirSync(outputRoot)
+      .filter((name) => /^PatchWarden-(?:Setup|Portable)-.*-x64\.(?:exe|zip)$/i.test(name))
+      .sort();
+    if (deliverableNames.length !== 2) throw new Error(`Expected one installer and one portable ZIP, found: ${deliverableNames.join(", ")}`);
+    report.deliverables = deliverableNames.map((name) => {
+      const content = readFileSync(join(outputRoot, name));
+      return { name, size_bytes: content.length, sha256: sha256(content) };
+    });
+    writeFileSync(
+      join(outputRoot, "PatchWarden-Desktop-SHA256SUMS.txt"),
+      `${report.deliverables.map((item) => `${item.sha256}  ${item.name}`).join("\n")}\n`,
+      "utf8",
+    );
+  }
   report.status = "passed";
 } catch (error) {
   report.status = "failed";

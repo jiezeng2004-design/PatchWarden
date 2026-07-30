@@ -15,6 +15,7 @@ import { runDirectVerificationBundle } from "../direct/runDirectVerificationBund
 import { finalizeDirectSession } from "../direct/finalizeDirectSession.js";
 import { auditSession } from "../diagnostics/auditSession.js";
 import { syncFile } from "../workspace/syncFile.js";
+import { createDirectFile, deleteDirectFile, mkdirDirect, moveDirectFile } from "../workspace/directFileOperations.js";
 import {
   safeAuditDirectSession,
   safeDirectSummary,
@@ -79,6 +80,40 @@ export const directHandlers: ToolHandlerMap = {
         operations: parsePatchOperations(args?.operations),
       }),
     );
+  },
+
+  create_file: async (args) => {
+    guardDirectProfileEnabled();
+    return toResult(createDirectFile({
+      session_id: String(args?.session_id ?? ""),
+      path: String(args?.path ?? ""),
+      content: String(args?.content ?? ""),
+    }));
+  },
+
+  mkdir: async (args) => {
+    guardDirectProfileEnabled();
+    return toResult(mkdirDirect({ session_id: String(args?.session_id ?? ""), path: String(args?.path ?? "") }));
+  },
+
+  move_file: async (args) => {
+    guardDirectProfileEnabled();
+    return toResult(moveDirectFile({
+      session_id: String(args?.session_id ?? ""),
+      source_path: String(args?.source_path ?? ""),
+      target_path: String(args?.target_path ?? ""),
+      expected_source_sha256: String(args?.expected_source_sha256 ?? ""),
+    }));
+  },
+
+  delete_file: async (args) => {
+    guardDirectProfileEnabled();
+    return toResult(deleteDirectFile({
+      session_id: String(args?.session_id ?? ""),
+      path: String(args?.path ?? ""),
+      expected_sha256: String(args?.expected_sha256 ?? ""),
+      confirm_delete: args?.confirm_delete === true,
+    }));
   },
 
   run_verification: async (args) => {
