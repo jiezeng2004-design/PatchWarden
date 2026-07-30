@@ -56,22 +56,23 @@ evidence packs.
 
 ## Current Public Evidence
 
-Remote snapshot checked on 2026-07-23:
+Remote snapshot checked on 2026-07-30:
 
 - GitHub repository: `jiezeng2004-design/PatchWarden`
 - Stars: 2
 - Forks: 0
 - Open issues: 5
 - Open pull requests: 1
-- GitHub latest release: `v1.6.1`, published on 2026-07-23
-- npm latest dist-tag: `patchwarden@1.6.1`
+- GitHub latest release: `v1.6.7`, published on 2026-07-28
+- npm latest dist-tag: `patchwarden@1.6.7`
 
 Local workspace facts, kept separate from the public snapshot:
 
-- Local source version in `package.json`: `1.6.1`
-- Verified release commit: `2ab2b7405d89b12c4ef10febf56404de59c04053`
+- Local source version in `package.json`: `1.6.7`
+- Verified release commit: `69103b2b649e31ee2a8014f5d20616c5ad6b68ba`
+- Annotated tag object: `41b7f8393d79b058d8a6f42f29c44d7a152863ba`
 
-The local source, GitHub Release, and npm `latest` are synchronized at `v1.6.1`.
+The local source, GitHub Release, and npm `latest` are synchronized at `v1.6.7`.
 The GitHub Release contains reviewed Core and Windows Desktop assets plus
 SHA-256 manifests.
 
@@ -81,7 +82,7 @@ Repository-facing evidence already present:
 
 - `README.md` and `README.en.md` explain the MCP bridge model, safety boundary,
   setup, ChatGPT/Codex/OpenCode usage, and local data handling.
-- `CHANGELOG.md` records ongoing releases from the 1.0 line through 1.6.1.
+- `CHANGELOG.md` records ongoing releases from the 1.0 line through 1.6.7.
 - `SECURITY.md` directs vulnerability reports to GitHub private security
   advisories.
 - `CONTRIBUTING.md` documents local verification and safety expectations.

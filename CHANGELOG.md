@@ -2,7 +2,9 @@
 
 ## v1.6.7 (2026-07-28)
 
-> Release preparation only. This entry does not assert that v1.6.7 has been published to GitHub or npm.
+> Released on GitHub and npm on 2026-07-28. The annotated `v1.6.7` tag
+> peels to `69103b2b649e31ee2a8014f5d20616c5ad6b68ba`, which also matches the
+> published npm package's `gitHead`.
 
 ### Task lineage and audit correctness
 
