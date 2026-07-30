@@ -71,7 +71,9 @@ if(command==='run'){
     "-UnreadyRestartSeconds", "20",
     "-MaxReconnectAttempts", "2",
     "-SkipWatcher",
-  ], { cwd: root, env, encoding: "utf-8", timeout: 30_000 });
+  // The fixture deliberately performs two supervised attempts. Hosted Windows
+  // runners can spend most of the old 30-second budget launching PowerShell.
+  ], { cwd: root, env, encoding: "utf-8", timeout: 60_000 });
 
   if (result.error) throw result.error;
   const launcherOutput = `${result.stdout}\n${result.stderr}`;
