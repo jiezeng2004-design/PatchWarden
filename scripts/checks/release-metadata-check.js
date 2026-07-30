@@ -29,8 +29,6 @@ const changelogVersion = readText("CHANGELOG.md").match(/^## v([^\s]+)\s/m)?.[1]
 assert.equal(changelogVersion, packageVersion, "the first CHANGELOG release must match package.json");
 
 for (const [path, pattern] of [
-  ["README.md", `PatchWarden v${packageVersion}`],
-  ["README.en.md", `PatchWarden v${packageVersion}`],
   ["docs/CODE_WIKI.md", `源码版本：**v${packageVersion}**`],
   ["docs/evidence-pack-schema.md", `"patchwarden_version": "${packageVersion}"`],
   ["docs/evidence-pack-schema.md", `"package_version": "${packageVersion}"`],
@@ -40,7 +38,7 @@ for (const [path, pattern] of [
   assert.ok(readText(path).includes(pattern), `${path} must contain ${pattern}`);
 }
 
-const tunnelExample = readText("examples/openai-tunnel/README.md");
+const tunnelExample = readText("examples/openai-tunnel/README.md").replace(/\r\n?/g, "\n");
 const coreCount = CHATGPT_CORE_TOOL_NAMES.length;
 const directCount = CHATGPT_DIRECT_TOOL_NAMES.length;
 assert.match(

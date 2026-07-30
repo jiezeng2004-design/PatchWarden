@@ -12,7 +12,7 @@ Remote facts checked again on 2026-07-30 after the v1.6.7 release completed.
 | Remote `main` | `5192ee379158370e977b36ee071d40bd24450609` |
 | Annotated tag object | `41b7f8393d79b058d8a6f42f29c44d7a152863ba` |
 | Tag peeled commit | `69103b2b649e31ee2a8014f5d20616c5ad6b68ba` |
-| Local `package.json` | `patchwarden@1.6.7` |
+| Local `package.json` | `patchwarden@1.7.0` (release preparation) |
 | GitHub latest release | `v1.6.7` |
 | GitHub release URL | https://github.com/jiezeng2004-design/PatchWarden/releases/tag/v1.6.7 |
 | GitHub release published at | `2026-07-28T10:21:44Z` |
@@ -27,10 +27,11 @@ Remote facts checked again on 2026-07-30 after the v1.6.7 release completed.
 | Open issues | 5 |
 | Open pull requests | 1 |
 
-Conclusion: source, Git tag, GitHub Release, npm package version, and
-`dist-tags.latest` are independently verified at `v1.6.7`. The release tag
-intentionally remains on the reviewed release commit while `main` contains
-later documentation and dependency-maintenance commits.
+Conclusion: the local source is preparing `v1.7.0`. The Git tag, GitHub
+Release, npm package version, and `dist-tags.latest` are independently verified
+at `v1.6.7`; this document does not claim that v1.7.0 has been published. The
+v1.6.7 release tag intentionally remains on the reviewed release commit while
+`main` contains later documentation and dependency-maintenance commits.
 
 ## v1.6.7 Uploaded Asset Digests
 
@@ -65,9 +66,10 @@ npm.cmd view patchwarden version dist-tags --json
 The npm query was verified on 2026-07-30: `version=1.6.7`,
 `dist-tags.latest=1.6.7`, and `gitHead` equals the peeled tag commit.
 
-## v1.6.7 Save Verification
+## v1.7.0 Release Preparation Verification
 
-The post-release documentation save is checked locally with:
+The post-release documentation save and v1.7.0 metadata are checked locally
+with:
 
 ```powershell
 npm.cmd run build
@@ -77,19 +79,24 @@ npm.cmd run check:tool-manifest
 npm.cmd run check:direct-tool-manifest
 npm.cmd run check:search-tool-manifest
 npm.cmd run test:mcp
+npm.cmd run test:http-mcp
+npm.cmd run doctor:ci
+npm.cmd --prefix desktop test
+npm.cmd run pack:clean
 npm.cmd run verify:package
+npm.cmd pack --dry-run
 ```
 
 The save check is local-only. It does not connect to or restart a configured
 Core, Tunnel, Watcher, Desktop instance, and it does not recreate the formal
 release artifacts.
 
-Results from the 2026-07-29 isolated worktree save:
+Results from the 2026-07-30 isolated worktree save:
 
 - The standard `npm.cmd test` chain passed: security smoke 141/141, unit tests
   970 passed and 3 skipped, lifecycle smoke 22/22, and Control Center smoke
-  38/38; Doctor, Tunnel/Watcher supervisor, and Windows control checks also
-  passed.
+  38/38. Desktop tests passed 75/75, HTTP MCP passed 17/17, and Doctor reported
+  80 OK / 1 expected default-config warning / 0 FAIL.
 - Build, release metadata, and brand checks passed; the brand check scanned
   413 tracked files.
 - Core, Direct, and Search manifests passed at 26, 14, and 5 tools. Their
@@ -98,16 +105,33 @@ Results from the 2026-07-29 isolated worktree save:
   and `f9f5482b968992fda825e6094096f19241321c26743b878176ce63166c2ed20b`.
 - The isolated MCP smoke passed, including the disabled and enabled Direct
   profile paths.
-- Package manifest verification passed with 572 files and no private local
-  launchers.
+- Root and Desktop production dependency audits reported 0 vulnerabilities.
+  The Desktop development build chain retains 17 known advisories.
+- Clean release packaging passed with 573 files. Package manifest verification
+  passed with 572 files and no private local launchers; npm dry-run identified
+  the unpublished package as `patchwarden-1.7.0.tgz`.
 - A read-only local-link scan resolved 190 links across 50 tracked Markdown
   files, and PyYAML parsed all 6 tracked YAML files.
+- An in-memory Windows CRLF simulation passed the exact Core/Direct manifest
+  assertions that previously failed in GitHub Actions.
 
-## Release Verification Checklist
+## v1.7.0 Release Preparation Checklist
 
-- [x] Confirm the target version in `package.json`.
+- [x] Align Core, Desktop, lock files, examples, and source-facing docs at
+      `1.7.0`.
+- [x] Run the complete local test, manifest, Doctor, package, link, and YAML
+      checks.
+- [ ] Merge the reviewed PR after all remote CI checks pass.
+- [ ] Create the annotated `v1.7.0` tag and reviewed GitHub Release.
+- [ ] Publish `patchwarden@1.7.0` manually to npm.
+- [ ] Verify the remote tag, GitHub Release, npm `gitHead`, and
+      `dist-tags.latest` independently.
+
+## v1.6.7 Release Verification Checklist
+
+- [x] Confirm the target version in `package.json` at the v1.6.7 release commit.
 - [x] Confirm `src/version.ts`, package metadata, README version text, and
-      changelog agree.
+      changelog agree at the v1.6.7 release commit.
 - [x] Run the complete local gate chain from `AGENTS.md`.
 - [x] Open a PR and wait for the GitHub CI gate.
 - [x] Merge only after review.

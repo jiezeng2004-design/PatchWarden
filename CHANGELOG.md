@@ -1,5 +1,17 @@
 # PatchWarden CHANGELOG
 
+## v1.7.0 (Unreleased)
+
+> Release preparation only. This entry does not assert that v1.7.0 has been
+> published to GitHub or npm.
+
+### Release metadata integrity
+
+- Align Core, Desktop, package-lock, documentation, and example metadata at
+  v1.7.0 while keeping the published v1.6.7 release evidence explicit.
+- Add a release metadata drift check for package versions and Core/Direct tool
+  counts, including Windows CRLF-compatible documentation validation.
+
 ## v1.6.7 (2026-07-28)
 
 > Released on GitHub and npm on 2026-07-28. The annotated `v1.6.7` tag
