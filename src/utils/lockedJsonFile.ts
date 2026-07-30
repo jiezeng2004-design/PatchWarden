@@ -204,7 +204,11 @@ function removeStaleLock(lockPath: string, corruptLockStaleMs: number): boolean 
   const lock = readLock(lockPath);
   let ageMs: number;
   try {
-    ageMs = Date.now() - statSync(lockPath).mtimeMs;
+    // A freshly-created entry can report an mtime fractionally ahead of
+    // Date.now() on filesystems with coarse or differently synchronized clocks.
+    // Treat that as age zero so a caller asking for immediate corrupt-lock
+    // recovery is not forced to wait for the regular busy timeout.
+    ageMs = Math.max(0, Date.now() - statSync(lockPath).mtimeMs);
   } catch (error) {
     if (errorCode(error) === "ENOENT") return true;
     throw error;

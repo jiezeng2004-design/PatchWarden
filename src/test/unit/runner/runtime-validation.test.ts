@@ -8,13 +8,14 @@ import { reloadConfig } from "../../../config.js";
 import { runRuntimeValidation } from "../../../validation/runtimeValidation.js";
 
 const roots: string[] = [];
+const runtimeBrowserAvailable = await canLaunchRuntimeBrowser();
 
 afterEach(() => {
   reloadConfig();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("controlled browser runtime validation", () => {
+describe("controlled browser runtime validation", { skip: !runtimeBrowserAvailable }, () => {
   it("captures positive route evidence and terminates its owned server", { timeout: 30_000 }, async () => {
     const fixture = await createFixture(["/good"]);
     const report = await runRuntimeValidation(fixture);
@@ -40,6 +41,26 @@ describe("controlled browser runtime validation", () => {
     assert.equal(report.server.terminated, true);
   });
 });
+
+async function canLaunchRuntimeBrowser(): Promise<boolean> {
+  try {
+    const { chromium } = await import("playwright-core");
+    for (const channel of ["msedge", "chrome", undefined] as const) {
+      let browser = null;
+      try {
+        browser = await chromium.launch({ headless: true, ...(channel ? { channel } : {}) });
+        return true;
+      } catch {
+        // The production validator reports this failure when explicitly enabled.
+      } finally {
+        await browser?.close().catch(() => {});
+      }
+    }
+  } catch {
+    // The optional runtime smoke has no browser dependency in this environment.
+  }
+  return false;
+}
 
 async function createFixture(routes: string[]) {
   const root = mkdtempSync(join(tmpdir(), "patchwarden-runtime-validation-"));

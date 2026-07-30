@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { spawn } from "node:child_process";
-import fs, { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import fs, { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -109,6 +109,8 @@ describe("locked JSON file", () => {
     });
 
     mkdirSync(`${jsonFile}.lock`);
+    const future = new Date(Date.now() + 1_000);
+    utimesSync(`${jsonFile}.lock`, future, future);
     withFileLockSync(jsonFile, () => undefined, { corruptLockStaleMs: 0 });
     assert.equal(existsSync(`${jsonFile}.lock`), false);
 
