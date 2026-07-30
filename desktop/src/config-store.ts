@@ -40,6 +40,9 @@ export interface DesktopPaths {
   readonly logs: string;
   readonly credential: string;
   readonly tunnelSetupStatus: string;
+  readonly modelCatalogCache: string;
+  readonly modelProbeCache: string;
+  readonly modelProbeRoot: string;
 }
 
 /** Agent selection submitted by the renderer. */
@@ -47,6 +50,7 @@ export interface AgentSelection {
   readonly id: string;
   readonly enabled?: boolean;
   readonly model?: string | null;
+  readonly envAllowlist?: readonly string[];
 }
 
 /** Agent settings read from the PatchWarden config. */
@@ -56,6 +60,9 @@ export interface AgentSetting {
   readonly managed: boolean;
   readonly enabled: boolean;
   readonly model: string | null;
+  readonly availableModels: readonly string[];
+  readonly allowUnlistedModelOverride: boolean;
+  readonly envAllowlist: readonly string[];
 }
 
 /** Top-level PatchWarden config schema (subset used by desktop). */
@@ -101,6 +108,9 @@ export function resolveDesktopPaths(env: NodeJS.ProcessEnv, userDataPath: string
     logs: env.LOCALAPPDATA ? join(env.LOCALAPPDATA, "patchwarden", "control-center") : join(userDataPath, "control-center"),
     credential: env.APPDATA ? join(env.APPDATA, "patchwarden", "control-plane-api-key.dpapi") : join(localRoot, "control-plane-api-key.dpapi"),
     tunnelSetupStatus: join(localRoot, "tunnel-setup-status.json"),
+    modelCatalogCache: join(localRoot, "agent-model-catalog-cache.json"),
+    modelProbeCache: join(localRoot, "agent-model-probe-cache.json"),
+    modelProbeRoot: join(localRoot, "model-probes"),
   };
 }
 
@@ -208,6 +218,9 @@ export function readAgentSettings(configPath: string): AgentSetting[] {
       model: typeof agent.default_model === "string"
         ? agent.default_model
         : typeof agent.model === "string" ? agent.model : inferredModel || null,
+      availableModels: normalizeModelList(agent.available_models),
+      allowUnlistedModelOverride: agent.allow_unlisted_model_override !== false,
+      envAllowlist: normalizeEnvironmentNames(agent.envAllowlist, reservedEnvironmentNames(config)),
     };
   });
 }
@@ -230,14 +243,24 @@ export function updateAgentSettings(configPath: string, detections: readonly Age
     if ((!detection?.available || !detection.command) && nextAgents[adapter.id]) {
       continue;
     }
-    const previousEnvAllowlist = nextAgents[adapter.id]?.envAllowlist;
     const previous = nextAgents[adapter.id];
+    const envAllowlist = selection.envAllowlist === undefined
+      ? normalizeEnvironmentNames(previous?.envAllowlist, reservedEnvironmentNames(config))
+      : normalizeEnvironmentNames(selection.envAllowlist, reservedEnvironmentNames(config));
+    const separatesCatalogFromAllowlist = adapter.id === "codex" || adapter.id === "opencode" || adapter.id === "claude";
+    const availableModels = previous
+      ? normalizeModelList(previous.available_models)
+      : !separatesCatalogFromAllowlist && selection.model ? [selection.model] : [];
+    if (selection.model && previous?.allow_unlisted_model_override === false && !availableModels.includes(selection.model)) {
+      availableModels.push(selection.model);
+    }
     nextAgents[adapter.id] = {
       ...buildAgentRegistration(adapter.id, detection, selection.model),
-      ...(Array.isArray(previousEnvAllowlist) ? { envAllowlist: [...previousEnvAllowlist] } : {}),
+      // The cached CLI catalog is separate from Core's execution allowlist.
+      available_models: availableModels,
+      ...(envAllowlist.length > 0 ? { envAllowlist } : {}),
       ...(previous?.provider ? { provider: previous.provider } : {}),
       ...(previous?.settings_policy ? { settings_policy: previous.settings_policy } : {}),
-      ...(Array.isArray(previous?.available_models) ? { available_models: [...previous.available_models] } : {}),
       ...(typeof previous?.allow_unlisted_model_override === "boolean"
         ? { allow_unlisted_model_override: previous.allow_unlisted_model_override }
         : {}),
@@ -312,6 +335,44 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function asPatchwardenConfig(value: unknown): PatchwardenConfig | null {
   return isRecord(value) ? value as PatchwardenConfig : null;
+}
+
+const RESERVED_ENVIRONMENT_NAMES = new Set(["CONTROL_PLANE_API_KEY", "PATCHWARDEN_OWNER_TOKEN"]);
+
+function reservedEnvironmentNames(config: PatchwardenConfig): Set<string> {
+  const names = new Set(RESERVED_ENVIRONMENT_NAMES);
+  const http = asRecord(config.http);
+  if (typeof http.ownerTokenEnv === "string") names.add(http.ownerTokenEnv.toUpperCase());
+  return names;
+}
+
+function normalizeEnvironmentNames(value: unknown, reserved: ReadonlySet<string>): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("Agent envAllowlist 配置无效");
+  const names = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(item)) {
+      throw new Error("Agent envAllowlist 必须仅包含环境变量名称");
+    }
+    const normalized = item.toUpperCase();
+    if (reserved.has(normalized)) throw new Error("Agent envAllowlist 不能包含 PatchWarden 保留变量");
+    names.add(item);
+  }
+  return [...names];
+}
+
+function normalizeModelList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const models = new Set<string>();
+  for (const item of value) {
+    try {
+      const model = validateModelId(item);
+      if (model) models.add(model);
+    } catch {
+      // A malformed legacy item is ignored in the Desktop display; Core still validates on load.
+    }
+  }
+  return [...models];
 }
 
 export function atomicWriteJson(path: string, value: unknown, backup: boolean = true): void {

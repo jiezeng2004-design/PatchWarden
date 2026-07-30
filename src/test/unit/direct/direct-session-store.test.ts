@@ -137,6 +137,49 @@ describe("Direct session store", () => {
     assert.equal(existsSync(join(sessionDir, "workspace-mutation.lock")), false);
   });
 
+  it("serializes Direct mutations across sessions for the same repository", async () => {
+    root = mkdtempSync(join(tmpdir(), "patchwarden-direct-repo-lock-"));
+    const repoPath = join(root, "repo");
+    const otherRepoPath = join(root, "other-repo");
+    const sessionsDir = join(root, ".patchwarden", "direct-sessions");
+    const configPath = join(root, "patchwarden.config.json");
+    const firstSessionId = "direct-repo-lock-first";
+    const secondSessionId = "direct-repo-lock-second";
+    const otherSessionId = "direct-repo-lock-other";
+    mkdirSync(repoPath, { recursive: true });
+    mkdirSync(otherRepoPath, { recursive: true });
+    for (const [sessionId, resolvedRepoPath] of [
+      [firstSessionId, repoPath],
+      [secondSessionId, repoPath],
+      [otherSessionId, otherRepoPath],
+    ] as const) {
+      const sessionDir = join(sessionsDir, sessionId);
+      mkdirSync(sessionDir, { recursive: true });
+      writeFileSync(
+        join(sessionDir, "session.json"),
+        JSON.stringify(makeSession(sessionId, resolvedRepoPath)),
+        "utf-8",
+      );
+    }
+    writeFileSync(configPath, JSON.stringify({ workspaceRoot: root }), "utf-8");
+    process.env.PATCHWARDEN_CONFIG = configPath;
+    reloadConfig();
+
+    let otherRepoRan = false;
+    await withDirectSessionMutationLockAsync(firstSessionId, async () => {
+      await assert.rejects(
+        withDirectSessionMutationLockAsync(secondSessionId, async () => undefined),
+        (error: unknown) =>
+          error instanceof PatchWardenError && error.reason === "direct_session_busy",
+      );
+      await withDirectSessionMutationLockAsync(otherSessionId, async () => {
+        otherRepoRan = true;
+      });
+    });
+
+    assert.equal(otherRepoRan, true);
+  });
+
   it("waits beyond the generic two-second budget for bounded metadata contention", { timeout: 10_000 }, async () => {
     root = mkdtempSync(join(tmpdir(), "patchwarden-direct-record-wait-"));
     const repoPath = join(root, "repo");
@@ -506,6 +549,8 @@ function makeSession(sessionId: string, repoPath: string): DirectSessionRecord {
     server_version: "test",
     schema_epoch: "test",
     tool_manifest_sha256: "test",
+    direct_review_policy_sha256: "test",
+    requester_agent: "chatgpt",
     workspace_snapshot_before: {
       captured_at: now,
       is_git: false,
@@ -521,6 +566,7 @@ function makeSession(sessionId: string, repoPath: string): DirectSessionRecord {
     expected_changes: true,
     operations: [],
     verification_runs: [],
+    review_events: [],
     finalized: false,
     finalized_at: null,
     audited: false,

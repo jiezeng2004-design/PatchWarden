@@ -188,6 +188,21 @@ describe("safeViews", () => {
         finished_at: new Date().toISOString(),
         log_path: join(sessionDir, "verification.log"),
       }],
+      review_events: [...Array.from({ length: 12 }, (_, index) => ({
+        review_id: `direct_review_20260730_120000_${String(index % 10).repeat(32)}`,
+        operation_type: "patch",
+        proposal_sha256: String(index % 10).repeat(64),
+        mode: "enforce",
+        risk_level: "medium",
+        decision: "needs_approval",
+        status: "executed",
+        reviewer_agent: "reviewer",
+        reviewer_status: "completed",
+        outer_approval_required: true,
+        reason_codes: [index === 11 ? `credential=${"ghp_" + "x".repeat(32)}` : `reason_${index}`],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })), { status: "executed", reason_codes: "not-an-array" }],
       finalized: true,
       finalized_at: new Date().toISOString(),
       audited: false,
@@ -209,13 +224,24 @@ describe("safeViews", () => {
     };
     writeFileSync(join(sessionDir, "session.json"), JSON.stringify(session, null, 2), "utf-8");
 
+    const summary = safeDirectSummary(sessionId, { max_items: 2 });
+    const audit = safeAuditDirectSession(sessionId, { max_items: 2 });
     const payload = JSON.stringify({
-      summary: safeDirectSummary(sessionId),
-      audit: safeAuditDirectSession(sessionId),
+      summary,
+      audit,
     });
     assert.ok(!payload.includes("SECRET_DIRECT_STDOUT"));
     assert.ok(!payload.includes("SECRET_DIRECT_STDERR"));
     assert.ok(!payload.includes("SECRET_DIRECT_DIFF"));
+    assert.ok(!payload.includes("ghp_" + "x".repeat(32)));
     assert.ok(payload.includes("npm test"));
+    assert.equal(summary.direct_review.total, 13);
+    assert.equal(summary.direct_review.returned, 2);
+    assert.equal(summary.direct_review.truncated, true);
+    assert.equal(summary.direct_review.invalid_dropped, 1);
+    assert.equal(summary.direct_review.outer_approval_required_unattested, 12);
+    assert.equal(summary.direct_review.events[0]?.outer_approval_attested, false);
+    assert.equal(audit.evidence.direct_review.returned, 2);
+    assert.equal(audit.evidence.direct_review.truncated, true);
   });
 });

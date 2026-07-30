@@ -24,6 +24,7 @@ function makeConfig(workspaceRoot: string): PatchWardenConfig {
     directSessionTtlSeconds: 3600,
     directMaxPatchBytes: 200_000,
     directMaxFileBytes: 500_000,
+    directReview: { mode: "off", autoReviewRequired: true, ttlSeconds: 300 },
   };
 }
 

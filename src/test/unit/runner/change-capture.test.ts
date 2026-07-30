@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -97,6 +97,22 @@ describe("change capture cancellation", () => {
       const captured = await captureRepoSnapshot(root);
       assert.equal(captured.integrity?.complete, false);
       assert.ok(captured.integrity?.failure_codes.includes("sensitive_path_dirty"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("captures bounded ignored artifact evidence from generated directories", async () => {
+    const root = mkdtempSync(join(tmpdir(), "patchwarden-artifact-snapshot-"));
+    try {
+      const initialized = spawnSync("git", ["init", "--quiet"], { cwd: root, encoding: "utf8", windowsHide: true });
+      assert.equal(initialized.status, 0, initialized.stderr);
+      mkdirSync(join(root, "coverage"), { recursive: true });
+      writeFileSync(join(root, ".gitignore"), "coverage/\n", "utf8");
+      writeFileSync(join(root, "coverage", "summary.txt"), "artifact\n", "utf8");
+      const captured = await captureRepoSnapshot(root);
+      assert.equal(captured.files["coverage/summary.txt"]?.ignored, true);
+      assert.equal(captured.files["coverage/summary.txt"]?.sha256.length, 64);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

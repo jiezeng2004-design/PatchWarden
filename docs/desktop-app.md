@@ -60,12 +60,68 @@ Qwen Code, Kimi Code, and Aider. Settings detects only verified native
 executables or known npm package entry points and never launches Windows shell
 shims through a command shell.
 
-Model discovery reads only allowlisted model fields from each agent's normal
-JSON/JSONC, TOML, or YAML settings. It does not read `.env`, API keys, browser
-state, provider secrets, or session history. Online model listing is never run
-automatically; the user must select the refresh control for an agent that
-supports a bounded model-list command. Choosing **Follow agent default** omits
-the model argument so the agent retains its own precedence rules.
+The Settings page reports CLI state, configuration source, model catalog,
+current effective model, and Provider-check state independently:
+
+- **CLI** says whether a trusted executable was detected.
+- **Model catalog** says whether model IDs came from local configuration, an
+  explicit OpenCode refresh cache, an empty result, or have not been checked.
+- **Provider check** reports only the result of an explicit bounded check for
+  the currently selected model. Catalog presence is not proof that a provider
+  will accept the model.
+
+Codex and Claude use **Reload local model catalog**. This reparses their normal
+JSON/JSONC, TOML, or YAML settings and extracts only allowlisted model fields;
+it does not launch either CLI. OpenCode uses a separate **Refresh model list**
+action because it is the only primary adapter with a bounded catalog command.
+That command runs only after the user clicks refresh, in a Desktop-owned
+temporary directory, with a bounded environment and timeout. Its normalized
+model IDs are cached for at most 24 hours per workspace and executable
+fingerprint. No online model listing runs when Settings opens or receives
+focus.
+
+The remaining five adapters keep their previous local discovery and bounded
+refresh behavior. Their results are process-local: this change does not add a
+persistent catalog or a Provider probe for Gemini, Copilot, Qwen, Kimi, or
+Aider.
+
+The remaining supported adapters keep their existing explicit refresh action
+when their adapter defines a bounded model-list command. They are not given the
+Codex/Claude configuration-only action, and none of these commands runs on page
+load or focus.
+
+The shield action checks the model currently shown in the selector, including
+an unsaved custom model ID. Codex runs ephemerally in a read-only sandbox;
+Claude runs in plan mode without session persistence, tools, or inherited MCP
+servers. Both checks use a nonce, an isolated temporary HOME/AppData/config
+tree, bounded UTF-8 output, and a timeout. A Codex response must equal the
+nonce; Claude must return it in the JSON result field, so echoing the prompt is
+not accepted. Probe status is displayed for at most 15 minutes. OpenCode fails
+closed as **safe probe unsupported** until its CLI offers an equivalent
+no-tools mode. The renderer can submit only `{agentId, modelId}` and receives a
+fixed reason code plus bounded metadata, not probe stdout or stderr. Unknown
+reason codes are shown as a generic failure instead of raw backend text.
+
+Choosing **Follow agent default** omits the model argument so the agent retains
+its own precedence rules. Saving a different model is separate from catalog
+refresh and provider verification; Settings reports whether the running backend
+applied it or needs a restart. For Codex, OpenCode, and Claude, a default model
+is separate from Core's restricted execution allow-list. When restricted mode
+is active, an explicit new selection is preflighted with Core's own model
+validator and then appended to `available_models` before the atomic save.
+
+Each managed Agent also has an optional runtime environment allow-list. The
+field accepts comma-separated variable names matching `NAME` syntax; entries
+such as `NAME=value` are rejected. Desktop configuration stores names only.
+The renderer receives each configured name plus a `present` boolean, never the
+environment value. When an owned Agent process is launched, only explicitly
+allowlisted names may be copied from the main-process environment, and
+PatchWarden Control/Tunnel owner credential names remain blocked.
+
+Model discovery and management do not read `.env`, browser state, session
+history, SSH material, or credential stores. Extracted configuration fields,
+catalog caches, probe records, IPC responses, and UI status text contain no API
+key, token, cookie, or provider-secret values.
 
 Claude registrations default to `settings_policy: "inherit"`. This deliberately preserves existing Claude user/project settings and relay-provider configurations. `settings_policy: "isolated"` is opt-in and makes Core launch Claude without user/project/local setting sources. Desktop preserves `provider`, model allow-list, override policy, and settings policy when it refreshes an existing managed registration; it never copies provider credentials into PatchWarden configuration.
 

@@ -40,6 +40,31 @@ describe("controlled browser runtime validation", { skip: !runtimeBrowserAvailab
     assert.equal(report.overflow_count > 0, true);
     assert.equal(report.server.terminated, true);
   });
+
+  it("fails navigation even when console checking is disabled", { timeout: 30_000 }, async () => {
+    const fixture = await createFixture(["/drop"]);
+    const report = await runRuntimeValidation({
+      ...fixture,
+      settings: { ...fixture.settings, checkConsoleErrors: false },
+    });
+
+    assert.equal(report.status, "failed");
+    assert.equal(report.route_results[0]?.navigation_error?.startsWith("navigation:"), true);
+    assert.equal(report.server.terminated, true);
+  });
+
+  it("keeps route screenshot evidence distinct for query variants", { timeout: 30_000 }, async () => {
+    const fixture = await createFixture(["/good"]);
+    const report = await runRuntimeValidation({
+      ...fixture,
+      settings: { ...fixture.settings, routes: ["/good?theme=light", "/good?theme=dark"] },
+    });
+
+    assert.equal(report.status, "passed", report.error || JSON.stringify(report.route_results));
+    assert.equal(report.screenshots.length, 4);
+    assert.equal(new Set(report.screenshots).size, 4);
+    assert.ok(report.screenshots.every((path) => existsSync(join(fixture.taskDir, path))));
+  });
 });
 
 async function canLaunchRuntimeBrowser(): Promise<boolean> {
@@ -74,6 +99,7 @@ import http from "node:http";
 const port = Number(process.argv[2]);
 const server = http.createServer((req, res) => {
   res.setHeader("content-type", "text/html; charset=utf-8");
+  if (req.url === "/drop") { req.socket.destroy(); return; }
   if (req.url === "/missing.png") { res.statusCode = 404; res.end("missing"); return; }
   if (req.url === "/bad") {
     res.end('<!doctype html><meta charset="utf-8"><script>console.error("runtime fixture error")</script><img src="/missing.png"><div style="width:200vw">wide</div>');

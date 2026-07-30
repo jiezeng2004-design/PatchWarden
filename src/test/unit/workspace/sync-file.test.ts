@@ -30,6 +30,7 @@ function makeConfig(workspaceRoot: string): PatchWardenConfig {
     directSessionTtlSeconds: 3600,
     directMaxPatchBytes: 200_000,
     directMaxFileBytes: 500_000,
+    directReview: { mode: "off", autoReviewRequired: true, ttlSeconds: 300 },
   };
 }
 
@@ -95,6 +96,20 @@ describe("syncFile", () => {
     assert.equal(operation?.before_sha256, null);
     assert.equal(operation?.after_sha256, result.after_target_sha256);
     assert.equal(operation?.operations_applied, 1);
+  });
+
+  it("fails closed before writing when Direct review enforcement is enabled", () => {
+    config.directReview.mode = "enforce";
+    mkdirSync(join(repoPath, "src"), { recursive: true });
+    writeFileSync(join(repoPath, "src", "file.ts"), "content", "utf-8");
+
+    assert.throws(
+      () => syncFile(sessionId, "src/file.ts", "dst/file.ts", undefined, config),
+      (err: unknown) => err instanceof PatchWardenError
+        && err.reason === "direct_review_sync_not_supported",
+    );
+    assert.equal(existsSync(join(repoPath, "dst", "file.ts")), false);
+    assert.equal(readDirectSession(sessionId, config).operations.length, 0);
   });
 
   it("returns changed=false when target already has same content", () => {

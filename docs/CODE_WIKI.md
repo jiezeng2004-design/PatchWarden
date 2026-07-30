@@ -1,7 +1,7 @@
 # PatchWarden Code Wiki
 
 > 本文档是对 PatchWarden 仓库的结构化代码导览，覆盖项目整体架构、主要模块职责、关键类与函数说明、依赖关系、运行方式，以及现有缺陷分析。
-> 源码版本：**v1.7.0** · Schema Epoch：`2026-07-26-v16` · 集成复核日期：2026-07-30 · License：MIT
+> 源码版本：**v1.7.1** · Schema Epoch：`2026-07-26-v16` · 集成复核日期：2026-07-30 · License：MIT
 
 ## 目录
 
@@ -91,7 +91,7 @@ ChatGPT / Codex / OpenCode / 其他 MCP 客户端
 
 | Profile | 工具数 | 用途 |
 | --- | --- | --- |
-| `full` | 70 | 本地完整开发目录，包含核心、管理、Direct 工具 |
+| `full` | 71 | 本地完整开发目录，包含核心、管理、Direct 工具 |
 | `chatgpt_core` | 26 | ChatGPT Tunnel 固定的核心工具集 |
 | `chatgpt_direct` | 18 | ChatGPT 直接编辑模式，需 `enableDirectProfile: true` |
 | `chatgpt_search` | 5 | 动态工具发现场景（discover/explain/invoke） |
@@ -453,7 +453,7 @@ v1.6.0 引入的 Electron 桌面应用，作为 Control Center 的 Windows GUI �
 | id | displayName | npmPackage / nativePackage | buildArgs | refreshArgs |
 | --- | --- | --- | --- | --- |
 | `codex` | Codex CLI | `@openai/codex` | `exec --cd {repo} --model <m> {prompt}` | — |
-| `opencode` | OpenCode | native `opencode-ai` | `run --model <m> {prompt}` | `models` |
+| `opencode` | OpenCode | native `opencode-ai` | `run --model <m> {prompt}` | `--pure models` |
 | `claude` | Claude Code | `@anthropic-ai/claude-code` | `--print --permission-mode acceptEdits --model <m> {prompt}` | — |
 | `gemini` | Gemini CLI | `@google/gemini-cli` | `--prompt {prompt} --approval-mode auto_edit --model <m>` | — |
 | `copilot` | GitHub Copilot CLI | `@github/copilot` | `-p {prompt} --allow-tool write --deny-tool shell --model <m>` | `help` |

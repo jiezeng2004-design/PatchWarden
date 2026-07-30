@@ -40,6 +40,44 @@
     var option = document.createElement("option"); option.value = value; option.textContent = label; select.appendChild(option);
   }
 
+  var SAFE_MODEL_REASONS = new Set([
+    "ok", "not_checked", "catalog_empty", "agent_unavailable", "refresh_unsupported",
+    "refresh_timed_out", "refresh_failed", "unsupported_safe_probe", "probe_timed_out",
+    "authentication_failed", "model_rejected", "probe_failed", "probe_output_invalid",
+    "invalid_model", "save_failed"
+  ]);
+
+  function reasonText(reason) {
+    var safeReason = SAFE_MODEL_REASONS.has(reason) ? reason : "unexpected_result";
+    return tr("settings.modelReason." + safeReason);
+  }
+
+  function stateLine(labelKey, value) {
+    var line = document.createElement("small"); line.className = "agent-state-line";
+    var label = document.createElement("span"); label.className = "agent-state-label"; label.textContent = tr(labelKey) + ": ";
+    var state = document.createElement("span"); state.textContent = value;
+    line.append(label, state); return { line: line, state: state };
+  }
+
+  function environmentNames(value) {
+    var names = []; var seen = new Set();
+    value.split(",").map(function (name) { return name.trim(); }).filter(Boolean).forEach(function (name) {
+      var key = name.toUpperCase(); if (!seen.has(key)) { seen.add(key); names.push(name); }
+    });
+    return names;
+  }
+
+  function catalogText(agent) {
+    var catalog = agent.catalog || {};
+    var refreshedAt = catalog.refreshedAt ? new Date(catalog.refreshedAt) : null;
+    if (catalog.state === "cached" && refreshedAt && !Number.isNaN(refreshedAt.getTime())) return tr("settings.modelCatalogCached", { time: refreshedAt.toLocaleString() });
+    if (catalog.state === "fresh") return tr("settings.modelCatalogCount", { count: (agent.models || []).length });
+    if (catalog.state === "empty") return tr("settings.modelCatalogEmpty");
+    if (catalog.state === "configured") return tr("settings.modelCatalogConfigured");
+    if (catalog.state === "unavailable" || catalog.state === "unsupported") return reasonText(catalog.reasonCode);
+    return tr("settings.modelCatalogNotChecked");
+  }
+
   function renderAgents(catalog) {
     agentCatalog = catalog;
     agentSettingsList.replaceChildren();
@@ -47,11 +85,18 @@
       var row = document.createElement("div"); row.className = "agent-setting-row"; row.dataset.agentId = agent.id;
       var identity = document.createElement("label"); identity.className = "agent-identity";
       var enabled = document.createElement("input"); enabled.type = "checkbox"; enabled.className = "agent-enabled"; enabled.checked = agent.enabled; enabled.disabled = !agent.available;
-      var details = document.createElement("span"); var title = document.createElement("strong"); title.textContent = agent.displayName;
-      var status = document.createElement("small"); status.textContent = agent.available ? (agent.commandLabel || tr("settings.agentAvailable")) : tr("settings.agentMissing");
-      var modelSource = document.createElement("small"); modelSource.className = "agent-model-source";
-      if ((agent.models || []).length > 0) modelSource.textContent = tr("settings.modelsDiscovered", { count: agent.models.length });
-      details.append(title, status, modelSource); identity.append(enabled, details);
+      var details = document.createElement("span"); details.className = "agent-state-list"; var title = document.createElement("strong"); title.textContent = agent.displayName;
+      var cliLine = stateLine("settings.agentCliState", agent.available ? (agent.commandLabel || tr("settings.agentAvailable")) : tr("settings.agentMissing"));
+      var configSources = (agent.configSources || []).join(", ");
+      var configLine = stateLine("settings.modelConfigSourceState", configSources || tr("settings.modelConfigSourceMissing"));
+      var catalogLine = stateLine("settings.modelCatalogState", catalogText(agent)); var modelSource = catalogLine.state;
+      var effectiveLine = stateLine("settings.modelEffectiveState", agent.effectiveModel || tr("settings.followAgentDefault"));
+      var probeSupported = agent.id === "codex" || agent.id === "opencode" || agent.id === "claude";
+      var initialProviderText = !probeSupported
+        ? tr("settings.modelProviderNotAvailable")
+        : agent.providerStatus === "not_checked" ? tr("settings.modelProviderNotChecked") : reasonText(agent.providerReasonCode);
+      var providerLine = stateLine("settings.modelProviderState", initialProviderText); var providerStatus = providerLine.state;
+      details.append(title, cliLine.line, configLine.line, catalogLine.line, effectiveLine.line, providerLine.line); identity.append(enabled, details);
       var controls = document.createElement("div"); controls.className = "agent-controls";
       var model = document.createElement("select"); model.className = "agent-model"; addModelOption(model, "", tr("settings.followAgentDefault"));
       (agent.models || []).forEach(function (item) { addModelOption(model, item.id, item.label); });
@@ -62,25 +107,54 @@
         else { model.value = "__custom__"; custom.value = agent.selectedModel; custom.classList.remove("hidden"); }
       }
       model.disabled = !agent.available; custom.disabled = !agent.available;
-      model.addEventListener("change", function () { custom.classList.toggle("hidden", model.value !== "__custom__"); });
-      var refresh = document.createElement("button"); refresh.type = "button"; refresh.title = tr(agent.supportsModelRefresh ? "settings.refreshModels" : "settings.reloadModels"); refresh.disabled = !agent.available; refresh.innerHTML = '<i data-lucide="refresh-cw"></i>';
+      var refreshSupported = Boolean(agent.catalog && agent.catalog.strategy !== "config_only" && agent.catalog.refreshSupported);
+      var refresh = document.createElement("button"); refresh.type = "button"; refresh.className = "agent-refresh-models"; refresh.title = tr(refreshSupported ? "settings.refreshModels" : "settings.reloadModels"); refresh.setAttribute("aria-label", refresh.title); refresh.disabled = refreshSupported && !agent.available; refresh.innerHTML = '<i data-lucide="refresh-cw"></i>';
       refresh.addEventListener("click", async function () {
-        refresh.disabled = true; agentSettingsStatus.textContent = tr("settings.refreshingModels", { agent: agent.displayName });
+        refresh.disabled = true; agentSettingsStatus.textContent = tr(refreshSupported ? "settings.refreshingModels" : "settings.reloadingModels", { agent: agent.displayName });
         try {
-          var result = await (agent.supportsModelRefresh ? api.refreshAgentModels(agent.id) : api.discoverAgentModels(agent.id));
+          var result = await (refreshSupported ? api.refreshAgentModels(agent.id) : api.discoverAgentModels(agent.id));
           var selected = model.value; Array.from(model.options).filter(function (option) { return option.value && option.value !== "__custom__"; }).forEach(function (option) { option.remove(); });
           var models = (result.models || []).slice();
           if (selected && selected !== "__custom__" && !models.some(function (item) { return item.id === selected; })) models.push({ id: selected, label: selected });
           models.sort(function (left, right) { return left.id.localeCompare(right.id); }).forEach(function (item) { var option = document.createElement("option"); option.value = item.id; option.textContent = item.label; model.insertBefore(option, model.lastElementChild); });
           model.value = Array.from(model.options).some(function (option) { return option.value === selected; }) ? selected : "";
-          modelSource.textContent = models.length > 0 ? tr("settings.modelsDiscovered", { count: models.length }) : "";
-          agentSettingsStatus.textContent = tr("settings.modelsRefreshed", { count: models.length });
-        } catch (error) { agentSettingsStatus.textContent = error.message; }
-        finally { refresh.disabled = false; }
+          modelSource.textContent = result.reasonCode && result.reasonCode !== "ok" ? reasonText(result.reasonCode) : (models.length > 0 ? tr("settings.modelCatalogCount", { count: models.length }) : tr("settings.modelCatalogEmpty"));
+          agentSettingsStatus.textContent = result.ok === false ? reasonText(result.reasonCode) : tr(refreshSupported ? "settings.modelsRefreshed" : "settings.modelsReloaded", { count: models.length });
+          syncModelControls();
+        } catch (error) { agentSettingsStatus.textContent = reasonText("refresh_failed"); }
+        finally { refresh.disabled = refreshSupported && !agent.available; }
       });
-      [enabled, model, custom].forEach(function (control) { control.addEventListener("change", function () { agentSettingsDirty = true; }); });
+      var lastProbeModel = agent.effectiveModel || ""; var lastProbeText = initialProviderText;
+      function selectedModelId() { return model.value === "__custom__" ? custom.value.trim() : (model.value || agent.effectiveModel || ""); }
+      function syncModelControls() {
+        custom.classList.toggle("hidden", model.value !== "__custom__");
+        verify.disabled = !probeSupported || !agent.available || !selectedModelId();
+        providerStatus.textContent = !probeSupported
+          ? tr("settings.modelProviderNotAvailable")
+          : selectedModelId() && selectedModelId() === lastProbeModel ? lastProbeText : tr("settings.modelProviderNotChecked");
+      }
+      model.addEventListener("change", syncModelControls); custom.addEventListener("input", syncModelControls);
+      var verify = document.createElement("button"); verify.type = "button"; verify.className = "agent-verify-model"; verify.title = tr(probeSupported ? "settings.verifyModel" : "settings.modelProviderNotAvailable"); verify.setAttribute("aria-label", verify.title); verify.innerHTML = '<i data-lucide="shield-check"></i>';
+      verify.addEventListener("click", async function () {
+        var modelId = selectedModelId(); if (!probeSupported || !modelId) return;
+        verify.disabled = true; agentSettingsStatus.textContent = tr("settings.verifyingModel", { agent: agent.displayName });
+        try {
+          var result = await api.verifyAgentModel({ agentId: agent.id, modelId: modelId });
+          lastProbeModel = modelId; lastProbeText = result.result ? reasonText(result.result.reasonCode) : reasonText(result.reasonCode);
+          providerStatus.textContent = lastProbeText; agentSettingsStatus.textContent = lastProbeText;
+        } catch (error) { agentSettingsStatus.textContent = reasonText("probe_failed"); }
+        finally { syncModelControls(); }
+      });
+      var environmentGroup = document.createElement("label"); environmentGroup.className = "agent-env-group";
+      var environmentLabel = document.createElement("span"); environmentLabel.className = "agent-env-label"; environmentLabel.textContent = tr("settings.envAllowlistLabel");
+      var environment = document.createElement("input"); environment.className = "agent-env-allowlist"; environment.placeholder = tr("settings.envAllowlistPlaceholder"); environment.setAttribute("autocomplete", "off"); environment.spellcheck = false; environment.value = (agent.envAllowlist || []).map(function (item) { return item.name; }).join(", "); environment.disabled = !agent.available;
+      var presentCount = (agent.envAllowlist || []).filter(function (item) { return item.present; }).length;
+      var environmentHelp = document.createElement("small"); environmentHelp.className = "agent-env-help"; environmentHelp.textContent = tr("settings.envAllowlistState", { present: presentCount, total: (agent.envAllowlist || []).length });
+      environmentGroup.append(environmentLabel, environment, environmentHelp);
+      [enabled, model, custom, environment].forEach(function (control) { control.addEventListener("change", function () { agentSettingsDirty = true; }); });
       custom.addEventListener("input", function () { agentSettingsDirty = true; });
-      controls.append(model, custom, refresh); row.append(identity, controls); agentSettingsList.append(row);
+      environment.addEventListener("input", function () { agentSettingsDirty = true; });
+      syncModelControls(); controls.append(model, custom, refresh, verify, environmentGroup); row.append(identity, controls); agentSettingsList.append(row);
     });
     if (window.lucide) window.lucide.createIcons();
   }
@@ -88,7 +162,7 @@
   async function loadAgents(redetect) {
     agentSettingsStatus.textContent = tr(redetect ? "settings.detectingAgents" : "settings.loadingAgents");
     try { renderAgents(await (redetect ? api.detectAgents() : api.getAgentSettings())); agentSettingsStatus.textContent = ""; agentSettingsDirty = false; lastAgentLoadAt = Date.now(); }
-    catch (error) { agentSettingsStatus.textContent = error.message; }
+    catch (error) { agentSettingsStatus.textContent = reasonText("refresh_failed"); }
   }
 
   async function refreshTunnelStatus() {
@@ -154,13 +228,18 @@
   });
   document.getElementById("detectAgents").addEventListener("click", function () { void loadAgents(true); });
   document.getElementById("saveAgents").addEventListener("click", async function () {
-    var agents = Array.from(agentSettingsList.querySelectorAll(".agent-setting-row")).map(function (row) {
-      var select = row.querySelector(".agent-model"); var custom = row.querySelector(".agent-custom-model");
-      return { id: row.dataset.agentId, enabled: row.querySelector(".agent-enabled").checked, model: select.value === "__custom__" ? custom.value.trim() : select.value || null };
-    });
+    var agents;
+    try {
+      agents = Array.from(agentSettingsList.querySelectorAll(".agent-setting-row")).map(function (row) {
+        var select = row.querySelector(".agent-model"); var custom = row.querySelector(".agent-custom-model"); var environment = row.querySelector(".agent-env-allowlist");
+        var names = environmentNames(environment.value);
+        if (names.some(function (name) { return !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name); })) throw new Error("invalid_environment_name");
+        return { id: row.dataset.agentId, enabled: row.querySelector(".agent-enabled").checked, model: select.value === "__custom__" ? custom.value.trim() : select.value || null, envAllowlist: names };
+      });
+    } catch (error) { agentSettingsStatus.textContent = tr("settings.envAllowlistInvalid"); return; }
     agentSettingsStatus.textContent = tr("settings.savingAgents");
-    try { var result = await api.saveAgentSettings({ agents: agents }); agentSettingsStatus.textContent = tr(result.restartRequired ? "settings.savedRestart" : "settings.savedReload"); agentSettingsDirty = false; }
-    catch (error) { agentSettingsStatus.textContent = error.message; }
+    try { var result = await api.saveAgentSettings({ agents: agents }); if (result.ok === false) { agentSettingsStatus.textContent = reasonText(result.reasonCode); return; } agentSettingsStatus.textContent = tr(result.restartRequired ? "settings.savedRestart" : "settings.savedReload"); agentSettingsDirty = false; }
+    catch (error) { agentSettingsStatus.textContent = reasonText("save_failed"); }
   });
   theme.addEventListener("change", function () {
     api.setPreferences({ theme: theme.value }).then(function () {

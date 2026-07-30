@@ -87,7 +87,7 @@ try {
     ready: false,
     pid: null,
     tool_profile: "chatgpt_direct",
-    tool_count: 18,
+    tool_count: 19,
     tools_ready: true,
   }), "utf8");
   writeFileSync(join(directRuntime, "tunnel-client.pid"), String(fakeTunnel.pid), "utf8");

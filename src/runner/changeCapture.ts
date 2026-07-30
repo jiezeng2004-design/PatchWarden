@@ -8,6 +8,7 @@ import {
   openSync,
   readSync,
   realpathSync,
+  readlinkSync,
   readFileSync,
   readdirSync,
   statSync,
@@ -29,7 +30,6 @@ const MAX_IGNORED_ARTIFACT_FILES = 50;
 const DIFF_TRUNCATION_MARKER = "\n[PATCHWARDEN DIFF TRUNCATED]\n";
 const SKIP_DIRECTORIES = new Set([
   ".git", ".patchwarden", ".stage", ".local", "node_modules", ".npm-cache", ".pnpm-store", ".yarn",
-  "coverage", "release", "build", "out", ".next",
 ]);
 const DEFAULT_GENERATED_PATHS = [
   ".next/**",
@@ -52,6 +52,8 @@ export interface FileFingerprint {
   sha256: string;
   tracked: boolean;
   ignored: boolean;
+  link_target_sha256?: string;
+  resolved_target_sha256?: string;
 }
 
 export interface RepoSnapshot {
@@ -250,6 +252,14 @@ export async function captureRepoSnapshot(repoPath: string, signal?: AbortSignal
   }
 
   const files: Record<string, FileFingerprint> = {};
+  let rootRealPath: string;
+  try {
+    rootRealPath = realpathSync(repoPath);
+  } catch {
+    failureCodes.add("snapshot_fingerprint_failed");
+    warnings.push("could not resolve workspace root for snapshot");
+    rootRealPath = resolve(repoPath);
+  }
   const fingerprinted = await mapWithConcurrency(paths.sort(), MAX_FINGERPRINT_CONCURRENCY, async (inputPath) => {
     throwIfAborted(signal);
     const normalized = normalizePath(inputPath);
@@ -271,7 +281,20 @@ export async function captureRepoSnapshot(repoPath: string, signal?: AbortSignal
       return null;
     }
     try {
-      if (stat.isSymbolicLink() || !stat.isFile()) return null;
+      if (stat.isSymbolicLink()) {
+        const link = await fingerprintSnapshotLink(rootRealPath, absolutePath, stat.size);
+        if (!link) {
+          failureCodes.add("snapshot_fingerprint_failed");
+          warnings.push(`could not fingerprint link: ${normalized}`);
+          return null;
+        }
+        return [normalized, {
+          ...link,
+          tracked: hasSnapshotPath(trackedPaths, normalized),
+          ignored: hasSnapshotPath(ignoredPaths, normalized),
+        }] as const;
+      }
+      if (!stat.isFile()) return null;
       const sha256 = stat.size <= MAX_HASH_BYTES
         ? await hashFileAsync(absolutePath)
         : `large-file:${stat.size}:${Math.trunc(stat.mtimeMs)}`;
@@ -1109,15 +1132,51 @@ function walkWorkspace(root: string, signal?: AbortSignal): { paths: string[]; t
       const absolute = join(directory, entry.name);
       if (entry.isDirectory()) visit(absolute);
       else if (entry.isFile()) result.push(relative(root, absolute).replace(/\\/g, "/"));
-      else if (entry.isSymbolicLink()) {
-        // Links are intentionally omitted from content hashing. Path guards
-        // validate them at use time and the snapshot remains content-confined.
-        continue;
-      }
+      else if (entry.isSymbolicLink()) result.push(relative(root, absolute).replace(/\\/g, "/"));
     }
   };
   visit(root);
   return { paths: result, truncated };
+}
+
+async function fingerprintSnapshotLink(
+  rootRealPath: string,
+  linkPath: string,
+  linkSize: number,
+): Promise<Omit<FileFingerprint, "tracked" | "ignored"> | null> {
+  let linkText: string;
+  let targetPath: string;
+  try {
+    linkText = readlinkSync(linkPath);
+    targetPath = realpathSync(linkPath);
+  } catch {
+    return null;
+  }
+  if (!isPathWithin(rootRealPath, targetPath)) return null;
+  let target;
+  try {
+    target = lstatSync(targetPath);
+  } catch {
+    return null;
+  }
+  if (!target.isFile() || target.isSymbolicLink()) return null;
+  const targetRelative = relative(rootRealPath, targetPath).replace(/\\/g, "/");
+  if (!targetRelative || isSensitivePath(targetRelative)) return null;
+  const resolvedTargetSha256 = target.size <= MAX_HASH_BYTES
+    ? await hashFileAsync(targetPath)
+    : `large-file:${target.size}:${Math.trunc(target.mtimeMs)}`;
+  const linkTargetSha256 = createHash("sha256").update(linkText, "utf-8").digest("hex");
+  return {
+    size: linkSize,
+    sha256: createHash("sha256").update(`link-v1\\0${linkTargetSha256}\\0${resolvedTargetSha256}`, "utf-8").digest("hex"),
+    link_target_sha256: linkTargetSha256,
+    resolved_target_sha256: resolvedTargetSha256,
+  };
+}
+
+function isPathWithin(rootPath: string, candidatePath: string): boolean {
+  const rel = relative(resolve(rootPath), resolve(candidatePath));
+  return !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${process.platform === "win32" ? "\\\\" : "/"}`);
 }
 
 function hasSnapshotPathSet(

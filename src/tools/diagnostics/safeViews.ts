@@ -11,6 +11,7 @@ import { redactSensitiveValue } from "../../security/contentRedaction.js";
 import { readDirectSession, type DirectSessionRecord, type DirectSessionVerificationRun } from "../../direct/directSessionStore.js";
 import type { ChangedFile, ClassifiedChange } from "../../runner/changeCapture.js";
 import { ARTIFACT_SCHEMA_VERSION } from "../../version.js";
+import { summarizeDirectReviewEvents } from "../../direct/directAudit.js";
 
 export interface SafeViewOptions {
   max_items?: number;
@@ -172,6 +173,7 @@ export async function safeFinalizeDirectSession(sessionId: string, options: Safe
 export function safeAuditDirectSession(sessionId: string, options: SafeViewOptions = {}) {
   const maxItems = normalizeMaxItems(options.max_items);
   const audit = auditSession({ session_id: sessionId });
+  const session = readDirectSession(sessionId);
   return redact({
     session_id: audit.session_id,
     expected_changes: audit.expected_changes,
@@ -185,6 +187,7 @@ export function safeAuditDirectSession(sessionId: string, options: SafeViewOptio
       diff_available: Boolean(audit.evidence.diff_path),
       summary_available: Boolean(audit.evidence.summary_path),
       audit_available: Boolean(audit.evidence.audit_path),
+      direct_review: summarizeDirectReviewEvents(session.review_events || [], maxItems),
     },
     next_action: audit.next_action,
   });
@@ -269,6 +272,7 @@ function directSessionToSafe(session: DirectSessionRecord, maxItems: number, vie
     runtime_generated_files: limitClassified(artifacts?.artifact_hygiene.runtime_generated_files, maxItems),
     suspicious_changes: limitClassified(artifacts?.artifact_hygiene.suspicious_changes, maxItems),
     verification: summarizeVerificationRuns(session.verification_runs),
+    direct_review: summarizeDirectReviewEvents(session.review_events || [], maxItems),
     large_diff_omitted: true,
     truncated: changedFiles.length > maxItems,
   });

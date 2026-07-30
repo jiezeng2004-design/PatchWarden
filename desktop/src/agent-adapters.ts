@@ -21,6 +21,7 @@ export interface AgentAdapter {
   readonly nativePackage?: string;
   readonly buildArgs: BuildArgsFn;
   readonly refreshArgs?: readonly string[];
+  readonly modelCatalogStrategy?: "config_only" | "opencode_cli";
 }
 
 /** Result of selecting a launch executable for an agent. */
@@ -97,9 +98,9 @@ function withModel(args: readonly string[], model: string | null): string[] {
 }
 
 export const AGENT_ADAPTERS: readonly AgentAdapter[] = Object.freeze([
-  { id: "codex", displayName: "Codex CLI", npmPackage: "@openai/codex", buildArgs: (model) => [...withModel(["exec", "--cd", "{repo}"], model), "{prompt}"] },
-  { id: "opencode", displayName: "OpenCode", nativePackage: "opencode-ai", buildArgs: (model) => ["run", ...withModel([], model), "{prompt}"], refreshArgs: ["models"] },
-  { id: "claude", displayName: "Claude Code", npmPackage: "@anthropic-ai/claude-code", buildArgs: (model) => [...withModel(["--print", "--permission-mode", "acceptEdits"], model), "{prompt}"] },
+  { id: "codex", displayName: "Codex CLI", npmPackage: "@openai/codex", buildArgs: (model) => [...withModel(["exec", "--cd", "{repo}"], model), "{prompt}"], modelCatalogStrategy: "config_only" },
+  { id: "opencode", displayName: "OpenCode", nativePackage: "opencode-ai", buildArgs: (model) => ["run", ...withModel([], model), "{prompt}"], refreshArgs: ["--pure", "models"], modelCatalogStrategy: "opencode_cli" },
+  { id: "claude", displayName: "Claude Code", npmPackage: "@anthropic-ai/claude-code", buildArgs: (model) => [...withModel(["--print", "--permission-mode", "acceptEdits"], model), "{prompt}"], modelCatalogStrategy: "config_only" },
   { id: "gemini", displayName: "Gemini CLI", npmPackage: "@google/gemini-cli", buildArgs: (model) => [...withModel(["--prompt", "{prompt}", "--approval-mode", "auto_edit"], model)] },
   { id: "copilot", displayName: "GitHub Copilot CLI", npmPackage: "@github/copilot", buildArgs: (model) => [...withModel(["-p", "{prompt}", "--allow-tool", "write", "--deny-tool", "shell"], model)], refreshArgs: ["help"] },
   { id: "qwen", displayName: "Qwen Code", npmPackage: "@qwen-code/qwen-code", buildArgs: (model) => [...withModel(["--prompt", "{prompt}", "--approval-mode", "auto-edit"], model)] },
@@ -199,13 +200,16 @@ export function buildAgentRegistration(
   const adapter = getAgentAdapter(id);
   if (!adapter || !detection?.available || !detection.command) throw new Error(`Agent ${id} 不可用`);
   const model = validateModelId(modelValue);
+  const separatesCatalogFromAllowlist = id === "codex" || id === "opencode" || id === "claude";
   return {
     command: detection.command,
     args: [...(detection.prefixArgs || []), ...adapter.buildArgs(model)],
     adapter: id,
     ...(model ? { model } : {}),
     default_model: model,
-    available_models: model ? [model] : [],
+    // For the three layered-model adapters, a selected default is not an
+    // execution allowlist entry. Legacy adapters keep their existing shape.
+    available_models: separatesCatalogFromAllowlist ? [] : model ? [model] : [],
     allow_unlisted_model_override: true,
     settings_policy: "inherit",
   };
@@ -278,9 +282,23 @@ export async function refreshAgentModels(
     maxBuffer: 1024 * 1024,
     shell: false,
   });
+  if (id === "opencode") return parseOpenCodeModelOutput(String(stdout || ""));
   const values = String(stdout || "").split(/\r?\n/).flatMap((line) => {
     const matches = line.match(/[A-Za-z0-9][A-Za-z0-9._:/@+-]{1,199}/g) || [];
     return matches.filter((value) => MODEL_PATTERN.test(value) && (value.includes("/") || /^gpt-|^claude-|^gemini-|^qwen|^kimi|^deepseek/i.test(value)));
   });
   return [...new Set(values)].sort().map((model) => ({ id: model, label: model, source: "agent-refresh" }));
+}
+
+/** Extract only exact provider/model rows from OpenCode's bounded model listing. */
+export function parseOpenCodeModelOutput(stdout: string): DiscoveredModel[] {
+  const models = new Set<string>();
+  for (const rawLine of String(stdout || "").split(/\r?\n/)) {
+    const line = rawLine.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "").trim();
+    if (!line || /^https?:\/\//i.test(line)) continue;
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,99}\/[A-Za-z0-9][A-Za-z0-9._:@+-]{0,99}$/.test(line)) continue;
+    const id = validateModelId(line);
+    if (id) models.add(id);
+  }
+  return [...models].sort().map((id) => ({ id, label: id, source: "OpenCode CLI" }));
 }

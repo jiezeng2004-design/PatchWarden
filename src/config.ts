@@ -99,6 +99,15 @@ export interface PatchWardenConfig {
   directMaxFileBytes: number;
   directAllowedCommands?: string[];
   repoDirectAllowedCommands?: Record<string, string[]>;
+  directReview: DirectReviewConfig;
+}
+
+export interface DirectReviewConfig {
+  mode: "off" | "shadow" | "enforce";
+  requesterAgentName?: string;
+  reviewerAgentName?: string;
+  autoReviewRequired: boolean;
+  ttlSeconds: number;
 }
 
 // ── Defaults ──────────────────────────────────────────────────────
@@ -160,6 +169,11 @@ const DEFAULT_CONFIG: PatchWardenConfig = {
     "node --check main.js",
   ],
   repoDirectAllowedCommands: {},
+  directReview: {
+    mode: "off",
+    autoReviewRequired: true,
+    ttlSeconds: 300,
+  },
 };
 
 // ── Load config ───────────────────────────────────────────────────
@@ -698,6 +712,7 @@ function normalizeConfig(config: PatchWardenConfig): PatchWardenConfig {
     }
     config.repoDirectAllowedCommands = repoDirectAllowedCommands;
   }
+  const directReview = normalizeDirectReview(config.directReview, agents);
 
   return {
     ...config,
@@ -713,6 +728,51 @@ function normalizeConfig(config: PatchWardenConfig): PatchWardenConfig {
     generatedPaths,
     repoGeneratedPaths,
     runtimeValidation,
+    directReview,
+  };
+}
+
+function normalizeDirectReview(
+  value: unknown,
+  agents: Record<string, AgentConfig>,
+): DirectReviewConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("directReview must be an object");
+  }
+  const raw = value as Record<string, unknown>;
+  const mode = raw.mode ?? "off";
+  if (mode !== "off" && mode !== "shadow" && mode !== "enforce") {
+    throw new Error('directReview.mode must be "off", "shadow", or "enforce"');
+  }
+  const normalizeAgentName = (camel: string, snake: string): string | undefined => {
+    const rawName = raw[camel] ?? raw[snake];
+    if (rawName === undefined) return undefined;
+    const name = String(rawName).trim();
+    if (!name) throw new Error(`directReview.${camel} must be a non-empty Agent name`);
+    if (!agents[name]) throw new Error(`directReview.${camel} references unknown Agent "${name}"`);
+    return name;
+  };
+  const requesterAgentName = normalizeAgentName("requesterAgentName", "requester_agent_name");
+  const reviewerAgentName = normalizeAgentName("reviewerAgentName", "reviewer_agent_name");
+  if (mode !== "off") {
+    if (!requesterAgentName) throw new Error("directReview.requesterAgentName is required when mode is shadow or enforce");
+    if (!reviewerAgentName) throw new Error("directReview.reviewerAgentName is required when mode is shadow or enforce");
+    if (requesterAgentName === reviewerAgentName) {
+      throw new Error("directReview.requesterAgentName and reviewerAgentName must name different registered Agents");
+    }
+  }
+  const autoReviewRequired = raw.autoReviewRequired ?? raw.auto_review_required ?? true;
+  if (typeof autoReviewRequired !== "boolean") throw new Error("directReview.autoReviewRequired must be a boolean");
+  const ttlSeconds = Number(raw.ttlSeconds ?? raw.ttl_seconds ?? 300);
+  if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 30 || ttlSeconds > 3600) {
+    throw new Error("directReview.ttlSeconds must be an integer from 30 to 3600");
+  }
+  return {
+    mode,
+    ...(requesterAgentName ? { requesterAgentName } : {}),
+    ...(reviewerAgentName ? { reviewerAgentName } : {}),
+    autoReviewRequired,
+    ttlSeconds,
   };
 }
 

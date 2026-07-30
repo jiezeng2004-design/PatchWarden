@@ -83,6 +83,17 @@ audited、changed_files_total、verification status。
 
 ## 安全边界
 
+### Direct Review
+
+`directReview.mode` defaults to `off`. `shadow` records the result that enforce
+would have required without blocking compatible Direct operations. `enforce`
+requires different registered requester and reviewer agents, then requires a
+fresh `request_direct_review` ticket for each exact mutation or verification.
+Tickets are short-lived, bound to the session and proposal fingerprint, and
+consumed once. This is a policy control, not an external sandbox or
+authentication broker; use `shadow` unless the local reviewer configuration is
+independently understood and operated.
+
 - Direct 会话仍受 workspace 隔离、命令白名单、敏感路径拦截约束。
 - Direct 不会自动 patch 文件，所有写操作都需要显式确认。
 - safe 摘要不含完整 diff / stdout / 密钥内容。

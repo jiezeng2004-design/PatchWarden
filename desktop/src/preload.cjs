@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld("patchwardenDesktop", Object.freeze({
   getAgentSettings: () => invoke("desktop:get-agent-settings"),
   discoverAgentModels: (id) => invoke("desktop:discover-agent-models", id),
   refreshAgentModels: (id) => invoke("desktop:refresh-agent-models", id),
+  verifyAgentModel: (value) => invoke("desktop:verify-agent-model", value),
   saveAgentSettings: (value) => invoke("desktop:save-agent-settings", value),
   saveSetup: (value) => invoke("desktop:save-setup", value),
   runDoctor: () => invoke("desktop:run-doctor"),

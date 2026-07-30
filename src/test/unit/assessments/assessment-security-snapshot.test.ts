@@ -43,6 +43,11 @@ function config(overrides: Partial<PatchWardenConfig> = {}): PatchWardenConfig {
     directAllowedCommands: ["npm test", "npm run build"],
     repoDirectAllowedCommands: {},
     ...overrides,
+    directReview: overrides.directReview ?? {
+      mode: "off",
+      autoReviewRequired: true,
+      ttlSeconds: 300,
+    },
   };
 }
 

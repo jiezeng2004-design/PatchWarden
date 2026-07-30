@@ -36,6 +36,58 @@ describe("configuration security defaults", () => {
     assert.equal(config.agents.fixture.command, process.execPath);
   });
 
+  it("defaults Direct review off and normalizes a registered reviewer policy", () => {
+    writeFileSync(configPath, JSON.stringify({ workspaceRoot: root }), "utf-8");
+    assert.deepEqual(reloadConfig(configPath).directReview, {
+      mode: "off",
+      autoReviewRequired: true,
+      ttlSeconds: 300,
+    });
+
+    writeFileSync(configPath, JSON.stringify({
+      workspaceRoot: root,
+      agents: {
+        requester: { command: process.execPath, args: ["{prompt}"] },
+        reviewer: { command: process.execPath, args: ["{prompt}"] },
+      },
+      directReview: {
+        mode: "shadow",
+        requester_agent_name: "requester",
+        reviewer_agent_name: "reviewer",
+        auto_review_required: false,
+        ttl_seconds: 90,
+      },
+    }), "utf-8");
+    assert.deepEqual(reloadConfig(configPath).directReview, {
+      mode: "shadow",
+      requesterAgentName: "requester",
+      reviewerAgentName: "reviewer",
+      autoReviewRequired: false,
+      ttlSeconds: 90,
+    });
+  });
+
+  it("rejects unavailable Direct reviewers and invalid review policy bounds", () => {
+    const agents = {
+      requester: { command: process.execPath, args: ["{prompt}"] },
+      reviewer: { command: process.execPath, args: ["{prompt}"] },
+    };
+    for (const directReview of [
+      { mode: "enforce" },
+      { mode: "shadow", reviewerAgentName: "missing" },
+      { mode: "shadow", requesterAgentName: "missing", reviewerAgentName: "reviewer" },
+      { mode: "shadow", requesterAgentName: "reviewer", reviewerAgentName: "reviewer" },
+      { mode: "invalid", reviewerAgentName: "reviewer" },
+      { mode: "off", reviewerAgentName: "missing" },
+      { mode: "off", autoReviewRequired: "yes" },
+      { mode: "off", ttlSeconds: 29 },
+      { mode: "off", ttlSeconds: 3601 },
+    ]) {
+      writeFileSync(configPath, JSON.stringify({ workspaceRoot: root, agents, directReview }), "utf-8");
+      assert.throws(() => reloadConfig(configPath), /directReview/);
+    }
+  });
+
   it("rejects a missing workspace root during config load", () => {
     writeFileSync(configPath, JSON.stringify({ workspaceRoot: join(root, "missing") }), "utf-8");
     assert.throws(() => reloadConfig(configPath), /workspaceRoot does not exist/);

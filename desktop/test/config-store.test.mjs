@@ -101,6 +101,30 @@ describe("desktop config store", () => {
     assert.ok(settings.some((item) => item.id === "custom" && item.managed === false));
   });
 
+  it("keeps a first-run selected model separate from the execution allowlist", () => {
+    const config = buildConfig("C:\\workspace", [
+      { id: "codex", available: true, command: "C:\\tools\\codex.exe", prefixArgs: [] },
+    ], [{ id: "codex", enabled: true, model: "gpt-codex" }]);
+    assert.equal(config.agents.codex.default_model, "gpt-codex");
+    assert.deepEqual(config.agents.codex.available_models, []);
+    assert.equal(config.agents.codex.allow_unlisted_model_override, true);
+  });
+
+  it("keeps the existing first-run allowlist shape for the five legacy adapters", () => {
+    const config = buildConfig("C:\\workspace", [
+      { id: "aider", available: true, command: "C:\\tools\\aider.exe", prefixArgs: [] },
+    ], [{ id: "aider", enabled: true, model: "openrouter/coder" }]);
+    assert.deepEqual(config.agents.aider.available_models, ["openrouter/coder"]);
+
+    const root = mkdtempSync(join(tmpdir(), "patchwarden-desktop-legacy-model-"));
+    const path = join(root, "patchwarden.config.json");
+    atomicWriteJson(path, buildConfig("C:\\workspace", []), false);
+    updateAgentSettings(path, [{ id: "aider", available: true, command: "C:\\tools\\aider.exe", prefixArgs: [] }], [
+      { id: "aider", enabled: true, model: "openrouter/coder" },
+    ]);
+    assert.deepEqual(readJson(path).agents.aider.available_models, ["openrouter/coder"]);
+  });
+
   it("preserves an existing managed registration while its CLI is temporarily unavailable", () => {
     const root = mkdtempSync(join(tmpdir(), "patchwarden-desktop-agents-offline-"));
     const path = join(root, "patchwarden.config.json");
@@ -147,5 +171,35 @@ describe("desktop config store", () => {
     assert.equal(updated.settings_policy, "inherit");
     assert.deepEqual(updated.available_models, ["agnes/model-a", "agnes/model-b"]);
     assert.equal(updated.allow_unlisted_model_override, false);
+  });
+
+  it("adds an explicitly selected model to a restricted execution allowlist", () => {
+    const root = mkdtempSync(join(tmpdir(), "patchwarden-desktop-agent-allowlist-"));
+    const path = join(root, "patchwarden.config.json");
+    const config = buildConfig("C:\\workspace", [{ id: "codex", available: true, command: "C:\\tools\\codex.exe", prefixArgs: [] }]);
+    Object.assign(config.agents.codex, {
+      available_models: ["gpt-codex-old"],
+      allow_unlisted_model_override: false,
+    });
+    atomicWriteJson(path, config, false);
+    updateAgentSettings(path, [{ id: "codex", available: true, command: "C:\\tools\\codex.exe", prefixArgs: [] }], [
+      { id: "codex", enabled: true, model: "gpt-codex-new" },
+    ]);
+    const updated = readJson(path).agents.codex;
+    assert.deepEqual(updated.available_models, ["gpt-codex-old", "gpt-codex-new"]);
+    assert.equal(updated.default_model, "gpt-codex-new");
+  });
+
+  it("updates environment allowlist names without persisting values", () => {
+    const root = mkdtempSync(join(tmpdir(), "patchwarden-desktop-agent-env-names-"));
+    const path = join(root, "patchwarden.config.json");
+    atomicWriteJson(path, buildConfig("C:\\workspace", [{ id: "claude", available: true, command: "C:\\tools\\claude.exe", prefixArgs: [] }]), false);
+    updateAgentSettings(path, [{ id: "claude", available: true, command: "C:\\tools\\claude.exe", prefixArgs: [] }], [
+      { id: "claude", enabled: true, model: null, envAllowlist: ["ANTHROPIC_API_KEY", "HTTPS_PROXY", "ANTHROPIC_API_KEY"] },
+    ]);
+    assert.deepEqual(readJson(path).agents.claude.envAllowlist, ["ANTHROPIC_API_KEY", "HTTPS_PROXY"]);
+    assert.throws(() => updateAgentSettings(path, [{ id: "claude", available: true, command: "C:\\tools\\claude.exe", prefixArgs: [] }], [
+      { id: "claude", enabled: true, model: null, envAllowlist: ["PATCHWARDEN_OWNER_TOKEN"] },
+    ]), /保留变量/);
   });
 });
