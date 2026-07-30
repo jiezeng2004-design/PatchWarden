@@ -1,13 +1,13 @@
-import { readFileSync, statSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { resolve, relative, isAbsolute } from "node:path";
 import { getConfig } from "../../config.js";
-import { guardReadPath } from "../../security/pathGuard.js";
+import { guardReadPath, readValidatedFileSync } from "../../security/pathGuard.js";
 import { guardSensitivePath } from "../../security/sensitiveGuard.js";
 import { redactSensitiveContent } from "../../security/contentRedaction.js";
 import { PatchWardenError } from "../../errors.js";
 import { readDirectSession } from "../../direct/directSessionStore.js";
-import { guardDirectSessionActive, guardDirectReadPath, isBinaryFile, guardDirectFileSize } from "../../direct/directGuards.js";
+import { guardDirectSessionActive, guardDirectReadPath, isBinaryContent, guardDirectFileSize } from "../../direct/directGuards.js";
 import { resolveToolProfile } from "../catalog/toolCatalog.js";
 
 export interface ReadWorkspaceFileOutput {
@@ -51,26 +51,27 @@ export function readWorkspaceFile(input: string | ReadWorkspaceFileInput): ReadW
   }
 
   // Compatibility mode: no session_id, original behavior
-  const safePath = guardReadPath(relativePath, config.workspaceRoot);
-  guardSensitivePath(safePath);
-
-  const stat = statSync(safePath);
-  if (stat.size > config.maxReadFileBytes) {
+  const opened = readValidatedFileSync(() => {
+    const path = guardReadPath(relativePath, config.workspaceRoot);
+    guardSensitivePath(path);
+    return path;
+  });
+  if (opened.size > config.maxReadFileBytes) {
     throw new Error(
-      `File is ${stat.size} bytes, exceeds max of ${config.maxReadFileBytes} bytes.`
+      `File is ${opened.size} bytes, exceeds max of ${config.maxReadFileBytes} bytes.`
     );
   }
 
   // Only allow text-like files
-  if (stat.size > 5_000_000) {
+  if (opened.size > 5_000_000) {
     throw new Error("File exceeds 5 MB size limit.");
   }
 
-  const redaction = redactSensitiveContent(readFileSync(safePath, "utf-8"));
+  const redaction = redactSensitiveContent(opened.content.toString("utf-8"));
   return {
-    path: safePath,
+    path: opened.path,
     content: redaction.content,
-    size: stat.size,
+    size: opened.size,
     redacted: redaction.redacted,
     redaction_categories: redaction.redaction_categories,
   };
@@ -94,11 +95,10 @@ function readWorkspaceFileDirect(relativePath: string, sessionId: string): ReadW
     );
   }
 
-  const stat = statSync(safePath);
-  guardDirectFileSize(stat.size);
+  const opened = readValidatedFileSync(() => guardDirectReadPath(relativePath, session.resolved_repo_path, config.workspaceRoot));
+  guardDirectFileSize(opened.size);
 
-  // Block binary files
-  if (isBinaryFile(safePath)) {
+  if (isBinaryContent(opened.path, opened.content)) {
     throw new PatchWardenError(
       "binary_file_blocked",
       `File "${relativePath}" appears to be a binary file.`,
@@ -108,15 +108,15 @@ function readWorkspaceFileDirect(relativePath: string, sessionId: string): ReadW
     );
   }
 
-  const content = readFileSync(safePath, "utf-8");
+  const content = opened.content.toString("utf-8");
   const redaction = redactSensitiveContent(content);
   const sha256 = createHash("sha256").update(content, "utf-8").digest("hex");
 
   return {
-    path: safePath,
+    path: opened.path,
     relative_path: relativePath,
     content: redaction.content,
-    size: stat.size,
+    size: opened.size,
     sha256,
     redacted: redaction.redacted,
     redaction_categories: redaction.redaction_categories,

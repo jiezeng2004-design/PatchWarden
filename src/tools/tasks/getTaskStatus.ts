@@ -14,6 +14,7 @@ import {
 } from "../../watcherStatus.js";
 import { isTerminalTaskStatus } from "./taskStates.js";
 import { readTaskHistoryState, type TaskHistoryState } from "./taskHistory.js";
+import { isTaskFailureCategory } from "../../runner/failureCategories.js";
 
 export interface GetTaskStatusOutput {
   task_id: string;
@@ -27,6 +28,10 @@ export interface GetTaskStatusOutput {
   model_selection?: AgentRuntimeMetadata | null;
   failure_category?: string | null;
   agent_failure_category?: string | null;
+  failure_source?: string | null;
+  counts_against_agent?: boolean;
+  fallback_eligible?: boolean;
+  retryable?: boolean;
   provider_error_reference?: string | null;
   workspace_root: string;
   repo_path: string;
@@ -100,7 +105,9 @@ export function getTaskStatus(taskId: string): GetTaskStatusOutput {
     agent_runtime: sanitizeAgentRuntimeMetadata(status.agent_runtime ?? status.model_selection),
     model_selection: sanitizeAgentRuntimeMetadata(status.model_selection ?? status.agent_runtime),
     failure_category: status.failure_category ?? status.agent_failure_category ?? null,
-    agent_failure_category: status.agent_failure_category ?? status.failure_category ?? null,
+    agent_failure_category: status.agent_failure_category
+      ?? (!isTaskFailureCategory(status.failure_category) ? status.failure_category : null)
+      ?? null,
     provider_error_reference: typeof status.provider_error_reference === "string"
       && /^err_[A-Za-z0-9_-]{4,120}$/.test(status.provider_error_reference)
       ? status.provider_error_reference

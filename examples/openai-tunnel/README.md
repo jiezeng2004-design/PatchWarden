@@ -28,7 +28,7 @@ local config and run `PatchWarden.cmd start direct`. It uses
 `scripts/mcp/patchwarden-mcp-direct.cmd`, the separate `patchwarden-direct` Tunnel
 Client profile, no Watcher, and an isolated `runtime-direct` status directory.
 Use a separate Direct Connector/Tunnel ID so the fixed 26-tool Core catalog and
-the 14-tool Direct catalog never overwrite each other's cached schema.
+the 18-tool Direct catalog never overwrite each other's cached schema.
 
 The Windows launcher prompts for the runtime API key once and stores only a
 Windows DPAPI-encrypted value under `%APPDATA%\patchwarden`. Use
@@ -39,7 +39,7 @@ and requires the exact `chatgpt_core` manifest. Run
 `PatchWarden.cmd health` to see the version, profile, tool names, schema
 hash, process sources, and any mixed-version warnings. The check is read-only.
 The v1.7.0 Core manifest contains 26 tools. The enabled Direct manifest contains
-14 tools. A different count or schema hash requires a Connector refresh and
+18 tools. A different count or schema hash requires a Connector refresh and
 validation from a new ChatGPT conversation.
 
 ## Architecture

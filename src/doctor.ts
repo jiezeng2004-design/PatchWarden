@@ -141,6 +141,16 @@ const checkConfirmPackage: DoctorCheck = {
           existsSync(resolve(process.cwd(), "dist/assessments/confirmCli.js")),
           "run npm.cmd run build",
         ),
+        checkResult(
+          "patchwarden-attest package binary",
+          packageJson.bin?.["patchwarden-attest"] === "dist/attestation/cli.js",
+          packageJson.bin?.["patchwarden-attest"] || "missing",
+        ),
+        checkResult(
+          "patchwarden-attest compiled entrypoint",
+          existsSync(resolve(process.cwd(), "dist/attestation/cli.js")),
+          "run npm.cmd run build",
+        ),
       ];
     } catch (error) {
       return [checkResult("patchwarden-confirm package binary", false, error instanceof Error ? error.message : String(error))];
@@ -334,7 +344,7 @@ const checkToolProfiles: DoctorCheck = {
       const coreTools = selectToolsForProfile(fullTools, "chatgpt_core", context.config?.enableDirectProfile);
       const createSchema = coreTools.find((tool) => tool.name === "create_task")?.inputSchema;
       const waitSchema = coreTools.find((tool) => tool.name === "wait_for_task")?.inputSchema;
-      results.push(checkResult("Full tool profile exposes 66 tools", fullTools.length === 66, `${fullTools.length} tools`));
+      results.push(checkResult("Full tool profile exposes 70 tools", fullTools.length === 70, `${fullTools.length} tools`));
       results.push(
         checkResult(
           `chatgpt_core profile exposes the exact ${CHATGPT_CORE_TOOL_NAMES.length}-tool manifest`,
@@ -424,7 +434,10 @@ const checkHttpPort: DoctorCheck = {
   id: "http-port",
   description: "HTTP port check",
   async run(context) {
-    const httpPort = context.config?.http?.port || context.config?.httpPort || 7331;
+    // CI/default-config diagnostics must not touch a conventional runtime
+    // port. A configured local doctor still checks the actual selected port.
+    const configuredHttpPort = context.config?.http?.port || context.config?.httpPort || 7331;
+    const httpPort = context.allowDefaultConfig ? 0 : configuredHttpPort;
     try {
       const server = createServer();
       await new Promise<void>((resolvePort, rejectPort) => {
@@ -434,9 +447,13 @@ const checkHttpPort: DoctorCheck = {
           resolvePort();
         });
       });
-      return [okResult(`HTTP port ${httpPort} is free`)];
+      return [okResult(context.allowDefaultConfig
+        ? "Dynamic loopback HTTP port allocation works"
+        : `HTTP port ${httpPort} is free`)];
     } catch {
-      return [warnResult(`HTTP port ${httpPort} is in use — change http.port in config`)];
+      return [warnResult(context.allowDefaultConfig
+        ? "Dynamic loopback HTTP port allocation failed"
+        : `HTTP port ${httpPort} is in use — change http.port in config`)];
     }
   },
 };

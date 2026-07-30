@@ -56,6 +56,7 @@ import {
   provisionTunnelProfile,
   revalidateTunnelProfile,
 } from "./tunnel-provisioner.js";
+import { isAllowedExternalNavigation } from "./external-navigation.js";
 
 const CONTROL_URL = "http://127.0.0.1:8090";
 const smokeMode = process.env.PATCHWARDEN_DESKTOP_SMOKE === "1";
@@ -554,7 +555,8 @@ function createWindow(): void {
     },
   });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+    if (isAllowedExternalNavigation(url)) void shell.openExternal(url);
+    else writeAppLog(`Blocked external navigation to an unapproved host (${safeNavigationLabel(url)}).`);
     return { action: "deny" };
   });
   mainWindow.webContents.on("will-navigate", (event, url) => {
@@ -573,6 +575,15 @@ function createWindow(): void {
     event.preventDefault();
     mainWindow?.hide();
   });
+}
+
+function safeNavigationLabel(value: string): string {
+  try {
+    const url = new URL(value);
+    return `${url.protocol}//${url.hostname}`.slice(0, 200);
+  } catch {
+    return "invalid-url";
+  }
 }
 
 function showWindow(): void {

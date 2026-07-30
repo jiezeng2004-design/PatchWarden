@@ -8,6 +8,9 @@ import { PatchWardenError } from "../../errors.js";
 import { atomicWriteFileSync, atomicWriteJsonFileSync } from "../../utils/atomicFile.js";
 import { withFileLockSync } from "../../utils/lockedJsonFile.js";
 import { sanitizeModelSelectionEvidence, type ModelSelectionEvidence } from "../../agents/modelSelection.js";
+import type { RiskRuleEvidence } from "../../security/riskEngine.js";
+import { readWatcherStatus } from "../../watcherStatus.js";
+import { buildConnectorRecoveryState, type ConnectorRecoveryState } from "../../runner/connectorRecovery.js";
 
 export type TaskLoopStopReason =
   | "success"
@@ -66,10 +69,26 @@ export interface TaskLineageRound {
   verification_status: string;
   audit_verdict: string;
   failure_category?: string | null;
+  agent_failure_category?: string | null;
+  failure_source?: string | null;
+  counts_against_agent?: boolean;
+  fallback_eligible?: boolean;
+  retryable?: boolean;
+  agent?: string;
+  agent_attempt?: number;
+  retry_index?: number;
+  routing_action?: "initial" | "retry_same_agent" | "switch_agent";
+  transition_reason?: string | null;
   provider_error_reference?: string | null;
   fail_checks: string[];
   warn_checks: string[];
   next_action: string;
+}
+
+export interface TaskLineageAgentAttempt {
+  agent: string;
+  attempts: number;
+  last_failure_category: string | null;
 }
 
 export interface TaskLineageRecord {
@@ -92,6 +111,8 @@ export interface TaskLineageRecord {
   worktree?: TaskLineageWorktree;
   agent_routing?: TaskLineageAgentRouting;
   model_selection?: ModelSelectionEvidence;
+  policy_rules?: RiskRuleEvidence[];
+  agent_attempts?: TaskLineageAgentAttempt[];
 }
 
 export interface SafeTaskLineage {
@@ -113,6 +134,9 @@ export interface SafeTaskLineage {
   worktree: TaskLineageWorktree;
   agent_routing: TaskLineageAgentRouting | null;
   model_selection: ModelSelectionEvidence | null;
+  policy_rules: RiskRuleEvidence[];
+  agent_attempts: TaskLineageAgentAttempt[];
+  connection_recovery: ConnectorRecoveryState;
   verification: {
     latest_status: string;
     passed: boolean;
@@ -260,9 +284,10 @@ export function toSafeTaskLineage(record: TaskLineageRecord, maxItems = 8): Safe
   const rounds = record.rounds.slice(0, maxItems);
   const latest = record.rounds[record.rounds.length - 1];
   const directSessions = normalizeDirectSessions(record.direct_sessions);
+  const requestId = truncate(String(record.request_id || record.lineage_id), 128);
   return {
     lineage_id: record.lineage_id,
-    request_id: truncate(String(record.request_id || record.lineage_id), 128),
+    request_id: requestId,
     goal: record.goal,
     repo_path: record.repo_path,
     created_at: record.created_at,
@@ -284,6 +309,15 @@ export function toSafeTaskLineage(record: TaskLineageRecord, maxItems = 8): Safe
       fallback: Boolean(record.agent_routing.fallback),
     } : null,
     model_selection: sanitizeModelSelectionEvidence(record.model_selection),
+    policy_rules: normalizePolicyRules(record.policy_rules),
+    agent_attempts: normalizeAgentAttempts(record.agent_attempts),
+    connection_recovery: buildConnectorRecoveryState({
+      request_id: requestId,
+      final_status: record.final_status,
+      main_task: record.main_task,
+      selected_agent: record.agent_routing?.selected_agent || null,
+      watcher: readWatcherStatus(getConfig()),
+    }),
     verification: {
       latest_status: latest?.verification_status || "not_available",
       passed: latest?.verification_status === "passed",
@@ -300,6 +334,41 @@ export function toSafeTaskLineage(record: TaskLineageRecord, maxItems = 8): Safe
       record.warnings.length > maxItems ||
       record.errors.length > maxItems,
   };
+}
+
+function normalizeAgentAttempts(value: unknown): TaskLineageAgentAttempt[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 20).flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const attempt = entry as Record<string, unknown>;
+    const count = Number(attempt.attempts);
+    if (typeof attempt.agent !== "string" || !Number.isSafeInteger(count) || count < 1) return [];
+    return [{
+      agent: truncate(attempt.agent, 120),
+      attempts: count,
+      last_failure_category: typeof attempt.last_failure_category === "string"
+        ? truncate(attempt.last_failure_category, 120)
+        : null,
+    }];
+  });
+}
+
+function normalizePolicyRules(value: unknown): RiskRuleEvidence[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 20).flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const rule = entry as Record<string, unknown>;
+    const riskLevel = rule.risk_level;
+    if (typeof rule.rule_id !== "string" || !["low", "medium", "high"].includes(String(riskLevel))) return [];
+    return [{
+      rule_id: truncate(rule.rule_id, 120),
+      risk_level: riskLevel as RiskRuleEvidence["risk_level"],
+      trigger_text: truncate(String(rule.trigger_text || ""), 160),
+      blocked_capability: truncate(String(rule.blocked_capability || ""), 160),
+      confirmation_supported: rule.confirmation_supported === true,
+      safe_alternative: truncate(String(rule.safe_alternative || ""), 240),
+    }];
+  });
 }
 
 function buildSummaryMarkdown(record: TaskLineageRecord): string {

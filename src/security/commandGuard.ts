@@ -1,5 +1,6 @@
 import { getRepoAllowedTestCommands, getRepoDirectAllowedCommands, PatchWardenConfig } from "../config.js";
 import { PatchWardenError } from "../errors.js";
+import { redactSensitiveContent } from "./contentRedaction.js";
 
 /**
  * Command guard: ensure only allow-listed commands can execute.
@@ -84,7 +85,9 @@ export function guardTestCommand(
     throw new PatchWardenError(
       "test_command_not_allowlisted",
       `Test command "${trimmed}" is not allowed for this repository. Allowed: ${allowedCommands.join(", ")}`,
-      "Use an exact allowed command shown by create_task, or omit test_command."
+      "Use an exact allowed command shown by create_task, or omit test_command.",
+      true,
+      { matched_text: redactSensitiveContent(trimmed).content.slice(0, 160) },
     );
   }
 
@@ -121,7 +124,9 @@ export function guardDirectCommand(
     throw new PatchWardenError(
       "direct_command_not_allowlisted",
       `Direct command "${trimmed}" is not allowed. Allowed: ${allowedCommands.join(", ")}`,
-      "Use an exact allowed command from the Direct allowlist."
+      "Use an exact allowed command from the Direct allowlist.",
+      true,
+      { matched_text: redactSensitiveContent(trimmed).content.slice(0, 160) },
     );
   }
 

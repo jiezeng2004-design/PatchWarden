@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { reserveLoopbackPort } from "../lib/loopback-port.js";
 
 if (process.platform !== "win32") {
   console.log("ok - watcher supervisor smoke skipped outside Windows");
@@ -21,6 +22,8 @@ if (process.platform !== "win32") {
 
 const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const temp = mkdtempSync(join(tmpdir(), "patchwarden-watcher-supervisor-"));
+const fixtureHealthPort = await reserveLoopbackPort();
+const reportedHealthPort = await reserveLoopbackPort();
 const children = [];
 
 try {
@@ -184,7 +187,7 @@ function runLauncher(fixture, mode, maxRestarts, lifetimeMs) {
     "-TunnelClientExe", fixture.mockCmd,
     "-ProxyUrl", "http://127.0.0.1:1",
     "-MaxReconnectAttempts", "1",
-    "-HealthListenAddr", "127.0.0.1:8080",
+    "-HealthListenAddr", `127.0.0.1:${fixtureHealthPort}`,
     "-WatcherMaxRestartAttempts", String(maxRestarts),
     "-WatcherHealthyResetSeconds", "60",
   ], {
@@ -208,6 +211,8 @@ function fixtureEnv(fixture, mode, lifetimeMs) {
     XDG_CONFIG_HOME: undefined,
     WATCHER_FIXTURE_MODE: mode,
     TUNNEL_FIXTURE_LIFETIME_MS: String(lifetimeMs),
+    WATCHER_FIXTURE_HEALTH_PORT: String(fixtureHealthPort),
+    WATCHER_REPORTED_HEALTH_PORT: String(reportedHealthPort),
   };
 }
 
@@ -239,10 +244,10 @@ function tunnelFixtureSource() {
 const fs=require('fs');const path=require('path');const args=process.argv.slice(2);const command=args[0]||'';
 if(process.env.PATCHWARDEN_TEST_PROVIDER_KEY){console.error('allow-listed provider credential leaked into tunnel-client');process.exit(22)}
 const flag=(name)=>{const i=args.indexOf(name);return i>=0?args[i+1]:''};
-if(command==='init'){const profile=flag('--profile')||'patchwarden';const mcpCommand=flag('--mcp-command')||'';const yamlDir=path.join(process.env.APPDATA,'tunnel-client');const yamlPath=path.join(yamlDir,profile+'.yaml');fs.mkdirSync(yamlDir,{recursive:true});fs.writeFileSync(yamlPath,'mcp:\\n  commands:\\n    - channel: main\\n      command: \"'+mcpCommand.replace(/\\\\/g,'/')+'\"\\n\\nhealth:\\n  listen_addr: \"127.0.0.1:8080\"\\n');console.log('{}');process.exit(0)}
+if(command==='init'){const profile=flag('--profile')||'patchwarden';const mcpCommand=flag('--mcp-command')||'';const yamlDir=path.join(process.env.APPDATA,'tunnel-client');const yamlPath=path.join(yamlDir,profile+'.yaml');fs.mkdirSync(yamlDir,{recursive:true});fs.writeFileSync(yamlPath,'mcp:\\n  commands:\\n    - channel: main\\n      command: \"'+mcpCommand.replace(/\\\\/g,'/')+'\"\\n\\nhealth:\\n  listen_addr: \"127.0.0.1:'+process.env.WATCHER_FIXTURE_HEALTH_PORT+'\"\\n');console.log('{}');process.exit(0)}
 if(command==='doctor'){console.log('{}');process.exit(0)}
 if(command==='health'){console.log(JSON.stringify({healthz:{ok:true},readyz:{ok:true}}));process.exit(0)}
-if(command==='run'){if(process.env.XDG_CONFIG_HOME){console.error('watcher XDG_CONFIG_HOME leaked into tunnel-client');process.exit(21)}const url=flag('--health.url-file'),pid=flag('--pid.file');fs.mkdirSync(path.dirname(url),{recursive:true});fs.writeFileSync(url,'http://127.0.0.1:18889');fs.writeFileSync(pid,String(process.pid));setTimeout(()=>process.exit(9),Number(process.env.TUNNEL_FIXTURE_LIFETIME_MS)||9000)}
+if(command==='run'){if(process.env.XDG_CONFIG_HOME){console.error('watcher XDG_CONFIG_HOME leaked into tunnel-client');process.exit(21)}const url=flag('--health.url-file'),pid=flag('--pid.file');fs.mkdirSync(path.dirname(url),{recursive:true});fs.writeFileSync(url,'http://127.0.0.1:'+process.env.WATCHER_REPORTED_HEALTH_PORT);fs.writeFileSync(pid,String(process.pid));setTimeout(()=>process.exit(9),Number(process.env.TUNNEL_FIXTURE_LIFETIME_MS)||9000)}
 `;
 }
 

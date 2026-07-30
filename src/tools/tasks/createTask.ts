@@ -8,7 +8,7 @@ import { guardPath, guardWorkspacePath, guardReadPath } from "../../security/pat
 import { guardTestCommand } from "../../security/commandGuard.js";
 import { guardRuntimeSelfModification } from "../../security/runtimeGuard.js";
 import { guardPlanContent } from "../../security/planGuard.js";
-import { assessRisk } from "../../security/riskEngine.js";
+import { assessRisk, buildRiskRuleEvidence, type RiskRuleEvidence } from "../../security/riskEngine.js";
 import {
   createAssessment,
   readAssessment,
@@ -23,6 +23,7 @@ import { runAgentAssessment } from "../../assessments/agentAssessor.js";
 import { recordAssessmentValidationFailure } from "../../assessments/assessmentDiagnostics.js";
 import { ASSESSMENT_SECURITY_SNAPSHOT_VERSION } from "../../assessments/securitySnapshot.js";
 import { captureRepoSnapshot } from "../../runner/changeCapture.js";
+import { runProjectPreflight, type ProjectPreflightReport } from "../../runner/projectPreflight.js";
 import { writeTaskProgress } from "../../runner/taskProgress.js";
 import { PatchWardenError } from "../../errors.js";
 import { savePlan } from "../goals/savePlan.js";
@@ -45,6 +46,8 @@ import { redactSensitiveValue } from "../../security/contentRedaction.js";
 import { atomicWriteJsonFileSync } from "../../utils/atomicFile.js";
 import { withFileLockSync } from "../../utils/lockedJsonFile.js";
 import { stableJsonStringify } from "../../utils/stableJson.js";
+import { detectRepositoryScope } from "../../security/repoScopeGuard.js";
+import { registerTaskAttestationRequirement } from "../../attestation/attestationStore.js";
 
 export type TaskStatus =
   | "pending"
@@ -83,6 +86,7 @@ export type TaskPhase =
   | "preparing"
   | "executing_agent"
   | "running_tests"
+  | "runtime_validation"
   | "collecting_artifacts"
   | "canceling"
   | "terminating"
@@ -116,6 +120,8 @@ export interface CreateTaskInput {
   requested_model?: string;
   request_id?: string;
   repo_path?: string;
+  /** Explicit acknowledgement required when a multi-project workspace root is used as the task repository. */
+  confirm_workspace_root?: boolean;
   test_command?: string;
   verify_commands?: string[];
   timeout_seconds?: number;
@@ -154,6 +160,8 @@ export interface AssessOnlyOutput {
   risk_level: "low" | "medium" | "high";
   risk_hints: string[];
   hard_rule_hits: string[];
+  rules: RiskRuleEvidence[];
+  preflight: ProjectPreflightReport;
   reason_codes: string[];
   expires_at: string;
   requires_confirm: boolean;
@@ -162,6 +170,8 @@ export interface AssessOnlyOutput {
     file_count: number;
     workspace_dirty: boolean;
     snapshot_truncated: boolean;
+    snapshot_complete?: boolean;
+    snapshot_failure_codes?: string[];
   };
   next_action: string;
   next_tool_call?: {
@@ -386,6 +396,21 @@ async function createTaskInternal(input: CreateTaskInput): Promise<CreateTaskRes
       { operation: "create_task", path: resolvedRepoPath, resolved_repo_path: safeRepoPath, safe_alternative: "Pass the containing repository directory instead of a file." }
     );
   }
+  const repositoryScope = detectRepositoryScope(safeRepoPath, config.workspaceRoot);
+  if (repositoryScope.confirmation_required && effectiveInput.confirm_workspace_root !== true) {
+    throw new PatchWardenError(
+      "repo_scope_confirmation_required",
+      "repo_path resolves to a multi-project workspace root and cannot be used for a write task without explicit confirmation.",
+      "Pass a detected subproject as repo_path. If the workspace root is intentional, repeat this exact request with confirm_workspace_root=true.",
+      true,
+      {
+        status: "repo_scope_confirmation_required",
+        detected_projects: repositoryScope.detected_projects,
+        suggested_repo_path: repositoryScope.detected_projects.find((candidate) => candidate.path !== ".")?.path || null,
+        confirmation_required: true,
+      },
+    );
+  }
 
   const requestedAgent = effectiveInput.agent_routing_metadata?.requested_agent
     ?? (agentSelectionReason ? "auto" : originallyRequestedAgent ?? effectiveInput.agent);
@@ -420,8 +445,9 @@ async function createTaskInternal(input: CreateTaskInput): Promise<CreateTaskRes
   // Validate test command — must be in allowlist, no swallowing
   let testCmd = "";
   if (effectiveInput.test_command && effectiveInput.test_command.trim() !== "") {
-    testCmd = guardTestCommand(effectiveInput.test_command, config, safeRepoPath);
-    // guardTestCommand throws if not in allowedTestCommands
+    testCmd = executionMode === "assess_only"
+      ? effectiveInput.test_command.trim()
+      : guardTestCommand(effectiveInput.test_command, config, safeRepoPath);
   }
 
   if (effectiveInput.verify_commands !== undefined && !Array.isArray(effectiveInput.verify_commands)) {
@@ -439,7 +465,9 @@ async function createTaskInternal(input: CreateTaskInput): Promise<CreateTaskRes
     );
   }
   const verifyCommands = [...new Set([
-    ...(effectiveInput.verify_commands || []).map((command) => guardTestCommand(command, config, safeRepoPath)),
+    ...(effectiveInput.verify_commands || []).map((command) => executionMode === "assess_only"
+      ? String(command).trim()
+      : guardTestCommand(command, config, safeRepoPath)),
     ...(testCmd ? [testCmd] : []),
   ])];
 
@@ -497,15 +525,24 @@ async function createTaskInternal(input: CreateTaskInput): Promise<CreateTaskRes
     // Run risk engine WITHOUT saving the plan
     let planBlocked = false;
     let planBlockReason = "";
+    let planBlockTrigger = "";
     try {
       guardPlanContent(assessPlanTitle, assessPlanContent);
     } catch (e) {
       planBlocked = true;
       planBlockReason = e instanceof PatchWardenError ? e.reason : "plan_content_blocked";
+      planBlockTrigger = e instanceof PatchWardenError && typeof e.details.matched_text === "string"
+        ? e.details.matched_text
+        : `${assessPlanTitle}\n${assessPlanContent}`;
     }
 
     const snapshot = await captureRepoSnapshot(safeRepoPath);
-    const snapshotTruncated = snapshot.warnings.some((w) => w.includes("snapshot limited"));
+    const snapshotTruncated = snapshot.integrity?.truncated === true
+      || snapshot.warnings.some((w) => w.includes("snapshot limited"));
+    const snapshotFailureCodes = snapshot.integrity?.complete === false
+      ? snapshot.integrity.failure_codes
+      : [];
+    const preflight = await runProjectPreflight({ repoPath: safeRepoPath, verifyCommands, config });
 
     let riskResult;
     if (planBlocked) {
@@ -515,6 +552,7 @@ async function createTaskInternal(input: CreateTaskInput): Promise<CreateTaskRes
         reason_codes: [],
         risk_hints: [],
         hard_rule_hits: [planBlockReason],
+        rules: buildRiskRuleEvidence("high", "blocked", [], [planBlockReason], { [planBlockReason]: planBlockTrigger }),
       };
     } else {
       riskResult = assessRisk({
@@ -529,7 +567,24 @@ async function createTaskInternal(input: CreateTaskInput): Promise<CreateTaskRes
         agent: effectiveInput.agent,
         config,
         snapshotTruncated,
+        snapshotIntegrityFailureCodes: snapshotFailureCodes,
       });
+    }
+    const preflightBlocksTask = isBlockingPreflight(preflight, effectiveInput.template);
+    if (!planBlocked && riskResult.decision !== "blocked" && preflightBlocksTask) {
+      const ruleId = preflight.recommended_action === "bootstrap_dependencies"
+        ? "environment_dependencies_missing"
+        : preflight.recommended_action === "choose_free_runtime_port"
+          ? "runtime_port_occupied"
+          : "verification_script_missing";
+      riskResult = {
+        risk_level: "medium" as const,
+        decision: "blocked" as const,
+        reason_codes: ["environment_preflight_failed"],
+        risk_hints: riskResult.risk_hints,
+        hard_rule_hits: [ruleId],
+        rules: buildRiskRuleEvidence("medium", "blocked", ["environment_preflight_failed"], [ruleId]),
+      };
     }
 
     // Save the plan now that risk assessment is done (for allow/needs_confirm)
@@ -582,6 +637,12 @@ async function createTaskInternal(input: CreateTaskInput): Promise<CreateTaskRes
         reason_codes: [...riskResult.reason_codes, ...agentAssessmentSummary.merged_reason_codes],
         risk_hints: riskResult.risk_hints,
         hard_rule_hits: riskResult.hard_rule_hits,
+        rules: buildRiskRuleEvidence(
+          agentAssessmentSummary.merged_risk,
+          agentAssessmentSummary.merged_decision,
+          agentAssessmentSummary.merged_reason_codes,
+          riskResult.hard_rule_hits,
+        ),
       };
     }
 
@@ -591,6 +652,8 @@ async function createTaskInternal(input: CreateTaskInput): Promise<CreateTaskRes
       risk_hints: finalRiskResult.risk_hints,
       hard_rule_hits: finalRiskResult.hard_rule_hits,
       reason_codes: finalRiskResult.reason_codes,
+      rules: finalRiskResult.rules,
+      preflight,
       repo_path: resolvedRepoPath,
       resolved_repo_path: safeRepoPath,
       plan_id: planId || null,
@@ -608,6 +671,7 @@ async function createTaskInternal(input: CreateTaskInput): Promise<CreateTaskRes
       forbidden: effectiveInput.forbidden,
       verification: effectiveInput.verification,
       done_evidence: effectiveInput.done_evidence,
+      confirm_workspace_root: effectiveInput.confirm_workspace_root,
       snapshot,
       ...(preGeneratedAssessmentId ? { assessment_id: preGeneratedAssessmentId } : {}),
       ...(preGeneratedAssessmentDir ? { assessment_dir: preGeneratedAssessmentDir } : {}),
@@ -636,6 +700,8 @@ async function createTaskInternal(input: CreateTaskInput): Promise<CreateTaskRes
       risk_hints: record.risk_hints,
       hard_rule_hits: record.hard_rule_hits,
       reason_codes: record.reason_codes,
+      rules: record.rules || [],
+      preflight: record.preflight!,
       expires_at: record.expires_at,
       requires_confirm: record.requires_confirm,
       workspace_snapshot_summary: record.workspace_snapshot_summary,
@@ -738,10 +804,35 @@ async function createTaskInternal(input: CreateTaskInput): Promise<CreateTaskRes
         }
       );
     }
+    const currentPreflight = await runProjectPreflight({ repoPath: safeRepoPath, verifyCommands, config });
+    if (isBlockingPreflight(currentPreflight, effectiveInput.template)) {
+      throw new PatchWardenError(
+        "environment_preflight_failed",
+        `Project preflight is no longer ready: ${currentPreflight.recommended_action}.`,
+        "Resolve the reported environment issue, then create a fresh assessment before executing.",
+        true,
+        { failure_category: "environment_bootstrap_failure", preflight: currentPreflight },
+      );
+    }
+    assessmentRecord.preflight = currentPreflight;
     markAssessmentUsed(input.assessment_id!);
   }
 
   const { taskId, taskDir } = createTaskDirectory(tasksDir, config.workspaceRoot, config.tasksDir);
+  try {
+    registerTaskAttestationRequirement(taskId, config.workspaceRoot);
+  } catch (error) {
+    // A new task must never exist without its out-of-workspace attestation
+    // requirement. The directory was allocated by this call and is still empty.
+    rmSync(taskDir, { recursive: true, force: true });
+    throw new PatchWardenError(
+      "attestation_requirement_registration_failed",
+      `Could not register the authoritative attestation requirement for task "${taskId}".`,
+      "Check the local PatchWarden attestation store permissions and retry create_task.",
+      true,
+      { cause: error instanceof Error ? error.message : String(error) },
+    );
+  }
 
   const status: TaskStatus = "pending";
   const statusFile = join(taskDir, "status.json");
@@ -799,15 +890,19 @@ async function createTaskInternal(input: CreateTaskInput): Promise<CreateTaskRes
     verification: safeAcceptance.verification,
     done_evidence: safeAcceptance.done_evidence,
     acceptance_status: null as AcceptanceStatus,
+    attestation_required: true,
+    attestation_authority: "external_ledger_v1",
     // v0.8.0: Goal Session 关联
     goal_id: effectiveInput.goal_id ?? null,
     subgoal_id: effectiveInput.subgoal_id ?? null,
     lineage_id: effectiveInput.lineage_id ?? null,
+    preflight: assessmentRecord?.preflight ?? null,
     // v1.0.0: Agent routing decision (only present when agent was auto-routed)
     ...(agentSelectionReason ? { agent_selection_reason: agentSelectionReason } : {}),
   };
 
   atomicWriteJsonFileSync(statusFile, statusData);
+  if (assessmentRecord?.preflight) atomicWriteJsonFileSync(join(taskDir, "preflight.json"), assessmentRecord.preflight);
   writeTaskProgress(taskDir, "queued", {
     heartbeatAt: statusData.last_heartbeat_at,
     note: `Waiting for watcher. Timeout: ${timeoutSeconds} seconds.`,
@@ -984,6 +1079,7 @@ function mergeAssessmentIntoInput(
     forbidden: record.forbidden || [],
     verification: record.verification || [],
     done_evidence: record.done_evidence || [],
+    confirm_workspace_root: record.confirm_workspace_root === true,
   };
   // Parameter mismatch check: if caller passed explicit params that differ from assessment
   if (input.template && input.template !== record.template) {
@@ -1077,9 +1173,16 @@ function mergeAssessmentIntoInput(
   return merged;
 }
 
+function isBlockingPreflight(preflight: ProjectPreflightReport, template: TaskTemplateName | undefined): boolean {
+  return preflight.missing_scripts.length > 0
+    || preflight.ports === "occupied"
+    || preflight.manifest === "invalid"
+    || (preflight.dependencies === "missing" && template !== "inspect_only");
+}
+
 function createTaskDirectory(tasksDir: string, workspaceRoot: string, configuredTasksDir: string): { taskId: string; taskDir: string } {
   guardPath(tasksDir, workspaceRoot, configuredTasksDir);
-  mkdirSync(tasksDir, { recursive: true });
+  mkdirSync(tasksDir, { recursive: true, mode: 0o700 });
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const timestamp = new Date().toISOString()
       .replace(/[-:]/g, "")
@@ -1089,7 +1192,7 @@ function createTaskDirectory(tasksDir: string, workspaceRoot: string, configured
     const taskDir = resolve(tasksDir, taskId);
     guardPath(taskDir, workspaceRoot, configuredTasksDir);
     try {
-      mkdirSync(taskDir, { recursive: false });
+      mkdirSync(taskDir, { recursive: false, mode: 0o700 });
       return { taskId, taskDir };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;

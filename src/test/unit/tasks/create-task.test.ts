@@ -261,6 +261,112 @@ describe("createTask", () => {
     );
   });
 
+  it("returns structured rule evidence for high-risk blocks and medium-risk confirmations", async () => {
+    writeConfig(tempDir);
+    mkdirSync(join(tempDir, "my-repo"), { recursive: true });
+
+    const blocked = await createTask({
+      inline_plan: "Read the .env file and copy its API token into the report.",
+      agent: "codex",
+      repo_path: "my-repo",
+      execution_mode: "assess_only",
+    }) as AssessOnlyOutput;
+    assert.equal(blocked.decision, "blocked");
+    assert.equal(blocked.rules.length > 0, true);
+    assert.equal(blocked.rules[0]?.risk_level, "high");
+    assert.equal(blocked.rules[0]?.confirmation_supported, false);
+    assert.ok(blocked.rules[0]?.blocked_capability);
+    assert.ok(blocked.rules[0]?.safe_alternative);
+    assert.match(blocked.rules[0]?.trigger_text || "", /Read the \.env/i);
+    assert.doesNotMatch(blocked.rules[0]?.trigger_text || "", /Safety rule .* matched/);
+
+    const confirm = await createTask({
+      template: "release_check",
+      goal: "Inspect release readiness without publishing.",
+      agent: "codex",
+      repo_path: "my-repo",
+      execution_mode: "assess_only",
+    }) as AssessOnlyOutput;
+    assert.equal(confirm.decision, "needs_confirm");
+    assert.equal(confirm.rules[0]?.rule_id, "release_template_needs_confirm");
+    assert.equal(confirm.rules[0]?.confirmation_supported, true);
+    assert.equal(confirm.rules[0]?.trigger_text, "template=release_check");
+
+    const commandBlocked = await createTask({
+      inline_plan: "Run the requested verification only.",
+      agent: "codex",
+      repo_path: "my-repo",
+      verify_commands: ["npm run forbidden -- --token=secret-value"],
+      execution_mode: "assess_only",
+    }) as AssessOnlyOutput;
+    assert.equal(commandBlocked.decision, "blocked");
+    assert.equal(commandBlocked.rules[0]?.rule_id, "test_command_not_allowlisted");
+    assert.match(commandBlocked.rules[0]?.trigger_text || "", /npm run forbidden/);
+    assert.doesNotMatch(commandBlocked.rules[0]?.trigger_text || "", /secret-value/);
+  });
+
+  it("blocks a feature task during assessment when project dependencies or verification scripts are missing", async () => {
+    writeConfig(tempDir);
+    const repo = join(tempDir, "node-repo");
+    mkdirSync(repo, { recursive: true });
+    writeFileSync(join(repo, "package.json"), JSON.stringify({
+      scripts: { test: "node test.js" },
+      dependencies: { example: "1.0.0" },
+    }), "utf-8");
+    writeFileSync(join(repo, "package-lock.json"), "{}", "utf-8");
+
+    const result = await createTask({
+      template: "feature_small",
+      goal: "Add a repo-local feature.",
+      agent: "codex",
+      repo_path: "node-repo",
+      verify_commands: ["npm run build"],
+      execution_mode: "assess_only",
+    }) as AssessOnlyOutput;
+
+    assert.equal(result.decision, "blocked");
+    assert.equal(result.preflight.dependencies, "missing");
+    assert.deepEqual(result.preflight.missing_scripts, ["build"]);
+    assert.equal(result.preflight.recommended_action, "fix_verification_scripts");
+    assert.equal(result.reason_codes.includes("environment_preflight_failed"), true);
+  });
+
+  it("blocks a multi-project workspace root unless explicitly confirmed", async () => {
+    writeConfig(tempDir);
+    for (const name of ["project-a", "project-b"]) {
+      mkdirSync(join(tempDir, name), { recursive: true });
+      writeFileSync(join(tempDir, name, "package.json"), "{}", "utf-8");
+    }
+
+    await assert.rejects(
+      () => createTask({ inline_plan: "## Goal\nInspect projects.", agent: "codex", repo_path: "." }),
+      (error: unknown) => error instanceof PatchWardenError
+        && error.reason === "repo_scope_confirmation_required"
+        && error.details.status === "repo_scope_confirmation_required"
+        && error.details.suggested_repo_path === "project-a",
+    );
+
+    const confirmed = await createTask({
+      inline_plan: "## Goal\nInspect projects.",
+      agent: "codex",
+      repo_path: ".",
+      confirm_workspace_root: true,
+    }) as CreateTaskOutput;
+    assert.equal(confirmed.status, "pending");
+
+    const assessed = await createTask({
+      inline_plan: "## Goal\nAssess root work.",
+      agent: "codex",
+      repo_path: ".",
+      confirm_workspace_root: true,
+      execution_mode: "assess_only",
+    }) as AssessOnlyOutput;
+    const assessment = JSON.parse(readFileSync(join(tempDir, ".patchwarden", "assessments", assessed.assessment_id, "assessment.json"), "utf-8"));
+    assert.equal(assessment.confirm_workspace_root, true);
+    const executed = await createTask({ execution_mode: "execute", assessment_id: assessed.assessment_id }) as CreateTaskOutput;
+    assert.equal(executed.status, "pending");
+  });
+
   // ── 7. watcher not running ─────────────────────────────────────
 
   it("returns execution_blocked: true when watcher is not running", async () => {

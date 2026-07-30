@@ -220,6 +220,33 @@ describe("applyPatch rejection cases", () => {
     assert.equal(readFileSync(filePath, "utf-8"), "hello world");
   });
 
+  it("reports the failing batch operation and leaves every operation unapplied", () => {
+    const filePath = join(repoPath, "src", "main.ts");
+    const original = "alpha\nbeta\n";
+    writeFileSync(filePath, original, "utf-8");
+
+    assert.throws(
+      () => applyPatch({
+        session_id: sessionId,
+        path: "src/main.ts",
+        expected_sha256: sha256(original),
+        operations: [
+          { type: "replace_exact", old_text: "alpha", new_text: "changed" },
+          { type: "replace_exact", old_text: "missing", new_text: "never" },
+        ],
+      }),
+      (error: unknown) => {
+        if (!(error instanceof PatchWardenError)) return false;
+        assert.equal(error.details.failed_operation_index, 1);
+        assert.equal(error.details.operation_type, "replace_exact");
+        assert.equal(error.details.other_operations_applied, false);
+        assert.equal(error.details.batch_atomic, true);
+        return true;
+      },
+    );
+    assert.equal(readFileSync(filePath, "utf-8"), original);
+  });
+
   it("rejects binary files (e.g. .png)", () => {
     const filePath = join(repoPath, "src", "image.png");
     writeFileSync(filePath, "fake png content", "utf-8");

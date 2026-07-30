@@ -5,7 +5,7 @@
 </p>
 
 [![Latest release](https://img.shields.io/github/v/release/jiezeng2004-design/PatchWarden?label=release)](https://github.com/jiezeng2004-design/PatchWarden/releases/latest)
-[![Node.js >= 18](https://img.shields.io/badge/Node.js-%3E%3D18-339933.svg)](https://nodejs.org/)
+[![Node.js >= 20](https://img.shields.io/badge/Node.js-%3E%3D20-339933.svg)](https://nodejs.org/)
 [![Windows x64](https://img.shields.io/badge/Windows-x64-0078D4.svg)](https://github.com/jiezeng2004-design/PatchWarden/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -16,7 +16,7 @@ PatchWarden connects ChatGPT to a local coding agent such as Codex CLI, Claude C
 [Download the latest Windows release](https://github.com/jiezeng2004-design/PatchWarden/releases/latest) · [5-minute start](#5-minute-quick-start) · [Connect ChatGPT](#connect-chatgpt-with-secure-mcp-tunnel) · [Troubleshooting](#troubleshooting)
 
 <p align="center">
-  <img src="./docs/assets/PatchWarden_Demo_Highlight.gif" width="800" alt="53-second PatchWarden workflow demo: plan in ChatGPT, execute with a local agent, verify and audit the result">
+  <img src="https://raw.githubusercontent.com/jiezeng2004-design/PatchWarden/main/docs/assets/PatchWarden_Demo_Highlight.gif" width="800" alt="53-second PatchWarden workflow demo: plan in ChatGPT, execute with a local agent, verify and audit the result">
 </p>
 
 <p align="center"><sub>53-second real workflow demo. Sensitive keys, tunnel IDs, and account identifiers are masked.</sub></p>
@@ -37,7 +37,7 @@ For the first local health check:
 - Windows 10 or 11 x64.
 - A dedicated folder that contains only the projects PatchWarden may access.
 - At least one installed and signed-in local agent: Codex CLI, Claude Code, or OpenCode.
-- Node.js 18 or newer for source/npm workflows. Git is recommended for reliable diffs.
+- Node.js 20 or newer for source/npm workflows. Git is recommended for reliable diffs.
 
 To connect ChatGPT later, you also need:
 
@@ -196,10 +196,21 @@ Do not accept only the agent's natural-language summary. Check the task and audi
 | `verification` | Independent configured command checks | Passed |
 | `changed_files_total` | Number of files actually changed | Matches the approved scope |
 | `out_of_scope_changes_total` | Changes outside the approved scope | `0` |
-| `audit` | Independent acceptance decision | `ACCEPTED` |
+| `audit` | Independent machine-audit decision | `ACCEPTED` |
+| local attestation | Authoritative human review of the current evidence | Signed and evidence digest unchanged |
 | final lineage state | End-to-end workflow outcome | `accepted` |
 
 For a read-only smoke test, `changed_files_total` should also be `0`.
+
+For new tasks, a passing `audit_task` still requires confirmation from an interactive local terminal. After reviewing `audit.json`, `changed-files.json`, verification evidence, and the diff, run:
+
+```powershell
+patchwarden-attest <task_id> --accept
+```
+
+The command requires a real TTY and binds the decision to an out-of-workspace local ledger plus the current evidence digest. Editing `acceptance.json` or `status.json` in the task directory is not authoritative.
+
+If you enable the local HTTP MCP transport directly (rather than the stdio Tunnel), set `PATCHWARDEN_OWNER_TOKEN` in the trusted parent-process environment first. Anonymous `/healthz` exposes only minimal status; detailed health and `/mcp` require the owner token.
 
 ## Troubleshooting
 
@@ -249,6 +260,18 @@ Copy-Item .\examples\config.example.json .\patchwarden.config.json
 ```
 
 Edit `patchwarden.config.json` and set at least `workspaceRoot`, `agents`, and `allowedTestCommands`. Keep this local configuration out of Git.
+
+Use `generatedPaths` (legacy alias `generated_paths` is accepted) for additional artifact-shaped generated-output globs and `repoGeneratedPaths` for repository-specific rules. Tracked or non-ignored generated output remains reviewable evidence; these settings do not suppress unexpected changes.
+
+Web repositories can explicitly enable `runtimeValidation` (legacy alias `runtime_validation` is accepted) in local configuration. `startCommand` must exactly match `allowedTestCommands`, and `baseUrl` must be a literal loopback HTTP address (`127.0.0.1` or `[::1]`). After static verification passes, PatchWarden uses system Edge/Chrome to check configured routes and viewports for console errors, broken images, horizontal overflow, and screenshots, then terminates only the service process tree owned by that validation. An already occupied URL is rejected rather than attached to or stopped.
+
+Direct now exposes constrained file create, directory create, move, and delete operations. Every operation still enforces workspace containment, sensitive-name blocking, link/reparse-point checks, and confirmation policy. Multi-patch application is atomic: a failed sub-patch leaves the batch unchanged and reports the exact patch index and reason.
+
+Task execution runs project preflight first and classifies policy, scope, confirmation, Agent, verification, connector, and Watcher failures separately. `agentPriority`, `maxRetriesPerAgent`, `fallbackOn`, and `doNotFallbackOn` configure bounded retries and Agent fallback. Fallback never bypasses policy, scope, or confirmation, and connector/Watcher failures do not consume Agent retries. Connector retries should reuse a stable `request_id`: identical parameters are idempotent, while changed locked parameters are rejected.
+
+Repositories may declare verified contacts, domains, quantitative/adoption claims, licenses, and prohibited claims in `.patchwarden/project-facts.json` or root-level `PROJECT_FACTS.json`. Audits also run framework checks for detected Next.js, Node.js, Python, Rust, and Electron projects, parse SVG/XML with a real parser, and distinguish executable documentation commands from narrative examples. `acceptance-report.json` provides the bounded result. When required runtime validation is incomplete, `manual_review_required=true` prevents automatic user-acceptance readiness.
+
+The task board and advanced console show task, Agent, Watcher, and connector state separately, together with heartbeat age, current command, source/generated/scope counts, verification progress, Agent attempt, routing action, and switch reason. Agent process completion is therefore not presented as task acceptance.
 
 ```powershell
 $env:PATCHWARDEN_CONFIG = (Resolve-Path .\patchwarden.config.json)

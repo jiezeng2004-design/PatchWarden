@@ -25,6 +25,10 @@ import {
   summarizeGoalProgress,
 } from "../../../goal/goalProgress.js";
 import { PatchWardenError } from "../../../errors.js";
+import {
+  createTaskAttestation,
+  registerTaskAttestationRequirement,
+} from "../../../attestation/attestationStore.js";
 
 // ── Helpers ───────────────────────────────────────────────────────
 
@@ -145,6 +149,35 @@ describe("goalProgress", () => {
       const result = acceptSubgoal(goal_id, subgoal_id, tempDir);
       assert.equal(result.status, "accepted");
       assert.equal(readGoalStatus(goal_id, tempDir).status, "completed");
+    });
+
+    it("requires a valid external attestation for new tasks even when status.json is forged", () => {
+      const taskId = "task-attested-001";
+      const ledger = join(tempDir, "external-ledger");
+      const { goal_id, subgoal_id } = setupGoalWithSubgoal(tempDir, {
+        subgoalStatus: "done_by_agent",
+        taskIds: [taskId],
+      });
+      createTestTask(tempDir, taskId, "done_by_agent", "accepted");
+      const taskDir = join(tempDir, ".patchwarden", "tasks", taskId);
+      writeFileSync(join(taskDir, "audit.json"), JSON.stringify({ acceptance: { status: "accepted" } }));
+      writeFileSync(join(taskDir, "result.md"), "review me");
+      registerTaskAttestationRequirement(taskId, tempDir, { baseDir: ledger });
+
+      assert.throws(
+        () => acceptSubgoal(goal_id, subgoal_id, tempDir, { baseDir: ledger }),
+        (error: unknown) => error instanceof PatchWardenError
+          && error.reason === "subgoal_not_ready"
+          && JSON.stringify(error.details).includes("attestation_missing"),
+      );
+
+      createTaskAttestation({
+        taskId,
+        taskDir,
+        workspaceRoot: tempDir,
+        decision: "accepted",
+      }, { baseDir: ledger, allowNonTty: true });
+      assert.equal(acceptSubgoal(goal_id, subgoal_id, tempDir, { baseDir: ledger }).status, "accepted");
     });
 
     it("有未 accepted 的 task（done_by_agent）→ 抛 subgoal_not_ready，detail 含 unaccepted_tasks", () => {

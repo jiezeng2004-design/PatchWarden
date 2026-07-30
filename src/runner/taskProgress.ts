@@ -7,6 +7,7 @@ const PHASES: Array<{ phase: TaskPhase; label: string }> = [
   { phase: "preparing", label: "Preparing repository snapshot" },
   { phase: "executing_agent", label: "Executing local agent" },
   { phase: "running_tests", label: "Running configured verification" },
+  { phase: "runtime_validation", label: "Running controlled browser validation" },
   { phase: "collecting_artifacts", label: "Collecting diff and result artifacts" },
   { phase: "completed", label: "Completed" },
 ];

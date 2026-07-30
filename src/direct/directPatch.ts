@@ -125,23 +125,43 @@ export function applyPatchOperations(
   let content = beforeContent;
   let operationsApplied = 0;
 
-  for (const op of operations) {
-    content = applySingleOperation(content, op);
-    operationsApplied++;
+  for (let index = 0; index < operations.length; index++) {
+    const op = operations[index];
+    try {
+      content = applySingleOperation(content, op);
+      const sensitiveAtOperation = redactSensitiveContent(content);
+      if (sensitiveAtOperation.redacted) {
+        throw new PatchWardenError(
+          "sensitive_content_blocked",
+          `Patch result contains credential-like content (${sensitiveAtOperation.redaction_categories.join(", ")}).`,
+          "Remove the sensitive value and retry with placeholders or environment-variable references.",
+          true,
+          { path: filePath, redaction_categories: sensitiveAtOperation.redaction_categories },
+        );
+      }
+      operationsApplied++;
+    } catch (error) {
+      if (error instanceof PatchWardenError) {
+        throw new PatchWardenError(
+          error.reason,
+          error.message,
+          error.suggestion,
+          error.blocked,
+          {
+            ...error.details,
+            failed_operation_index: index,
+            operation_type: op.type,
+            other_operations_applied: false,
+            batch_atomic: true,
+          },
+        );
+      }
+      throw error;
+    }
   }
 
   const afterSha256 = computeContentSha256(content);
   guardFileByteLimit(Buffer.byteLength(content, "utf-8"), options.maxFileBytes);
-  const sensitive = redactSensitiveContent(content);
-  if (sensitive.redacted) {
-    throw new PatchWardenError(
-      "sensitive_content_blocked",
-      `Patch result contains credential-like content (${sensitive.redaction_categories.join(", ")}).`,
-      "Remove the sensitive value and retry with placeholders or environment-variable references.",
-      true,
-      { path: filePath, redaction_categories: sensitive.redaction_categories },
-    );
-  }
   const bytesChanged = Math.abs(
     Buffer.byteLength(content, "utf-8") - Buffer.byteLength(beforeContent, "utf-8")
   );

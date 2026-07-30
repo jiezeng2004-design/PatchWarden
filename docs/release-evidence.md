@@ -99,9 +99,9 @@ Results from the 2026-07-30 isolated worktree save:
   80 OK / 1 expected default-config warning / 0 FAIL.
 - Build, release metadata, and brand checks passed; the brand check scanned
   413 tracked files.
-- Core, Direct, and Search manifests passed at 26, 14, and 5 tools. Their
-  SHA-256 manifest hashes were `f4382139e70f9d5a7454d1d4b6e8736d4524ca2e4034894ad81fd69ed96d71c2`,
-  `cf49517fc55bb447c5ae7cd12e7edda8cbf4966e95c37c831a1fe0a0f093d437`,
+- Core, Direct, and Search manifests passed at 26, 18, and 5 tools. Their
+  SHA-256 manifest hashes were `415724bf6cd747615b01ca642df3390b29b371fdea790d222869c4596fb0abd9`,
+  `cec9cda493b53390346013d888bf7b32f06d214552d011acbfe9d06552d5ad9b`,
   and `f9f5482b968992fda825e6094096f19241321c26743b878176ce63166c2ed20b`.
 - The isolated MCP smoke passed, including the disabled and enabled Direct
   profile paths.

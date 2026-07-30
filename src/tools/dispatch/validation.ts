@@ -1,4 +1,5 @@
 import type { PatchOperation, PatchOperationType } from "../../direct/directPatch.js";
+import { PatchWardenError } from "../../errors.js";
 import type { ReleaseStage } from "../../release/releaseGate.js";
 import { TASK_TEMPLATE_NAMES, type TaskTemplateName } from "../taskTemplates.js";
 
@@ -45,26 +46,28 @@ export function parseTaskLogFile(value: unknown): "stdout" | "stderr" | "test" |
 }
 
 export function parsePatchOperations(value: unknown): PatchOperation[] {
-  if (!Array.isArray(value)) throw new Error("operations must be an array");
+  if (!Array.isArray(value)) {
+    throw invalidPatchOperation(null, null, "operations must be an array");
+  }
   return value.map((entry, index) => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      throw new Error(`operations[${index}] must be an object`);
+      throw invalidPatchOperation(index, null, `operations[${index}] must be an object`);
     }
     const record = entry as Record<string, unknown>;
     if (typeof record.type !== "string" || !PATCH_OPERATION_TYPES.has(record.type as PatchOperationType)) {
-      throw new Error(`operations[${index}].type is invalid`);
+      throw invalidPatchOperation(index, typeof record.type === "string" ? record.type : null, `operations[${index}].type is invalid`);
     }
     if (typeof record.new_text !== "string") {
-      throw new Error(`operations[${index}].new_text must be a string`);
+      throw invalidPatchOperation(index, record.type, `operations[${index}].new_text must be a string`);
     }
     if (record.old_text !== undefined && typeof record.old_text !== "string") {
-      throw new Error(`operations[${index}].old_text must be a string`);
+      throw invalidPatchOperation(index, record.type, `operations[${index}].old_text must be a string`);
     }
     if (
       record.occurrence !== undefined
       && (typeof record.occurrence !== "string" || !PATCH_OCCURRENCES.has(record.occurrence))
     ) {
-      throw new Error(`operations[${index}].occurrence is invalid`);
+      throw invalidPatchOperation(index, record.type, `operations[${index}].occurrence is invalid`);
     }
     return {
       type: record.type as PatchOperationType,
@@ -75,4 +78,23 @@ export function parsePatchOperations(value: unknown): PatchOperation[] {
         : { occurrence: record.occurrence as PatchOperation["occurrence"] }),
     };
   });
+}
+
+function invalidPatchOperation(
+  index: number | null,
+  operationType: unknown,
+  message: string,
+): PatchWardenError {
+  return new PatchWardenError(
+    "invalid_patch_operation",
+    message,
+    "Correct the reported operation and retry the complete batch; no operation was applied.",
+    true,
+    {
+      failed_operation_index: index,
+      operation_type: typeof operationType === "string" ? operationType.slice(0, 80) : null,
+      other_operations_applied: false,
+      batch_atomic: true,
+    },
+  );
 }

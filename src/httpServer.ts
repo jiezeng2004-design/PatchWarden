@@ -1,363 +1,336 @@
 #!/usr/bin/env node
-/**
- * PatchWarden MCP Server — HTTP (Streamable HTTP) transport
- *
- * Binds to 127.0.0.1 only. Never exposes to LAN or public internet.
- * Use with OpenAI tunnel-client or ChatGPT Connector.
- *
- * Each HTTP request gets its own MCP Server + transport instance
- * to avoid "Already connected" errors from reusing a single Server.
- *
- * Config options (in patchwarden.config.json):
- *   httpPort: number (default 7331)
- *
- * Run: node dist/httpServer.js
- *   or: npm run start:http
- */
-
-import { createServer, IncomingMessage, ServerResponse } from "node:http";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { Server as McpServer } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { loadConfig, getTasksDir } from "./config.js";
-import { registerTools } from "./tools/registry.js";
+import { getTasksDir, loadConfig, type PatchWardenConfig } from "./config.js";
+import { registerTools, getToolCatalogSnapshot } from "./tools/registry.js";
 import { healthCheck } from "./tools/diagnostics/healthCheck.js";
-import { getToolCatalogSnapshot } from "./tools/registry.js";
 import { PATCHWARDEN_VERSION } from "./version.js";
 import { logger } from "./logging.js";
 import { firstHeaderValue, timingSafeStringEqual } from "./security/secretComparison.js";
-import { redactSensitiveContent } from "./security/contentRedaction.js";
-import { atomicWriteJsonFileSync } from "./utils/atomicFile.js";
-import { mutateTaskStatus } from "./runner/taskStatusStore.js";
 import { isTrustedLoopbackHostHeader } from "./security/loopbackHost.js";
+import { verifyTaskAttestation } from "./attestation/attestationStore.js";
 
-// ── Bootstrap ─────────────────────────────────────────────────────
-
-const config = loadConfig();
-const port = parseInt(process.env.PATCHWARDEN_HTTP_PORT || "") ||
-  config.httpPort ||
-  7331;
-const host = "127.0.0.1";
-
-logger.info(`[patchwarden-http] Workspace: ${config.workspaceRoot}`);
-logger.info(`[patchwarden-http] Listening:  http://${host}:${port}/mcp`);
-logger.info(`[patchwarden-http] ⚠️  Bound to 127.0.0.1 only — not exposed to network`);
-
-// ── Owner token (optional) ────────────────────────────────────────
-
-const httpCfg = config.http || {};
-const ownerTokenEnv = httpCfg.ownerTokenEnv || "PATCHWARDEN_OWNER_TOKEN";
-const ownerToken = process.env[ownerTokenEnv] || "";
-const MAX_ADMIN_BODY_BYTES = 64 * 1024;
-const MAX_ACCEPTANCE_NOTES_CHARS = 10_000;
-const REVIEWABLE_TASK_STATUSES = new Set([
-  "done_by_agent",
-  "done",
-  "accepted",
-  "rejected",
-  "needs_fix",
-  "blocked",
-]);
-
-if (ownerToken) {
-  logger.info(`[patchwarden-http] 🔒 Owner token required (env: ${ownerTokenEnv})`);
-} else {
-  logger.info(`[patchwarden-http] ⚠️  No owner token set — all local requests accepted`);
+export interface HttpLimits {
+  maxMcpBodyBytes: number;
+  maxConcurrentRequests: number;
+  bodyReadTimeoutMs: number;
+  handlerTimeoutMs: number;
+  headersTimeoutMs: number;
+  requestTimeoutMs: number;
+  keepAliveTimeoutMs: number;
+  maxHeadersCount: number;
 }
 
-function checkOwnerToken(req: IncomingMessage): boolean {
-  if (!ownerToken) return true; // no token configured — allow all
+export const HTTP_LIMITS: Readonly<HttpLimits> = Object.freeze({
+  maxMcpBodyBytes: 1024 * 1024,
+  maxConcurrentRequests: 8,
+  bodyReadTimeoutMs: 10_000,
+  handlerTimeoutMs: 45_000,
+  headersTimeoutMs: 10_000,
+  requestTimeoutMs: 55_000,
+  keepAliveTimeoutMs: 5_000,
+  maxHeadersCount: 64,
+});
 
-  const authHeader = firstHeaderValue(req.headers["authorization"]);
-  const customHeader = firstHeaderValue(req.headers["x-patchwarden-token"]);
+const SECURITY_HEADERS = {
+  "Cache-Control": "no-store",
+  "Content-Type": "application/json; charset=utf-8",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "no-referrer",
+} as const;
 
-  if (authHeader.startsWith("Bearer ")) {
-    return timingSafeStringEqual(authHeader.slice(7), ownerToken);
-  }
-
-  if (customHeader.length > 0) {
-    return timingSafeStringEqual(customHeader, ownerToken);
-  }
-
-  return false;
+export interface PatchWardenHttpServerOptions {
+  config: PatchWardenConfig;
+  ownerToken: string;
+  host?: "127.0.0.1";
+  port: number;
+  limits?: Partial<HttpLimits>;
 }
 
-// ── Acceptance helpers ────────────────────────────────────────────
-
-function getAcceptancePath(taskId: string): string {
-  const tasksDir = getTasksDir(config);
-  return join(resolve(tasksDir, taskId), "acceptance.json");
-}
-
-function handleAcceptance(taskId: string, status: "accepted" | "rejected", body: string): object {
-  const filePath = getAcceptancePath(taskId);
-  const taskDir = join(resolve(getTasksDir(config), taskId));
-  if (!existsSync(taskDir)) {
-    throw Object.assign(new Error(`Task "${taskId}" not found.`), { statusCode: 404 });
-  }
-  let notes = "";
-  if (body.trim()) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(body);
-    } catch {
-      throw httpError(400, "Acceptance body must be valid JSON.");
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw httpError(400, "Acceptance body must be a JSON object.");
-    }
-    const record = parsed as Record<string, unknown>;
-    const rawNotes = record.notes ?? record.reason ?? "";
-    if (typeof rawNotes !== "string") {
-      throw httpError(400, "Acceptance notes or reason must be a string.");
-    }
-    notes = redactSensitiveContent(rawNotes).content.slice(0, MAX_ACCEPTANCE_NOTES_CHARS);
-  }
-  const acceptance = {
-    status,
-    reviewed_at: new Date().toISOString(),
-    reviewer: "human",
-    notes,
-  };
-  // Commit the review artifact and status annotation while holding the same
-  // status lock used by the runner, cancel, and audit paths.
-  const statusFile = join(taskDir, "status.json");
-  if (!existsSync(statusFile)) {
-    throw httpError(409, `Task "${taskId}" has no status.json to review.`);
-  }
-  mutateTaskStatus(statusFile, (current) => {
-    if (!REVIEWABLE_TASK_STATUSES.has(String(current.status || ""))) {
-      throw httpError(409, `Task "${taskId}" is not in a reviewable terminal state.`);
-    }
-    atomicWriteJsonFileSync(filePath, acceptance);
-    const next = {
-      ...current,
-      acceptance_status: status,
-      acceptance_reviewed_at: acceptance.reviewed_at,
-      updated_at: new Date().toISOString(),
-    };
-    return { next, result: next };
-  });
-  return acceptance;
+function jsonResponse(res: ServerResponse, status: number, value: unknown, extra: Record<string, string> = {}): void {
+  if (res.headersSent || res.writableEnded) return;
+  res.writeHead(status, { ...SECURITY_HEADERS, ...extra });
+  res.end(JSON.stringify(value));
 }
 
 function httpError(statusCode: number, message: string): Error & { statusCode: number } {
   return Object.assign(new Error(message), { statusCode });
 }
 
-function readBoundedRequestBody(req: IncomingMessage, maxBytes: number): Promise<string> {
-  const declaredLength = Number(firstHeaderValue(req.headers["content-length"]));
-  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-    req.resume();
-    return Promise.reject(httpError(413, `Request body exceeds ${maxBytes} bytes.`));
+function requestAuthorized(req: IncomingMessage, ownerToken: string): boolean {
+  if (!ownerToken) return false;
+  const authHeader = firstHeaderValue(req.headers.authorization);
+  const customHeader = firstHeaderValue(req.headers["x-patchwarden-token"]);
+  if (authHeader.startsWith("Bearer ")) return timingSafeStringEqual(authHeader.slice(7), ownerToken);
+  return customHeader.length > 0 && timingSafeStringEqual(customHeader, ownerToken);
+}
+
+function parseAdminUrl(pathname: string) {
+  const match = pathname.match(/^\/admin\/tasks\/(task[_-][A-Za-z0-9_-]{1,160})\/(accept|reject|acceptance)$/);
+  if (!match) return null;
+  return { taskId: match[1], action: match[2] as "accept" | "reject" | "acceptance" };
+}
+
+function readAcceptance(config: PatchWardenConfig, taskId: string): object {
+  const taskDir = join(getTasksDir(config), taskId);
+  if (!existsSync(taskDir)) throw httpError(404, `Task "${taskId}" not found.`);
+  const verification = verifyTaskAttestation(taskId, taskDir, config.workspaceRoot);
+  if (verification.required) {
+    return {
+      status: verification.valid ? verification.decision : "pending",
+      authoritative: verification.valid,
+      authority: "external_ledger_v1",
+      reason: verification.reason,
+      reviewed_at: verification.attestation?.reviewed_at || null,
+      evidence_sha256: verification.attestation?.evidence_sha256 || null,
+    };
+  }
+  const legacyPath = join(taskDir, "acceptance.json");
+  if (!existsSync(legacyPath)) {
+    return { status: "pending", authoritative: false, authority: "legacy_unattested", reviewed_at: null };
+  }
+  const legacy = JSON.parse(readFileSync(legacyPath, "utf-8")) as Record<string, unknown>;
+  return { ...legacy, authoritative: false, authority: "legacy_unattested" };
+}
+
+async function readBoundedJsonBody(req: IncomingMessage, maxBytes: number, timeoutMs: number): Promise<unknown> {
+  const declared = firstHeaderValue(req.headers["content-length"]);
+  if (declared) {
+    const value = Number(declared);
+    if (!Number.isSafeInteger(value) || value < 0) throw httpError(400, "Invalid Content-Length header.");
+    if (value > maxBytes) {
+      req.resume();
+      throw httpError(413, `Request body exceeds ${maxBytes} bytes.`);
+    }
   }
   return new Promise((resolveBody, rejectBody) => {
     const chunks: Buffer[] = [];
     let total = 0;
     let settled = false;
+    const finish = (error?: Error, value?: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) rejectBody(error);
+      else resolveBody(value);
+    };
+    const timer = setTimeout(() => {
+      req.resume();
+      finish(httpError(408, "Request body read timed out."));
+    }, timeoutMs);
+    timer.unref();
     req.on("data", (chunk: Buffer | string) => {
       if (settled) return;
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       total += buffer.length;
       if (total > maxBytes) {
-        settled = true;
         req.resume();
-        rejectBody(httpError(413, `Request body exceeds ${maxBytes} bytes.`));
-        return;
+        finish(httpError(413, `Request body exceeds ${maxBytes} bytes.`));
+      } else {
+        chunks.push(buffer);
       }
-      chunks.push(buffer);
     });
     req.on("end", () => {
-      if (!settled) {
-        settled = true;
-        resolveBody(Buffer.concat(chunks).toString("utf-8"));
+      if (settled) return;
+      try {
+        const text = Buffer.concat(chunks).toString("utf-8");
+        finish(undefined, text.length > 0 ? JSON.parse(text) : undefined);
+      } catch {
+        finish(httpError(400, "Request body must be valid JSON."));
       }
     });
-    req.on("error", (error) => {
-      if (!settled) {
-        settled = true;
-        rejectBody(error);
-      }
-    });
+    req.on("error", (error) => finish(error));
+    req.on("aborted", () => finish(httpError(400, "Request was aborted.")));
   });
 }
 
-function readAcceptance(taskId: string): object {
-  const filePath = getAcceptancePath(taskId);
-  if (!existsSync(filePath)) {
-    return { status: "pending", reviewed_at: null, reviewer: null, notes: null };
-  }
-  return JSON.parse(readFileSync(filePath, "utf-8"));
-}
-
-// ── Helpers ───────────────────────────────────────────────────────
-
-/** Create a fresh MCP Server with tools registered */
-function createMcpServer(): Server {
-  const server = new Server(
+function createMcpServer(): McpServer {
+  const server = new McpServer(
     { name: "patchwarden", version: PATCHWARDEN_VERSION },
-    { capabilities: { tools: {} } }
+    { capabilities: { tools: {} } },
   );
   registerTools(server);
   return server;
 }
 
-/** Handle one MCP request with its own server+transport lifecycle */
-async function handleMcpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  // Fresh instances per request — no shared state, no "already connected" errors
+async function handleMcpRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  parsedBody: unknown,
+  timeoutMs: number,
+): Promise<void> {
   const mcpServer = createMcpServer();
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined, // stateless
-  });
-
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  let timeout: NodeJS.Timeout | undefined;
   try {
     await mcpServer.connect(transport);
-    await transport.handleRequest(req, res);
-  } catch (err) {
-    logger.error("[patchwarden-http] Request error", {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    if (!res.headersSent) {
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Internal server error" }));
-    }
+    await Promise.race([
+      transport.handleRequest(req, res, parsedBody),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(httpError(504, "MCP request exceeded its execution budget.")), timeoutMs);
+        timeout.unref();
+      }),
+    ]);
   } finally {
-    // Always close to free resources
-    try {
-      await transport.close();
-    } catch {
-      // best effort
-    }
-    try {
-      await mcpServer.close();
-    } catch {
-      // best effort
-    }
+    if (timeout) clearTimeout(timeout);
+    try { await transport.close(); } catch { /* best effort */ }
+    try { await mcpServer.close(); } catch { /* best effort */ }
   }
 }
 
-// ── Parse URL for admin routes ────────────────────────────────────
+export function createPatchWardenHttpServer(options: PatchWardenHttpServerOptions): Server {
+  const { config, ownerToken, port } = options;
+  const host = options.host || "127.0.0.1";
+  const limits = { ...HTTP_LIMITS, ...(options.limits || {}) };
+  let activeRequests = 0;
 
-function parseAdminUrl(url: string) {
-  // Match: /admin/tasks/:id/accept, /admin/tasks/:id/reject, /admin/tasks/:id/acceptance
-  const acceptMatch = url.match(/^\/admin\/tasks\/(task_\w+)\/accept$/);
-  if (acceptMatch) return { taskId: acceptMatch[1], action: "accept" as const };
-  const rejectMatch = url.match(/^\/admin\/tasks\/(task_\w+)\/reject$/);
-  if (rejectMatch) return { taskId: rejectMatch[1], action: "reject" as const };
-  const readMatch = url.match(/^\/admin\/tasks\/(task_\w+)\/acceptance$/);
-  if (readMatch) return { taskId: readMatch[1], action: "get_acceptance" as const };
-  return null;
-}
-
-// ── HTTP server ───────────────────────────────────────────────────
-
-const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-  if (!isTrustedLoopbackHostHeader(req.headers.host, port)) {
-    res.writeHead(421, {
-      "Content-Type": "application/json; charset=utf-8",
-      "Cache-Control": "no-store",
-      "X-Content-Type-Options": "nosniff",
-    });
-    res.end(JSON.stringify({ error: "Untrusted Host header" }));
-    return;
-  }
-
-  // Health check endpoints
-  if (req.method === "GET" && (req.url === "/healthz" || req.url === "/readyz")) {
-    const health = healthCheck(getToolCatalogSnapshot());
-    const ready = health.mcp_server.available && health.workspace_root.available && health.tasks_dir.available;
-    res.writeHead(req.url === "/readyz" && !ready ? 503 : 200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ...health, ready }));
-    return;
-  }
-
-  // Admin acceptance endpoints
-  const admin = parseAdminUrl(req.url || "");
-  if (admin) {
-    if (!checkOwnerToken(req)) {
-      res.writeHead(401, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Unauthorized — invalid or missing owner token" }));
+  const server = createServer(async (req, res) => {
+    const boundAddress = server.address();
+    const expectedPort = port === 0 && boundAddress && typeof boundAddress === "object"
+      ? boundAddress.port
+      : port;
+    if (!isTrustedLoopbackHostHeader(req.headers.host, expectedPort)) {
+      jsonResponse(res, 421, { error_code: "untrusted_host", error: "Untrusted Host header." });
       return;
     }
+    let url: URL;
     try {
-      if (admin.action === "get_acceptance" && req.method === "GET") {
-        const acceptance = readAcceptance(admin.taskId);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(acceptance, null, 2));
+      url = new URL(req.url || "/", `http://${host}:${expectedPort}`);
+    } catch {
+      jsonResponse(res, 400, { error_code: "invalid_url", error: "Request URL is invalid." });
+      return;
+    }
+    const isHealth = req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz");
+    if (isHealth) {
+      const health = healthCheck(getToolCatalogSnapshot());
+      const ready = Boolean(health.mcp_server.available && health.workspace_root.available && health.tasks_dir.available && ownerToken);
+      const detailed = url.searchParams.get("detail") === "full";
+      if (detailed && !requestAuthorized(req, ownerToken)) {
+        jsonResponse(res, 401, { error_code: "unauthorized", error: "Owner token required." });
+        return;
+      }
+      const status = url.pathname === "/readyz" && !ready ? 503 : 200;
+      jsonResponse(res, status, detailed
+        ? { ...health, ready, authentication: { configured: Boolean(ownerToken) } }
+        : { service: "patchwarden", status: ready ? "ok" : "degraded", ready });
+      return;
+    }
+
+    const admin = parseAdminUrl(url.pathname);
+    if (admin) {
+      if (!requestAuthorized(req, ownerToken)) {
+        jsonResponse(res, 401, { error_code: "unauthorized", error: "Owner token required." });
+        return;
+      }
+      if (admin.action === "acceptance" && req.method === "GET") {
+        try { jsonResponse(res, 200, readAcceptance(config, admin.taskId)); }
+        catch (error) {
+          const status = Number((error as { statusCode?: number }).statusCode) || 500;
+          jsonResponse(res, status, { error_code: "acceptance_read_failed", error: error instanceof Error ? error.message : "Read failed." });
+        }
         return;
       }
       if ((admin.action === "accept" || admin.action === "reject") && req.method === "POST") {
-        const body = await readBoundedRequestBody(req, MAX_ADMIN_BODY_BYTES);
-        const acceptance = handleAcceptance(admin.taskId, admin.action === "accept" ? "accepted" : "rejected", body);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(acceptance, null, 2));
+        // An MCP owner token proves API ownership, not a local user gesture.
+        // Signing is intentionally available only through patchwarden-attest.
+        req.resume();
+        jsonResponse(res, 409, {
+          error_code: "local_attestation_required",
+          error: "Authoritative review requires the local interactive patchwarden-attest CLI.",
+          command: `patchwarden-attest ${admin.taskId} --${admin.action}`,
+        });
         return;
       }
-      res.writeHead(405, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Method not allowed for this admin endpoint." }));
-    } catch (err: unknown) {
-      const statusCode = err && typeof err === "object" && "statusCode" in err
-        ? Number((err as { statusCode?: unknown }).statusCode) || 500
-        : 500;
-      const message = err instanceof Error ? err.message : "Internal server error";
-      res.writeHead(statusCode, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: message }));
+      jsonResponse(res, 405, { error_code: "method_not_allowed", error: "Method not allowed." }, { Allow: admin.action === "acceptance" ? "GET" : "POST" });
+      return;
     }
-    return;
+
+    if (url.pathname !== "/mcp" && url.pathname !== "/mcp/") {
+      jsonResponse(res, 404, {
+        error_code: "mcp_endpoint_not_found",
+        error: "PatchWarden MCP endpoint not found.",
+        expected_path: "/mcp",
+        health_path: "/healthz",
+      });
+      return;
+    }
+    if (!requestAuthorized(req, ownerToken)) {
+      req.resume();
+      jsonResponse(res, 401, { error_code: "unauthorized", error: "Owner token required." });
+      return;
+    }
+    if (req.method !== "POST") {
+      req.resume();
+      jsonResponse(res, 405, { error_code: "method_not_allowed", error: "MCP requests must use POST." }, { Allow: "POST" });
+      return;
+    }
+    if (!firstHeaderValue(req.headers["content-type"]).toLowerCase().startsWith("application/json")) {
+      req.resume();
+      jsonResponse(res, 415, { error_code: "unsupported_media_type", error: "MCP requests require application/json." });
+      return;
+    }
+    if (activeRequests >= limits.maxConcurrentRequests) {
+      req.resume();
+      jsonResponse(res, 429, { error_code: "concurrency_limit", error: "HTTP MCP concurrency budget exhausted." }, { "Retry-After": "1" });
+      return;
+    }
+
+    activeRequests += 1;
+    try {
+      const body = await readBoundedJsonBody(req, limits.maxMcpBodyBytes, limits.bodyReadTimeoutMs);
+      await handleMcpRequest(req, res, body, limits.handlerTimeoutMs);
+    } catch (error) {
+      const status = Number((error as { statusCode?: number }).statusCode) || 500;
+      if (status >= 500) logger.error("[patchwarden-http] Request failed", { error: error instanceof Error ? error.message : String(error) });
+      jsonResponse(res, status, {
+        error_code: status === 413 ? "body_too_large" : status === 504 ? "request_timeout" : "request_failed",
+        error: status >= 500 && status !== 504 ? "Internal server error." : error instanceof Error ? error.message : "Request failed.",
+      });
+    } finally {
+      activeRequests -= 1;
+    }
+  });
+
+  server.headersTimeout = limits.headersTimeoutMs;
+  server.requestTimeout = limits.requestTimeoutMs;
+  server.keepAliveTimeout = limits.keepAliveTimeoutMs;
+  server.maxHeadersCount = limits.maxHeadersCount;
+  return server;
+}
+
+export function startPatchWardenHttpServer(): Server {
+  const config = loadConfig();
+  const configuredPort = process.env.PATCHWARDEN_HTTP_PORT;
+  const port = configuredPort !== undefined ? Number(configuredPort) : (config.http?.port || config.httpPort || 7331);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error("PATCHWARDEN_HTTP_PORT must be an integer from 1 to 65535.");
+  const ownerTokenEnv = config.http?.ownerTokenEnv || "PATCHWARDEN_OWNER_TOKEN";
+  const ownerToken = process.env[ownerTokenEnv] || "";
+  if (!ownerToken) throw new Error(`HTTP MCP requires an owner token in ${ownerTokenEnv}.`);
+  const host = "127.0.0.1" as const;
+  const server = createPatchWardenHttpServer({ config, ownerToken, host, port });
+  server.on("error", (error: NodeJS.ErrnoException) => {
+    logger.fatal(`[patchwarden-http] Fatal: ${error.message}`);
+    process.exitCode = 1;
+  });
+  server.listen(port, host, () => {
+    logger.info(`[patchwarden-http] Ready on http://${host}:${port}/mcp (owner token: ${ownerTokenEnv})`);
+  });
+  return server;
+}
+
+const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
+if (isMain) {
+  try {
+    const server = startPatchWardenHttpServer();
+    process.on("SIGINT", () => server.close(() => process.exit(0)));
+    process.on("SIGTERM", () => server.close(() => process.exit(0)));
+  } catch (error) {
+    logger.fatal(`[patchwarden-http] Fatal: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
   }
-
-  // MCP endpoint
-  if (req.url !== "/mcp" && req.url !== "/mcp/") {
-    res.writeHead(404, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({
-      error_code: "mcp_endpoint_not_found",
-      error: "PatchWarden MCP endpoint not found.",
-      expected_path: "/mcp",
-      health_path: "/healthz",
-      admin_paths: {
-        accept: "POST /admin/tasks/:id/accept",
-        reject: "POST /admin/tasks/:id/reject",
-        get_acceptance: "GET /admin/tasks/:id/acceptance",
-      },
-      suggestion: "Use POST /mcp for MCP requests, GET /healthz for local diagnostics, or /admin/tasks/:id/accept for human review.",
-    }));
-    return;
-  }
-
-  // Owner token check (if configured)
-  if (!checkOwnerToken(req)) {
-    res.writeHead(401, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Unauthorized — invalid or missing owner token" }));
-    return;
-  }
-
-  await handleMcpRequest(req, res);
-});
-
-// ── Start ─────────────────────────────────────────────────────────
-
-httpServer.on("error", (err: NodeJS.ErrnoException) => {
-  if (err.code === "EADDRINUSE") {
-    logger.fatal(`[patchwarden-http] Fatal: port ${port} is already in use on ${host}.`);
-    logger.fatal("[patchwarden-http] Stop the other PatchWarden HTTP instance or change httpPort in patchwarden.config.json.");
-  } else {
-    logger.fatal(`[patchwarden-http] Fatal: ${err.message}`);
-  }
-  process.exit(1);
-});
-
-httpServer.listen(port, host, () => {
-  logger.info(`[patchwarden-http] ✅ Ready`);
-  logger.info(`[patchwarden-http] Admin:    http://${host}:${port}/admin/tasks/:id/accept`);
-});
-
-// Graceful shutdown
-process.on("SIGINT", () => {
-  logger.info("[patchwarden-http] Shutting down...");
-  httpServer.close(() => process.exit(0));
-});
-
-process.on("SIGTERM", () => {
-  httpServer.close(() => process.exit(0));
-});
+}

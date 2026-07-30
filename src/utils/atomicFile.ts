@@ -22,7 +22,7 @@ export function atomicWriteFileSync(
     writeFileSync(temporaryPath, content, {
       encoding: options.encoding ?? "utf-8",
       flag: "wx",
-      ...(options.mode === undefined ? {} : { mode: options.mode }),
+      mode: options.mode ?? 0o600,
     });
     const descriptor = openSync(temporaryPath, "r");
     try {

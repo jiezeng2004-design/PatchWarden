@@ -326,3 +326,15 @@ export function isBinaryFile(filePath: string): boolean {
     return false;
   }
 }
+
+export function isBinaryContent(filePath: string, content: Buffer): boolean {
+  const normalized = filePath.replace(/\\/g, "/").toLowerCase();
+  for (const ext of BINARY_EXTENSIONS) {
+    if (normalized.endsWith(ext)) return true;
+  }
+  const scanSize = Math.min(content.length, BINARY_SCAN_LIMIT);
+  for (let index = 0; index < scanSize; index += 1) {
+    if (content[index] === 0) return true;
+  }
+  return false;
+}

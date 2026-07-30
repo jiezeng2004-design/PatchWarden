@@ -24,6 +24,10 @@ export interface FinalizeDirectSessionOutput {
   session_id: string;
   changed_files_total: number;
   source_changes: ClassifiedChange[];
+  dependency_changes: ClassifiedChange[];
+  generated_changes: ClassifiedChange[];
+  runtime_changes: ClassifiedChange[];
+  unexpected_changes: ClassifiedChange[];
   tracked_build_artifacts: ClassifiedChange[];
   runtime_generated_files: ClassifiedChange[];
   suspicious_changes: ClassifiedChange[];
@@ -80,6 +84,10 @@ export async function finalizeDirectSession(
     session_id,
     changed_files_total: changeArtifacts.changed_files.length,
     source_changes: changeArtifacts.artifact_hygiene.source_changes,
+    dependency_changes: changeArtifacts.artifact_hygiene.dependency_changes ?? [],
+    generated_changes: changeArtifacts.artifact_hygiene.generated_changes ?? [],
+    runtime_changes: changeArtifacts.artifact_hygiene.runtime_changes ?? [],
+    unexpected_changes: changeArtifacts.artifact_hygiene.unexpected_changes ?? [],
     tracked_build_artifacts:
       changeArtifacts.artifact_hygiene.tracked_build_artifacts,
     runtime_generated_files:
@@ -142,5 +150,7 @@ function classificationReason(change: ChangedFile): string {
     return "artifact-like path is not ignored and requires review";
   if (change.kind === "runtime_generated")
     return "runtime-generated path is not ignored and requires review";
+  if (change.kind === "dependency")
+    return change.tracked ? "tracked dependency lockfile change" : "untracked dependency lockfile change";
   return change.tracked ? "tracked source change" : "untracked source change";
 }

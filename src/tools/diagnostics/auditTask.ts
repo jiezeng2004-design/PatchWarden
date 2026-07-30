@@ -13,6 +13,12 @@ export interface AuditTaskOutput {
   task_id: string;
   model_selection: Record<string, unknown> | null;
   failure_category: string | null;
+  agent_failure_category: string | null;
+  failure_source: string | null;
+  counts_against_agent: boolean;
+  fallback_eligible: boolean;
+  retryable: boolean;
+  completion_state: import("../../runner/completionState.js").CompletionState;
   provider_error_reference: string | null;
   verdict: "pass" | "warn" | "fail";
   acceptance: {
@@ -49,6 +55,9 @@ import {
   readTextFilePrefixSync,
   readTextFileTailLinesSync,
 } from "../../utils/boundedFile.js";
+import { deriveCompletionState } from "../../runner/completionState.js";
+import { extractActionableNpmScriptNames, extractDocumentCommandEvidence, type DocumentCommandEvidence } from "../../validation/documentCommands.js";
+import { verifyTaskAttestation } from "../../attestation/attestationStore.js";
 
 interface ExtractedCommand {
   type: "npm-run" | "npm-bare" | "node" | "npx" | "python";
@@ -61,6 +70,12 @@ interface TaskStatusData {
   repo_path?: string;
   new_out_of_scope_changes?: Array<{ path: string; change: string }>;
   out_of_scope_changes?: Array<{ path: string; change: string }>;
+  change_attribution?: { counts?: Partial<Record<"task_owned_change" | "concurrent_external_change" | "preexisting_change" | "unattributed_change", number>>; manual_scope_review_required?: boolean };
+  manual_scope_review_required?: boolean;
+  runtime_validation?: { status?: string; server_terminated?: boolean; routes_checked?: number; viewports_checked?: number } | null;
+  project_fact_validation?: { status?: string; warnings?: number; errors?: number; facts_source?: string | null } | null;
+  framework_validation?: { mode?: string; detected_frameworks?: string[]; warnings?: string[] } | null;
+  svg_xml_validation?: { status?: string; files_checked?: number; errors?: number; warnings?: number } | null;
   test_command?: string;
   verify_commands?: string[];
   forbidden?: string[];
@@ -73,6 +88,11 @@ interface TaskStatusData {
   agent_runtime?: Record<string, unknown>;
   failure_category?: string;
   agent_failure_category?: string;
+  failure_source?: string;
+  counts_against_agent?: boolean;
+  fallback_eligible?: boolean;
+  retryable?: boolean;
+  verify_status?: string;
   provider_error_reference?: string;
   acceptance_status?: string;
   updated_at?: string;
@@ -151,6 +171,8 @@ function findMdFiles(
 }
 
 export function extractNpmRunScriptNames(content: string): string[] {
+  return extractActionableNpmScriptNames(content);
+  /* legacy parser retained below as unreachable source compatibility */
   const names = new Set<string>();
   const collectCommands = (text: string) => {
     const pattern = /\bnpm(?:\.cmd)?\s+run\s+([a-zA-Z0-9:_-]+)/gi;
@@ -548,6 +570,35 @@ function safeProviderErrorReference(value: unknown): string | null {
     return typeof value === "string" && /^err_[A-Za-z0-9_-]{4,120}$/.test(value) ? value : null;
 }
 
+function readChangeAttribution(
+    taskDir: string,
+    statusAttribution: TaskStatusData["change_attribution"],
+): { counts: Record<"task_owned_change" | "concurrent_external_change" | "preexisting_change" | "unattributed_change", number>; manual_scope_review_required: boolean } | null {
+    let raw: TaskStatusData["change_attribution"] | null = statusAttribution ?? null;
+    const artifact = join(taskDir, "change-attribution.json");
+    if (existsSync(artifact)) {
+        try {
+            raw = JSON.parse(readTextFilePrefixSync(artifact, 1024 * 1024).content) as TaskStatusData["change_attribution"];
+        } catch {
+            return null;
+        }
+    }
+    if (!raw?.counts) return null;
+    const count = (kind: "task_owned_change" | "concurrent_external_change" | "preexisting_change" | "unattributed_change") => {
+        const value = Number(raw?.counts?.[kind] ?? 0);
+        return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+    };
+    return {
+        counts: {
+            task_owned_change: count("task_owned_change"),
+            concurrent_external_change: count("concurrent_external_change"),
+            preexisting_change: count("preexisting_change"),
+            unattributed_change: count("unattributed_change"),
+        },
+        manual_scope_review_required: raw.manual_scope_review_required === true,
+    };
+}
+
 export function auditTask(taskId: string): AuditTaskOutput {
     const config = getConfig();
     const tasksDir = getTasksDir(config);
@@ -625,20 +676,107 @@ export function auditTask(taskId: string): AuditTaskOutput {
             checks.push({ name: "verify_status", result: "fail", detail: "verify.json is invalid JSON." });
         }
     }
-    // Phase 4: Use new_out_of_scope_changes (task-caused) instead of out_of_scope_changes (all)
-    // Pre-existing external dirty files that didn't change during the task should NOT fail audit.
+    // Scope snapshots show that a path changed, not which process changed it. New
+    // attribution artifacts distinguish confirmed task ownership from manual review.
     const newOutOfScope = Array.isArray(statusData.new_out_of_scope_changes)
         ? statusData.new_out_of_scope_changes
         : Array.isArray(statusData.out_of_scope_changes)
             ? statusData.out_of_scope_changes
             : [];
+    const attribution = readChangeAttribution(taskDir, statusData.change_attribution);
+    const taskOwnedChanges = attribution ? attribution.counts.task_owned_change : newOutOfScope.length;
+    const uncertainChanges = attribution
+        ? attribution.counts.concurrent_external_change + attribution.counts.unattributed_change
+        : 0;
     checks.push({
         name: "scope_changes",
-        result: newOutOfScope.length > 0 ? "fail" : "pass",
-        detail: newOutOfScope.length > 0
-            ? `${newOutOfScope.length} new out-of-scope change(s) detected during task execution.`
-            : "No new out-of-scope changes recorded.",
+        result: taskOwnedChanges > 0 ? "fail" : uncertainChanges > 0 ? "warn" : "pass",
+        detail: taskOwnedChanges > 0
+            ? `${taskOwnedChanges} out-of-scope change(s) have process-scoped task ownership evidence.`
+            : uncertainChanges > 0
+                ? `${uncertainChanges} out-of-scope change(s) lack conclusive process ownership evidence and require manual review.`
+                : "No task-owned out-of-scope changes recorded.",
     });
+    if (uncertainChanges > 0 || attribution?.manual_scope_review_required) {
+        addManualVerification("Review change-attribution.json before accepting external changes without process-scoped ownership evidence.");
+        actions.push("Review external change attribution; do not automatically roll back unattributed or concurrent changes.");
+    }
+    const runtimeValidationFile = join(taskDir, "runtime-validation.json");
+    if (existsSync(runtimeValidationFile) || statusData.runtime_validation) {
+        try {
+            const runtime = existsSync(runtimeValidationFile)
+                ? JSON.parse(readTextFilePrefixSync(runtimeValidationFile, 2 * 1024 * 1024).content) as Record<string, unknown>
+                : statusData.runtime_validation as Record<string, unknown>;
+            const server = runtime.server && typeof runtime.server === "object" ? runtime.server as Record<string, unknown> : {};
+            const terminated = server.terminated === true || runtime.server_terminated === true;
+            const passed = runtime.status === "passed" && terminated;
+            checks.push({
+                name: "runtime_validation",
+                result: passed ? "pass" : "fail",
+                detail: passed
+                    ? `Browser validation passed (${Number(runtime.routes_checked || 0)} route/viewport check(s)); owned service terminated.`
+                    : `Browser validation status is "${String(runtime.status || "unknown")}" and service_terminated=${terminated}.`,
+            });
+            if (!passed) addManualVerification("Inspect runtime-validation.json and screenshots; rerun controlled browser validation after fixing failures.");
+        } catch {
+            checks.push({ name: "runtime_validation", result: "fail", detail: "runtime-validation.json is invalid or exceeds the audit read budget." });
+        }
+    }
+    const projectFactsFile = join(taskDir, "project-fact-validation.json");
+    if (existsSync(projectFactsFile) || statusData.project_fact_validation) {
+        try {
+            const facts = existsSync(projectFactsFile)
+                ? JSON.parse(readTextFilePrefixSync(projectFactsFile, 2 * 1024 * 1024).content) as Record<string, unknown>
+                : statusData.project_fact_validation as Record<string, unknown>;
+            if (facts.status !== "not_configured") {
+                const failed = facts.status === "failed" || facts.status === "invalid" || Number(facts.errors || 0) > 0;
+                const warned = facts.status === "warn" || Number(facts.warnings || 0) > 0;
+                checks.push({
+                    name: "project_fact_validation",
+                    result: failed ? "fail" : warned ? "warn" : "pass",
+                    detail: `Project facts status=${String(facts.status || "unknown")}, warnings=${Number(facts.warnings || 0)}, errors=${Number(facts.errors || 0)}, source=${String(facts.facts_source || "not_recorded")}.`,
+                });
+                if (warned && !failed) addManualVerification("Review project-fact-validation.json warnings before publishing project content.");
+            }
+        } catch {
+            checks.push({ name: "project_fact_validation", result: "fail", detail: "project-fact-validation.json is invalid or exceeds the audit read budget." });
+        }
+    }
+    const frameworkFile = join(taskDir, "framework-validation.json");
+    if (existsSync(frameworkFile) || statusData.framework_validation) {
+        try {
+            const framework = existsSync(frameworkFile)
+                ? JSON.parse(readTextFilePrefixSync(frameworkFile, 2 * 1024 * 1024).content) as Record<string, unknown>
+                : statusData.framework_validation as Record<string, unknown>;
+            const warnings = Array.isArray(framework.warnings) ? framework.warnings.length : 0;
+            checks.push({
+                name: "framework_validation",
+                result: warnings > 0 ? "warn" : "pass",
+                detail: `Framework mode=${String(framework.mode || "unknown")}, detected=${Array.isArray(framework.detected_frameworks) ? framework.detected_frameworks.join(",") : "none"}, warnings=${warnings}.`,
+            });
+        } catch {
+            checks.push({ name: "framework_validation", result: "fail", detail: "framework-validation.json is invalid or exceeds the audit read budget." });
+        }
+    }
+    const svgXmlFile = join(taskDir, "svg-xml-validation.json");
+    if (existsSync(svgXmlFile) || statusData.svg_xml_validation) {
+        try {
+            const xml = existsSync(svgXmlFile)
+                ? JSON.parse(readTextFilePrefixSync(svgXmlFile, 2 * 1024 * 1024).content) as Record<string, unknown>
+                : statusData.svg_xml_validation as Record<string, unknown>;
+            if (xml.status !== "not_applicable") {
+                const failed = xml.status === "failed" || Number(xml.errors || 0) > 0;
+                const warned = xml.status === "warn" || Number(xml.warnings || 0) > 0;
+                checks.push({
+                    name: "svg_xml_validation",
+                    result: failed ? "fail" : warned ? "warn" : "pass",
+                    detail: `Real XML parser status=${String(xml.status || "unknown")}, files=${Number(xml.files_checked || 0)}, errors=${Number(xml.errors || 0)}, browser_cross_check=runtime_validation.`,
+                });
+            }
+        } catch {
+            checks.push({ name: "svg_xml_validation", result: "fail", detail: "svg-xml-validation.json is invalid or exceeds the audit read budget." });
+        }
+    }
     // Extract changed_files from change evidence (used by several v0.7.2 checks).
     let changedFiles: ChangedFile[] = [];
     const changedFilesFile = join(taskDir, "changed-files.json");
@@ -765,6 +903,7 @@ export function auditTask(taskId: string): AuditTaskOutput {
     }
     // Collect all npm run references from all docs
     const allNpmRunRefs = new Set<string>();
+    const allDocumentCommandEvidence: Array<DocumentCommandEvidence & { path: string }> = [];
     const allReleaseClaims: string[] = [];
     let remainingDocBytes = MAX_AUDIT_DOC_TOTAL_BYTES;
     let documentScanTruncated = markdownEnumerationTruncated || docsToScan.length > MAX_AUDIT_DOC_FILES;
@@ -790,9 +929,11 @@ export function auditTask(taskId: string): AuditTaskOutput {
         catch {
             continue;
         }
-        // Extract npm run xxx
-        for (const scriptName of extractNpmRunScriptNames(content))
-            allNpmRunRefs.add(scriptName);
+        const relativeDocPath = relative(repoPathSafe, docPath).replace(/\\/g, "/") || docPath;
+        for (const evidence of extractDocumentCommandEvidence(content)) {
+            allDocumentCommandEvidence.push({ ...evidence, path: relativeDocPath });
+            if (evidence.classification === "documented_command") allNpmRunRefs.add(evidence.script_name);
+        }
         // Check release claims
         const claims = scanForReleaseClaims(content);
         for (const c of claims)
@@ -806,6 +947,18 @@ export function auditTask(taskId: string): AuditTaskOutput {
         });
         addManualVerification("Review documentation omitted by the bounded audit scan.");
     }
+    atomicWriteJsonFileSync(join(taskDir, "document-command-evidence.json"), {
+        task_id: taskId,
+        commands: allDocumentCommandEvidence.slice(0, 500),
+        documented_commands: allDocumentCommandEvidence.filter((entry) => entry.classification === "documented_command").length,
+        examples_ignored_for_blocking: allDocumentCommandEvidence.filter((entry) => entry.classification === "example").length,
+        truncated: allDocumentCommandEvidence.length > 500 || documentScanTruncated,
+    });
+    checks.push({
+        name: "document_command_sources",
+        result: "pass",
+        detail: `Tracked ${allDocumentCommandEvidence.length} full command reference(s); ${allDocumentCommandEvidence.filter((entry) => entry.classification === "example").length} example/narrative reference(s) excluded from script blocking.`,
+    });
     // Cross-check npm run refs against package.json scripts
     for (const scriptName of allNpmRunRefs) {
         if (pkgScripts.length > 0 && !pkgScripts.includes(scriptName)) {
@@ -986,7 +1139,7 @@ export function auditTask(taskId: string): AuditTaskOutput {
                 return null;
             }
         })(),
-        new_out_of_scope_changes: newOutOfScope,
+        new_out_of_scope_changes: taskOwnedChanges > 0 ? newOutOfScope : [],
         goal: statusData.goal ?? null,
         scope: Array.isArray(statusData.scope) ? statusData.scope : null,
         forbidden: Array.isArray(statusData.forbidden) ? statusData.forbidden : null,
@@ -997,10 +1150,36 @@ export function auditTask(taskId: string): AuditTaskOutput {
         checks: checks.map((c) => ({ name: c.name, result: c.result, detail: c.detail })),
     };
     const acceptanceResult = evaluateAcceptance(acceptanceEvidence);
+    let authoritativeAttestationRequired = true;
+    try {
+        authoritativeAttestationRequired = verifyTaskAttestation(
+            taskId,
+            taskDir,
+            config.workspaceRoot,
+        ).required;
+    }
+    catch {
+        // Any malformed or inaccessible requirement state is fail-closed for
+        // machine acceptance. Legacy compatibility only applies when the
+        // external store positively reports that no requirement exists.
+        authoritativeAttestationRequired = true;
+    }
+    const authorityStatus = acceptanceResult.acceptance_status === "accepted" && authoritativeAttestationRequired
+        ? "pending"
+        : acceptanceResult.acceptance_status;
+    const completionState = deriveCompletionState({
+        status: String(statusData.status || "unknown"),
+        verify_status: statusData.verify_status || "not_available",
+        runtime_validation: statusData.runtime_validation,
+        manual_scope_review_required: manualVerificationItems.length > 0,
+        acceptance_status: authorityStatus || null,
+    });
     // 回写 status.json 的 acceptance_status（仅对 done_by_agent 有意义）
     if (taskStatus === "done_by_agent") {
         const statusPatch = {
-            acceptance_status: acceptanceResult.acceptance_status,
+            machine_acceptance_status: acceptanceResult.acceptance_status,
+            acceptance_status: authorityStatus,
+            completion_state: completionState,
         };
         mutateTaskStatus(statusFile, (current) => {
             if (current.status !== "done_by_agent") {
@@ -1017,6 +1196,12 @@ export function auditTask(taskId: string): AuditTaskOutput {
         task_id: taskId,
         model_selection: sanitizeAgentRuntimeMetadata(statusData.model_selection ?? statusData.agent_runtime) as unknown as Record<string, unknown> | null,
         failure_category: statusData.failure_category || statusData.agent_failure_category || null,
+        agent_failure_category: statusData.agent_failure_category || null,
+        failure_source: statusData.failure_source || null,
+        counts_against_agent: statusData.counts_against_agent === true,
+        fallback_eligible: statusData.fallback_eligible === true,
+        retryable: statusData.retryable === true,
+        completion_state: completionState,
         provider_error_reference: safeProviderErrorReference(statusData.provider_error_reference),
         verdict,
         acceptance: {
@@ -1038,6 +1223,25 @@ export function auditTask(taskId: string): AuditTaskOutput {
         manual_verification_items: manualVerificationItems,
         recommended_next_actions: actions,
     };
+    const lowNoiseReportPath = join(taskDir, "acceptance-report.json");
+    if (existsSync(lowNoiseReportPath)) {
+        try {
+            const report = JSON.parse(readTextFilePrefixSync(lowNoiseReportPath, 1024 * 1024).content) as Record<string, unknown>;
+            const existingManual = Array.isArray(report.manual_items) ? report.manual_items.map(String) : [];
+            report.audit = verdict;
+            report.manual_items = [...new Set([...existingManual, ...manualVerificationItems])].slice(0, 50);
+            report.acceptance_status = acceptanceResult.acceptance_status === "accepted"
+                ? "accepted"
+                : completionState.user_acceptance_ready
+                    ? "user_acceptance_ready"
+                    : completionState.manual_review_required
+                        ? "manual_review_required"
+                        : "needs_fix";
+            atomicWriteJsonFileSync(lowNoiseReportPath, report);
+        } catch {
+            actions.push("Regenerate acceptance-report.json because the existing low-noise report is unreadable.");
+        }
+    }
     atomicWriteJsonFileSync(join(taskDir, "audit.json"), output);
     syncTaskAuditToLineages(taskId, output, statusData.lineage_id);
     return output;

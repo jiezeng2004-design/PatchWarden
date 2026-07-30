@@ -124,6 +124,10 @@ export function getToolDefs(): ToolDef[] {
             type: "string",
             description: "Required repository path inside workspaceRoot. No implicit workspace-root fallback is allowed.",
           },
+          confirm_workspace_root: {
+            type: "boolean",
+            description: "Required only when repo_path resolves to a detected multi-project workspace root. This explicit acknowledgement is retained in task assessment evidence.",
+          },
           test_command: {
             type: "string",
             description: testCommands.length
@@ -171,6 +175,10 @@ export function getToolDefs(): ToolDef[] {
           repo_path: {
             type: "string",
             description: "Required repository path inside workspaceRoot. No implicit workspace-root fallback is allowed.",
+          },
+          confirm_workspace_root: {
+            type: "boolean",
+            description: "Explicit acknowledgement required when repo_path is a detected multi-project workspace root.",
           },
           goal: { type: "string", description: "Task goal to execute through the guarded loop." },
           verify_commands: {
@@ -1161,6 +1169,60 @@ export function getToolDefs(): ToolDef[] {
         },
       },
       required: ["session_id", "path", "expected_sha256", "operations"],
+    },
+  });
+
+  tools.push({
+    name: "create_file",
+    description: "Create a new bounded UTF-8 text file inside an active Direct session. The target and its parent are revalidated, sensitive content is blocked, and existing targets are never overwritten.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string" },
+        path: { type: "string", description: "New repository-relative file path." },
+        content: { type: "string", description: "UTF-8 text content subject to Direct size and sensitive-content guards." },
+      },
+      required: ["session_id", "path", "content"],
+    },
+  });
+
+  tools.push({
+    name: "mkdir",
+    description: "Create one new directory level inside an active Direct session. Parent directories must already exist; linked, sensitive, internal, dependency, release, and build-output paths remain blocked.",
+    inputSchema: {
+      type: "object",
+      properties: { session_id: { type: "string" }, path: { type: "string" } },
+      required: ["session_id", "path"],
+    },
+  });
+
+  tools.push({
+    name: "move_file",
+    description: "Move one bounded regular text file within a Direct session. Requires the current source SHA-256 and never overwrites the target.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string" },
+        source_path: { type: "string" },
+        target_path: { type: "string" },
+        expected_source_sha256: { type: "string", pattern: "^[A-Fa-f0-9]{64}$" },
+      },
+      required: ["session_id", "source_path", "target_path", "expected_source_sha256"],
+    },
+  });
+
+  tools.push({
+    name: "delete_file",
+    description: "Delete one bounded regular text file inside a Direct session. Requires the current SHA-256 and confirm_delete=true; directories and recursive deletion are unsupported.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string" },
+        path: { type: "string" },
+        expected_sha256: { type: "string", pattern: "^[A-Fa-f0-9]{64}$" },
+        confirm_delete: { type: "boolean", description: "Must be true after reviewing the exact path and hash." },
+      },
+      required: ["session_id", "path", "expected_sha256", "confirm_delete"],
     },
   });
 

@@ -14,6 +14,7 @@ import { buildToolRegistry, type PatchWardenToolMeta } from "../catalog/toolRegi
 import type { ToolProfile } from "../catalog/toolCatalog.js";
 import type { ToolDef } from "../registry.js";
 import { PatchWardenError } from "../../errors.js";
+import { validateInvocationAssessment } from "../../security/invocationAssessment.js";
 
 // ── 类型定义 ──────────────────────────────────────────────────────
 
@@ -134,9 +135,22 @@ export async function invokeDiscoveredTool(
     }
 
     // 5. dispatch（调用实际工具 handler）
+    let dispatchArgs = input.arguments;
+    try {
+      dispatchArgs = validateInvocationAssessment(
+        input.toolName,
+        toolMeta.risk,
+        input.arguments,
+        input.assessmentId,
+      ).dispatchArgs;
+    } catch (err) {
+      if (err instanceof PatchWardenError) return fail(err.reason, err.message);
+      return fail("assessment_validation_failed", err instanceof Error ? err.message : String(err));
+    }
+
     let dispatchResult: unknown;
     try {
-      dispatchResult = await context.dispatch(input.toolName, input.arguments);
+      dispatchResult = await context.dispatch(input.toolName, dispatchArgs);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return fail(

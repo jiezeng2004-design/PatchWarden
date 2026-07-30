@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { spawn } from "node:child_process";
-import fs, { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import fs, { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -75,6 +75,33 @@ describe("locked JSON file", () => {
     assert.deepEqual(readdirSync(root).filter((name) => name.includes(".release-")), []);
   });
 
+  it("throttles stale-owner probes while another process holds the lock", () => {
+    const originalReadFileSync = fs.readFileSync;
+    let ownerReads = 0;
+    fs.readFileSync = ((path: fs.PathOrFileDescriptor, options?: unknown) => {
+      if (String(path).endsWith("session.json.lock\\owner.json") || String(path).endsWith("state.json.lock\\owner.json")) {
+        ownerReads += 1;
+      }
+      return originalReadFileSync(path, options as never);
+    }) as typeof fs.readFileSync;
+    syncBuiltinESMExports();
+
+    try {
+      withFileLockSync(jsonFile, () => {
+        assert.throws(
+          () => withFileLockSync(jsonFile, () => undefined, { waitMs: 260 }),
+          /JSON file is busy/,
+        );
+      });
+    } finally {
+      fs.readFileSync = originalReadFileSync;
+      syncBuiltinESMExports();
+    }
+
+    assert.ok(ownerReads <= 6, `expected bounded owner probes, received ${ownerReads}`);
+    assert.equal(existsSync(`${jsonFile}.lock`), false);
+  });
+
   it("uses an atomic lock directory and recovers crash and legacy lock formats", () => {
     withFileLockSync(jsonFile, () => {
       assert.equal(statSync(`${jsonFile}.lock`).isDirectory(), true);
@@ -115,6 +142,24 @@ describe("locked JSON file", () => {
       syncBuiltinESMExports();
     }
     assert.equal(existsSync(`${jsonFile}.lock`), false);
+  });
+
+  it("rejects a symlink or junction lock path without touching its target", () => {
+    const outside = mkdtempSync(join(tmpdir(), "patchwarden-lock-outside-"));
+    const lockPath = `${jsonFile}.lock`;
+    writeFileSync(join(outside, "canary.txt"), "safe", "utf8");
+    symlinkSync(outside, lockPath, process.platform === "win32" ? "junction" : "dir");
+    try {
+      assert.throws(
+        () => withFileLockSync(jsonFile, () => undefined, { waitMs: 0, corruptLockStaleMs: 0 }),
+        /symlink\/junction lock path/,
+      );
+      assert.equal(readFileSync(join(outside, "canary.txt"), "utf8"), "safe");
+    } finally {
+      if (process.platform === "win32") rmdirSync(lockPath);
+      else unlinkSync(lockPath);
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   it("does not block the event loop when async callers contend", { timeout: 5_000 }, async () => {

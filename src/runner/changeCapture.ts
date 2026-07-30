@@ -1,8 +1,13 @@
 import { createHash } from "node:crypto";
 import {
   createReadStream,
+  closeSync,
   existsSync,
+  fstatSync,
   lstatSync,
+  openSync,
+  readSync,
+  realpathSync,
   readFileSync,
   readdirSync,
   statSync,
@@ -14,12 +19,33 @@ import { isSensitivePath } from "../security/sensitiveGuard.js";
 import { nullDevice } from "../utils/platform.js";
 import { buildGitEnvironment, resolveTrustedExecutable } from "./processSecurity.js";
 import { atomicWriteJsonFileSync } from "../utils/atomicFile.js";
+import { getConfig, getRepoGeneratedPaths } from "../config.js";
 
 const MAX_HASH_BYTES = 5 * 1024 * 1024;
 const MAX_SNAPSHOT_FILES = 5000;
 const MAX_DIFF_BYTES = 20 * 1024 * 1024;
+const MAX_FINGERPRINT_CONCURRENCY = 8;
+const MAX_IGNORED_ARTIFACT_FILES = 50;
 const DIFF_TRUNCATION_MARKER = "\n[PATCHWARDEN DIFF TRUNCATED]\n";
-const SKIP_DIRECTORIES = new Set([".git", ".patchwarden", "node_modules"]);
+const SKIP_DIRECTORIES = new Set([
+  ".git", ".patchwarden", ".stage", ".local", "node_modules", ".npm-cache", ".pnpm-store", ".yarn",
+  "coverage", "release", "build", "out", ".next",
+]);
+const DEFAULT_GENERATED_PATHS = [
+  ".next/**",
+  "dist/**",
+  "build/**",
+  "out/**",
+  "coverage/**",
+  ".cache/**",
+  "target/**",
+  "__pycache__/**",
+  "*.tsbuildinfo",
+  "*.pyc",
+];
+const ARTIFACT_PATTERN_HINT = /(^|\/)(?:\.next|dist|build|out|coverage|\.cache|cache|target|__pycache__|generated|release)(?:\/|$)|\.(?:tsbuildinfo|pyc|log|tmp|temp|map)(?:$|[*?])/i;
+const MAX_IGNORE_FILE_BYTES = 128 * 1024;
+const MAX_IMPORTED_IGNORE_PATTERNS = 128;
 
 export interface FileFingerprint {
   size: number;
@@ -37,17 +63,30 @@ export interface RepoSnapshot {
   files: Record<string, FileFingerprint>;
   dirty_paths: string[]; // paths that git status --porcelain reports as modified/added/deleted/untracked/renamed
   warnings: string[];
+  integrity?: {
+    complete: boolean;
+    truncated: boolean;
+    failure_codes: string[];
+  };
+  sensitive_files?: Record<string, SensitiveFileMetadata>;
+}
+
+export interface SensitiveFileMetadata {
+  size: number;
+  mtime_ms: number;
+  file_type: "file" | "directory" | "other";
 }
 
 export interface ChangedFile {
   path: string;
   change: "added" | "modified" | "deleted" | "renamed";
   old_path?: string;
+  old_kind?: "source" | "dependency" | "build_artifact" | "runtime_generated";
   before_sha256: string | null;
   after_sha256: string | null;
   tracked: boolean;
   ignored: boolean;
-  kind: "source" | "build_artifact" | "runtime_generated";
+  kind: "source" | "dependency" | "build_artifact" | "runtime_generated";
 }
 
 export interface ClassifiedChange {
@@ -62,12 +101,20 @@ export interface ClassifiedChange {
 export interface ArtifactHygiene {
   counts: {
     source_changes: number;
+    dependency_changes?: number;
+    generated_changes?: number;
+    runtime_changes?: number;
+    unexpected_changes?: number;
     tracked_build_artifacts: number;
     ignored_untracked_artifacts: number;
     runtime_generated_files: number;
     suspicious_changes: number;
   };
   source_changes: ClassifiedChange[];
+  dependency_changes?: ClassifiedChange[];
+  generated_changes?: ClassifiedChange[];
+  runtime_changes?: ClassifiedChange[];
+  unexpected_changes?: ClassifiedChange[];
   tracked_build_artifacts: ClassifiedChange[];
   ignored_untracked_artifacts: ClassifiedChange[];
   runtime_generated_files: ClassifiedChange[];
@@ -100,8 +147,17 @@ export interface ChangeArtifacts {
 export async function captureRepoSnapshot(repoPath: string, signal?: AbortSignal): Promise<RepoSnapshot> {
   throwIfAborted(signal);
   const warnings: string[] = [];
+  const failureCodes = new Set<string>();
   const isGitResult = await runGit(repoPath, ["rev-parse", "--is-inside-work-tree"], signal);
-  const isGit = isGitResult.stdout.trim() === "true";
+  if (isGitResult.truncated) {
+    throw new Error("snapshot_git_probe_truncated");
+  }
+  const probeText = `${isGitResult.stdout}\n${isGitResult.stderr}`;
+  const isNotGitRepository = isGitResult.status === 128 && /not a git repository|not a git work tree/i.test(probeText);
+  if (isGitResult.status !== 0 && !isNotGitRepository) {
+    throw new Error(`snapshot_git_probe_failed: ${boundedGitError(isGitResult)}`);
+  }
+  const isGit = isGitResult.status === 0 && isGitResult.stdout.trim() === "true";
   let head: string | null = null;
   let status = "";
   let paths: string[] = [];
@@ -110,16 +166,29 @@ export async function captureRepoSnapshot(repoPath: string, signal?: AbortSignal
 
   const dirtyPaths = new Set<string>();
   if (isGit) {
-    // The following five git calls are independent of each other and can run in parallel.
-    const [headResult, statusResult, trackedResult, ignoredResult, listedResult] = await Promise.all([
-      runGit(repoPath, ["rev-parse", "HEAD"], signal),
+    // These four Git reads are independent. The authoritative listed result
+    // replaces the former unconditional full-tree union, which followed large
+    // ignored cache trees and made snapshots both slow and noisy.
+    const [headResult, statusResult, trackedResult, listedResult] = await Promise.all([
+      runGit(repoPath, ["rev-parse", "--verify", "HEAD"], signal),
       runGit(repoPath, ["status", "--porcelain=v1", "-uall"], signal),
       runGit(repoPath, ["ls-files", "-z"], signal),
-      runGit(repoPath, ["ls-files", "-o", "-i", "--exclude-standard", "-z"], signal),
       runGit(repoPath, ["ls-files", "-co", "--exclude-standard", "-z"], signal),
     ]);
 
-    if (headResult.status === 0) head = headResult.stdout.trim() || null;
+    assertGitSnapshotResult("status", statusResult);
+    assertGitSnapshotResult("tracked_files", trackedResult);
+    assertGitSnapshotResult("listed_files", listedResult);
+    if (headResult.status === 0 && !headResult.truncated) {
+      head = headResult.stdout.trim() || null;
+    } else if (headResult.status === 128 && !headResult.truncated) {
+      // A newly initialized repository has no HEAD commit yet. Successful
+      // status/list operations still prove Git is functioning correctly.
+      head = null;
+      warnings.push("Git repository has no commits yet; HEAD is unavailable");
+    } else {
+      assertGitSnapshotResult("head", headResult);
+    }
     status = statusResult.stdout.trimEnd();
     // Parse git status --porcelain to collect all dirty paths
     for (const line of status.split("\n")) {
@@ -142,55 +211,96 @@ export async function captureRepoSnapshot(repoPath: string, signal?: AbortSignal
         }
       }
     }
-    if (trackedResult.status === 0) {
-      for (const path of trackedResult.stdout.split("\0").filter(Boolean)) addSnapshotPath(trackedPaths, path);
+    if ([...dirtyPaths].some((path) => isSensitivePath(path))) {
+      failureCodes.add("sensitive_path_dirty");
+      warnings.push("Git reported a dirty sensitive path; execution is blocked until it is resolved locally");
     }
-    if (ignoredResult.status === 0) {
-      for (const path of ignoredResult.stdout.split("\0").filter(Boolean)) addSnapshotPath(ignoredPaths, path);
-    } else {
-      warnings.push("git ignored-file discovery failed; ignored classification may be incomplete");
+    for (const path of trackedResult.stdout.split("\0").filter(Boolean)) addSnapshotPath(trackedPaths, path);
+    const listedPaths = listedResult.stdout.split("\0").filter(Boolean);
+    const listedPathIndex = new Map<string, Set<string>>();
+    for (const path of listedPaths) addSnapshotPath(listedPathIndex, path);
+    // Recover a bounded sample of ignored artifact/runtime evidence without
+    // asking Git to enumerate every ignored cache entry. The authoritative
+    // listed result already contains tracked and non-ignored untracked paths;
+    // an on-disk artifact candidate absent from it is ignored.
+    const artifactWalk = walkWorkspace(repoPath, signal);
+    if (artifactWalk.truncated) warnings.push("ignored artifact candidate walk reached its file budget");
+    const walkedArtifacts = artifactWalk.paths
+      .filter((path) => classifyPathKind(path) !== "source")
+      .filter((path) => !hasSnapshotPath(listedPathIndex, path))
+      .sort();
+    const allIgnoredArtifactPaths = walkedArtifacts;
+    const ignoredArtifactPaths = allIgnoredArtifactPaths.slice(0, MAX_IGNORED_ARTIFACT_FILES);
+    if (allIgnoredArtifactPaths.length > ignoredArtifactPaths.length) {
+      warnings.push(`ignored artifact evidence limited to ${MAX_IGNORED_ARTIFACT_FILES} files`);
     }
-    if (listedResult.status === 0) {
-      paths = [...new Set([
-        ...listedResult.stdout.split("\0").filter(Boolean),
-        ...walkWorkspace(repoPath, signal),
-      ])];
-    } else {
-      warnings.push("git ls-files failed; using bounded filesystem scan");
-      paths = walkWorkspace(repoPath, signal);
-    }
+    for (const path of ignoredArtifactPaths) addSnapshotPath(ignoredPaths, path);
+    paths = [...new Set([...listedPaths, ...ignoredArtifactPaths])];
   } else {
     warnings.push("repository is not a Git worktree; diff will contain file-change evidence only");
-    paths = walkWorkspace(repoPath, signal);
+    const walked = walkWorkspace(repoPath, signal);
+    paths = walked.paths;
+    if (walked.truncated) failureCodes.add("snapshot_file_limit_exceeded");
   }
 
   if (paths.length > MAX_SNAPSHOT_FILES) {
     warnings.push(`snapshot limited to ${MAX_SNAPSHOT_FILES} files`);
+    failureCodes.add("snapshot_file_limit_exceeded");
     paths = paths.slice(0, MAX_SNAPSHOT_FILES);
   }
 
   const files: Record<string, FileFingerprint> = {};
-  for (const inputPath of paths.sort()) {
+  const fingerprinted = await mapWithConcurrency(paths.sort(), MAX_FINGERPRINT_CONCURRENCY, async (inputPath) => {
     throwIfAborted(signal);
     const normalized = normalizePath(inputPath);
-    if (!normalized || normalized.startsWith(".patchwarden/") || isSensitivePath(normalized)) continue;
+    if (!normalized || normalized.startsWith(".patchwarden/") || isSensitivePath(normalized)) return null;
     const absolutePath = resolve(repoPath, inputPath);
+    let stat: ReturnType<typeof lstatSync>;
     try {
-      const stat = lstatSync(absolutePath);
-      if (!stat.isFile()) continue;
+      stat = lstatSync(absolutePath);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // git ls-files intentionally retains a tracked path after its working
+      // tree file is deleted. The dirty deletion is authoritative evidence,
+      // not a fingerprint I/O failure.
+      if (code === "ENOENT" && hasSnapshotPath(trackedPaths, normalized) && hasSnapshotPathSet(dirtyPaths, normalized)) {
+        return null;
+      }
+      failureCodes.add("snapshot_fingerprint_failed");
+      warnings.push(`could not fingerprint: ${normalized}`);
+      return null;
+    }
+    try {
+      if (stat.isSymbolicLink() || !stat.isFile()) return null;
       const sha256 = stat.size <= MAX_HASH_BYTES
-        ? createHash("sha256").update(readFileSync(absolutePath)).digest("hex")
+        ? await hashFileAsync(absolutePath)
         : `large-file:${stat.size}:${Math.trunc(stat.mtimeMs)}`;
-      files[normalized] = {
+      const after = lstatSync(absolutePath);
+      if (!after.isFile() || after.isSymbolicLink() || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) {
+        failureCodes.add("snapshot_fingerprint_raced");
+        warnings.push(`fingerprint changed during read: ${normalized}`);
+        return null;
+      }
+      return [normalized, {
         size: stat.size,
         sha256,
         tracked: hasSnapshotPath(trackedPaths, normalized),
-        ignored: !hasSnapshotPath(trackedPaths, normalized) && hasSnapshotPath(ignoredPaths, normalized),
-      };
+        ignored: hasSnapshotPath(ignoredPaths, normalized),
+      }] as const;
     } catch {
+      failureCodes.add("snapshot_fingerprint_failed");
       warnings.push(`could not fingerprint: ${normalized}`);
+      return null;
     }
+  });
+  for (const entry of fingerprinted) {
+    if (entry) files[entry[0]] = entry[1];
   }
+
+  const sensitiveScan = walkSensitiveMetadata(repoPath, signal);
+  for (const code of sensitiveScan.failure_codes) failureCodes.add(code);
+  warnings.push(...sensitiveScan.warnings);
+  const complete = failureCodes.size === 0;
 
   return {
     captured_at: new Date().toISOString(),
@@ -201,11 +311,34 @@ export async function captureRepoSnapshot(repoPath: string, signal?: AbortSignal
     files,
     dirty_paths: [...dirtyPaths],
     warnings,
+    integrity: {
+      complete,
+      truncated: failureCodes.has("snapshot_file_limit_exceeded"),
+      failure_codes: [...failureCodes].sort(),
+    },
+    sensitive_files: sensitiveScan.files,
   };
 }
 
 export function writeSnapshot(taskDir: string, filename: string, snapshot: RepoSnapshot): void {
   atomicWriteJsonFileSync(join(taskDir, filename), snapshot);
+}
+
+export function assertSnapshotComplete(snapshot: RepoSnapshot): void {
+  if (snapshot.integrity?.complete === false) {
+    throw new Error(`snapshot_incomplete: ${snapshot.integrity.failure_codes.join(",") || "unknown"}`);
+  }
+}
+
+export function compareSensitiveSnapshots(before: RepoSnapshot, after: RepoSnapshot): string[] {
+  const left = before.sensitive_files ?? {};
+  const right = after.sensitive_files ?? {};
+  const paths = new Set([...Object.keys(left), ...Object.keys(right)]);
+  return [...paths].filter((path) => {
+    const a = left[path];
+    const b = right[path];
+    return !a || !b || a.size !== b.size || a.mtime_ms !== b.mtime_ms || a.file_type !== b.file_type;
+  }).sort();
 }
 
 export async function buildChangeArtifacts(
@@ -215,7 +348,8 @@ export async function buildChangeArtifacts(
   signal?: AbortSignal,
 ): Promise<ChangeArtifacts> {
   throwIfAborted(signal);
-  const changedFiles = compareSnapshots(before, after);
+  const generatedPaths = resolveGeneratedPathPatterns(repoPath, getRepoGeneratedPaths(getConfig(), repoPath));
+  const changedFiles = compareSnapshots(before, after, process.platform, generatedPaths);
   const artifactHygiene = classifyArtifactHygiene(changedFiles);
   const sections: string[] = [];
   const scopedPaths = [...new Set(changedFiles.flatMap((file) => file.old_path ? [file.old_path, file.path] : [file.path]))];
@@ -350,7 +484,7 @@ async function buildFileStats(
   changedFiles: ChangedFile[],
   signal?: AbortSignal,
 ): Promise<ChangeArtifacts["file_stats"]> {
-  const results = await Promise.all(changedFiles.map(async (file) => {
+  const results = await mapWithConcurrency(changedFiles, 4, async (file) => {
     throwIfAborted(signal);
     let additions = 0;
     let deletions = 0;
@@ -382,7 +516,7 @@ async function buildFileStats(
     }
 
     return { path: file.path, status: file.change, additions, deletions };
-  }));
+  });
   return results;
 }
 
@@ -395,13 +529,14 @@ export function compareSnapshots(
   before: RepoSnapshot,
   after: RepoSnapshot,
   platform: NodeJS.Platform = process.platform,
+  generatedPaths: string[] = DEFAULT_GENERATED_PATHS,
 ): ChangedFile[] {
   const changed: ChangedFile[] = [];
   for (const { path, leftPath, rightPath, left, right } of pairSnapshotFiles(before.files, after.files, platform)) {
     if (!left && right) {
-      changed.push(classifyChangedFile(path, "added", null, right));
+      changed.push(classifyChangedFile(path, "added", null, right, generatedPaths));
     } else if (left && !right) {
-      changed.push(classifyChangedFile(path, "deleted", left, null));
+      changed.push(classifyChangedFile(path, "deleted", left, null, generatedPaths));
     } else if (left && right && left.sha256 === right.sha256 && leftPath !== rightPath) {
       // Windows lookup is case-insensitive, but a case-only Git rename is still
       // auditable work and must not disappear from the evidence set.
@@ -412,11 +547,15 @@ export function compareSnapshots(
         before_sha256: left.sha256,
         after_sha256: right.sha256,
         tracked: left.tracked || right.tracked,
-        ignored: right.ignored,
-        kind: classifyPathKind(rightPath!),
+        ignored: right.ignored && !["source", "dependency"].includes(classifyPathKind(leftPath!, generatedPaths)),
+        kind: mergeRenameKind(
+          classifyPathKind(leftPath!, generatedPaths),
+          classifyPathKind(rightPath!, generatedPaths),
+        ),
+        old_kind: classifyPathKind(leftPath!, generatedPaths),
       });
     } else if (left && right && left.sha256 !== right.sha256) {
-      changed.push(classifyChangedFile(path, "modified", left, right));
+      changed.push(classifyChangedFile(path, "modified", left, right, generatedPaths));
     }
   }
   const deletedByHash = new Map<string, ChangedFile[]>();
@@ -441,8 +580,12 @@ export function compareSnapshots(
       before_sha256: source.before_sha256,
       after_sha256: file.after_sha256,
       tracked: file.tracked || source.tracked,
-      ignored: file.ignored,
-      kind: classifyPathKind(file.path),
+      ignored: file.ignored && !["source", "dependency"].includes(classifyPathKind(source.path, generatedPaths)),
+      kind: mergeRenameKind(
+        classifyPathKind(source.path, generatedPaths),
+        classifyPathKind(file.path, generatedPaths),
+      ),
+      old_kind: classifyPathKind(source.path, generatedPaths),
     });
   }
 
@@ -454,12 +597,20 @@ export function emptyArtifactHygiene(): ArtifactHygiene {
   return {
     counts: {
       source_changes: 0,
+      dependency_changes: 0,
+      generated_changes: 0,
+      runtime_changes: 0,
+      unexpected_changes: 0,
       tracked_build_artifacts: 0,
       ignored_untracked_artifacts: 0,
       runtime_generated_files: 0,
       suspicious_changes: 0,
     },
     source_changes: [],
+    dependency_changes: [],
+    generated_changes: [],
+    runtime_changes: [],
+    unexpected_changes: [],
     tracked_build_artifacts: [],
     ignored_untracked_artifacts: [],
     runtime_generated_files: [],
@@ -668,7 +819,8 @@ function classifyChangedFile(
   path: string,
   change: ChangedFile["change"],
   before: FileFingerprint | null,
-  after: FileFingerprint | null
+  after: FileFingerprint | null,
+  generatedPaths: string[] = DEFAULT_GENERATED_PATHS,
 ): ChangedFile {
   return {
     path,
@@ -677,11 +829,11 @@ function classifyChangedFile(
     after_sha256: after?.sha256 || null,
     tracked: Boolean(after?.tracked || before?.tracked),
     ignored: Boolean(after?.ignored ?? before?.ignored),
-    kind: classifyPathKind(path),
+    kind: classifyPathKind(path, generatedPaths),
   };
 }
 
-function classifyArtifactHygiene(changes: ChangedFile[]): ArtifactHygiene {
+export function classifyArtifactHygiene(changes: ChangedFile[]): ArtifactHygiene {
   const hygiene = emptyArtifactHygiene();
   const entries = changes.map((change): ClassifiedChange => ({
     path: change.path,
@@ -692,6 +844,12 @@ function classifyArtifactHygiene(changes: ChangedFile[]): ArtifactHygiene {
     reason: classificationReason(change),
   }));
   hygiene.source_changes = entries.filter((entry) => entry.kind === "source" && !entry.ignored);
+  hygiene.dependency_changes = entries.filter((entry) => entry.kind === "dependency" && !entry.ignored);
+  hygiene.generated_changes = entries.filter((entry) => entry.kind === "build_artifact");
+  hygiene.runtime_changes = entries.filter((entry) => entry.kind === "runtime_generated");
+  hygiene.unexpected_changes = entries.filter((entry) =>
+    (entry.kind === "build_artifact" || entry.kind === "runtime_generated") && !entry.ignored
+  );
   hygiene.tracked_build_artifacts = entries.filter((entry) => entry.kind === "build_artifact" && entry.tracked);
   hygiene.ignored_untracked_artifacts = entries.filter((entry) => entry.ignored && !entry.tracked);
   hygiene.runtime_generated_files = entries.filter((entry) => entry.kind === "runtime_generated");
@@ -700,6 +858,10 @@ function classifyArtifactHygiene(changes: ChangedFile[]): ArtifactHygiene {
   );
   hygiene.counts = {
     source_changes: hygiene.source_changes.length,
+    dependency_changes: hygiene.dependency_changes.length,
+    generated_changes: hygiene.generated_changes.length,
+    runtime_changes: hygiene.runtime_changes.length,
+    unexpected_changes: hygiene.unexpected_changes.length,
     tracked_build_artifacts: hygiene.tracked_build_artifacts.length,
     ignored_untracked_artifacts: hygiene.ignored_untracked_artifacts.length,
     runtime_generated_files: hygiene.runtime_generated_files.length,
@@ -708,13 +870,18 @@ function classifyArtifactHygiene(changes: ChangedFile[]): ArtifactHygiene {
   return hygiene;
 }
 
-function classifyPathKind(path: string): ChangedFile["kind"] {
+function classifyPathKind(path: string, generatedPaths: string[] = DEFAULT_GENERATED_PATHS): ChangedFile["kind"] {
   const normalized = normalizePath(path).toLowerCase();
   const parts = normalized.split("/");
   const basename = parts[parts.length - 1] || "";
   if (basename === "sync-store.json" || /\.(log|tmp|temp|pid)$/.test(basename)) return "runtime_generated";
+  if ([
+    "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "bun.lock", "bun.lockb",
+    "poetry.lock", "pipfile.lock", "cargo.lock", "go.sum", "composer.lock",
+  ].includes(basename)) return "dependency";
+  if (generatedPaths.some((pattern) => matchesGeneratedPath(normalized, pattern))) return "build_artifact";
   if (parts.some((part) => ["dist", "release", "build", "out", "coverage", ".next"].includes(part))) return "build_artifact";
-  if (/\.(exe|dll|pak|bin|zip|tgz|tar\.gz)$/.test(basename)) return "build_artifact";
+  if (/\.(exe|dll|pak|bin|zip|tgz|tar\.gz|tsbuildinfo|pyc)$/.test(basename)) return "build_artifact";
   return "source";
 }
 
@@ -723,7 +890,106 @@ function classificationReason(change: ChangedFile): string {
   if (change.kind === "build_artifact" && change.tracked) return "artifact-like path is tracked by Git and requires review";
   if (change.kind === "build_artifact") return "artifact-like path is not ignored and requires review";
   if (change.kind === "runtime_generated") return "runtime-generated path is not ignored and requires review";
+  if (change.kind === "dependency") return change.tracked ? "tracked dependency lockfile change" : "untracked dependency lockfile change";
   return change.tracked ? "tracked source change" : "untracked source change";
+}
+
+export function resolveGeneratedPathPatterns(repoPath: string, configuredPatterns: string[] = []): string[] {
+  const patterns = [...DEFAULT_GENERATED_PATHS, ...configuredPatterns];
+  for (const filename of [".gitignore", ".npmignore"] as const) {
+    const content = readBoundedIgnoreFile(repoPath, filename);
+    if (content === null) continue;
+    for (const rawLine of content.split(/\r?\n/)) {
+      let pattern = rawLine.trim();
+      if (!pattern || pattern.startsWith("#") || pattern.startsWith("!")) continue;
+      const anchored = pattern.startsWith("/");
+      const directoryOnly = pattern.endsWith("/");
+      pattern = pattern.replace(/\\ /g, " ").replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\//, "");
+      if (directoryOnly) {
+        pattern = pattern.replace(/\/$/, "");
+        if (!anchored && !pattern.includes("/")) pattern = `**/${pattern}`;
+        pattern += "/**";
+      }
+      if (pattern && pattern.length <= 256 && !pattern.split("/").includes("..") && ARTIFACT_PATTERN_HINT.test(pattern)) {
+        patterns.push(pattern);
+        if (patterns.length >= DEFAULT_GENERATED_PATHS.length + configuredPatterns.length + MAX_IMPORTED_IGNORE_PATTERNS) break;
+      }
+    }
+  }
+  return [...new Set(patterns.map((pattern) => normalizePath(pattern.trim()).replace(/^\.\//, "")).filter(Boolean))];
+}
+
+function readBoundedIgnoreFile(repoPath: string, filename: ".gitignore" | ".npmignore"): string | null {
+  const repoRoot = resolve(repoPath);
+  const ignorePath = join(repoRoot, filename);
+  if (!existsSync(ignorePath)) return null;
+  try {
+    const before = lstatSync(ignorePath);
+    if (!before.isFile() || before.isSymbolicLink() || before.size > MAX_IGNORE_FILE_BYTES) return null;
+    const realPath = realpathSync(ignorePath);
+    const rel = relative(repoRoot, realPath);
+    if (isAbsolute(rel) || rel === ".." || rel.startsWith("..")) return null;
+    const fd = openSync(realPath, "r");
+    let content = "";
+    try {
+      const opened = fstatSync(fd);
+      if (!opened.isFile() || opened.size > MAX_IGNORE_FILE_BYTES) return null;
+      const bytes = Buffer.alloc(opened.size);
+      const read = readSync(fd, bytes, 0, bytes.length, 0);
+      content = bytes.subarray(0, read).toString("utf-8");
+    } finally {
+      closeSync(fd);
+    }
+    const after = lstatSync(ignorePath);
+    if (!after.isFile() || after.isSymbolicLink() || after.size !== before.size || after.mtimeMs !== before.mtimeMs) return null;
+    return content;
+  } catch {
+    return null;
+  }
+}
+
+function mergeRenameKind(
+  oldKind: ChangedFile["kind"],
+  newKind: ChangedFile["kind"],
+): ChangedFile["kind"] {
+  if (oldKind === "source" || newKind === "source") return "source";
+  if (oldKind === "dependency" || newKind === "dependency") return "dependency";
+  if (oldKind === "runtime_generated" || newKind === "runtime_generated") return "runtime_generated";
+  return "build_artifact";
+}
+
+function matchesGeneratedPath(path: string, rawPattern: string): boolean {
+  let pattern = normalizePath(rawPattern.trim()).replace(/^\.\//, "").replace(/^\//, "").toLowerCase();
+  if (!pattern) return false;
+  if (pattern.endsWith("/")) pattern += "**";
+  if (!pattern.includes("/")) {
+    const segment = globToRegExp(pattern);
+    return path.split("/").some((part) => segment.test(part));
+  }
+  return globToRegExp(pattern).test(path);
+}
+
+function globToRegExp(pattern: string): RegExp {
+  let expression = "^";
+  for (let index = 0; index < pattern.length; index++) {
+    const char = pattern[index];
+    if (char === "*" && pattern[index + 1] === "*") {
+      if (pattern[index + 2] === "/") {
+        expression += "(?:.*/)?";
+        index += 2;
+      } else {
+        expression += ".*";
+        index += 1;
+      }
+    } else if (char === "*") {
+      expression += "[^/]*";
+    } else if (char === "?") {
+      expression += "[^/]";
+    } else {
+      expression += char.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+    }
+  }
+  return new RegExp(`${expression}$`, "i");
 }
 
 function normalizePath(value: string): string {
@@ -818,28 +1084,131 @@ function groupSnapshotFiles(
   return grouped;
 }
 
-function walkWorkspace(root: string, signal?: AbortSignal): string[] {
+function walkWorkspace(root: string, signal?: AbortSignal): { paths: string[]; truncated: boolean } {
   const result: string[] = [];
+  let truncated = false;
   const visit = (directory: string) => {
     throwIfAborted(signal);
-    if (result.length >= MAX_SNAPSHOT_FILES) return;
+    if (result.length >= MAX_SNAPSHOT_FILES) {
+      truncated = true;
+      return;
+    }
     let entries;
     try {
       entries = readdirSync(directory, { withFileTypes: true });
     } catch {
-      return;
+      throw new Error(`snapshot_directory_read_failed: ${relative(root, directory).replace(/\\/g, "/") || "."}`);
     }
     for (const entry of entries) {
       throwIfAborted(signal);
-      if (result.length >= MAX_SNAPSHOT_FILES) break;
+      if (result.length >= MAX_SNAPSHOT_FILES) {
+        truncated = true;
+        break;
+      }
       if (entry.isDirectory() && SKIP_DIRECTORIES.has(entry.name)) continue;
       const absolute = join(directory, entry.name);
       if (entry.isDirectory()) visit(absolute);
       else if (entry.isFile()) result.push(relative(root, absolute).replace(/\\/g, "/"));
+      else if (entry.isSymbolicLink()) {
+        // Links are intentionally omitted from content hashing. Path guards
+        // validate them at use time and the snapshot remains content-confined.
+        continue;
+      }
     }
   };
   visit(root);
-  return result;
+  return { paths: result, truncated };
+}
+
+function hasSnapshotPathSet(
+  values: Set<string>,
+  value: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  const comparable = comparableSnapshotPath(value, platform);
+  return [...values].some((candidate) => comparableSnapshotPath(candidate, platform) === comparable);
+}
+
+function walkSensitiveMetadata(root: string, signal?: AbortSignal): {
+  files: Record<string, SensitiveFileMetadata>;
+  warnings: string[];
+  failure_codes: string[];
+} {
+  const files: Record<string, SensitiveFileMetadata> = {};
+  const warnings: string[] = [];
+  const failureCodes = new Set<string>();
+  let visited = 0;
+  const visit = (directory: string) => {
+    throwIfAborted(signal);
+    let entries;
+    try {
+      entries = readdirSync(directory, { withFileTypes: true });
+    } catch {
+      failureCodes.add("sensitive_path_scan_failed");
+      warnings.push(`could not scan sensitive paths under: ${relative(root, directory).replace(/\\/g, "/") || "."}`);
+      return;
+    }
+    for (const entry of entries) {
+      throwIfAborted(signal);
+      if (++visited > MAX_SNAPSHOT_FILES * 4) {
+        failureCodes.add("sensitive_path_scan_truncated");
+        return;
+      }
+      if (entry.isDirectory() && SKIP_DIRECTORIES.has(entry.name)) continue;
+      const absolute = join(directory, entry.name);
+      const normalized = relative(root, absolute).replace(/\\/g, "/");
+      if (isSensitivePath(normalized)) {
+        try {
+          const metadata = lstatSync(absolute);
+          files[normalized] = {
+            size: metadata.size,
+            mtime_ms: Math.trunc(metadata.mtimeMs),
+            file_type: metadata.isFile() ? "file" : metadata.isDirectory() ? "directory" : "other",
+          };
+        } catch {
+          failureCodes.add("sensitive_path_metadata_failed");
+          warnings.push(`could not inspect sensitive path metadata: ${normalized}`);
+        }
+        // A sensitive directory such as .ssh is represented by directory
+        // metadata only. Never descend and enumerate credential filenames.
+        if (entry.isDirectory()) continue;
+      }
+      if (entry.isDirectory()) visit(absolute);
+    }
+  };
+  visit(root);
+  return { files, warnings, failure_codes: [...failureCodes] };
+}
+
+function assertGitSnapshotResult(
+  operation: string,
+  result: { status: number | null; stdout: string; stderr: string; truncated: boolean },
+): void {
+  if (result.truncated) throw new Error(`snapshot_git_${operation}_truncated`);
+  if (result.status !== 0) throw new Error(`snapshot_git_${operation}_failed: ${boundedGitError(result)}`);
+}
+
+function boundedGitError(result: { status: number | null; stderr: string }): string {
+  const message = result.stderr.replace(/[\r\n]+/g, " ").trim().slice(0, 300);
+  return `exit=${result.status ?? "spawn_error"}${message ? ` ${message}` : ""}`;
+}
+
+async function mapWithConcurrency<T, R>(
+  values: readonly T[],
+  concurrency: number,
+  mapper: (value: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    while (true) {
+      const index = next++;
+      if (index >= values.length) return;
+      results[index] = await mapper(values[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 function runGit(repoPath: string, args: string[], signal?: AbortSignal): Promise<{

@@ -4,6 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { reserveLoopbackPort } from "../lib/loopback-port.js";
 
 if (process.platform !== "win32") {
   console.log("ok - PatchWarden control smoke skipped outside Windows");
@@ -14,6 +15,10 @@ const scriptDir = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const root = resolve(scriptDir, "..", "..");
 const manager = join(root, "scripts", "control", "manage-patchwarden.ps1");
 const temp = mkdtempSync(join(tmpdir(), "patchwarden-control-smoke-"));
+const coreHealthPort = await reserveLoopbackPort();
+const directHealthPort = await reserveLoopbackPort();
+const coreHealthUrl = `http://127.0.0.1:${coreHealthPort}`;
+const directHealthUrl = `http://127.0.0.1:${directHealthPort}`;
 const mockConfig = join(temp, "patchwarden.config.json");
 writeFileSync(mockConfig, JSON.stringify({
   workspaceRoot: temp,
@@ -27,6 +32,9 @@ const env = {
   TEMP: join(temp, "Temp"),
   TMP: join(temp, "Temp"),
   PATCHWARDEN_CONFIG: mockConfig,
+  PATCHWARDEN_CORE_HEALTH_URL: coreHealthUrl,
+  PATCHWARDEN_DIRECT_HEALTH_URL: directHealthUrl,
+  PATCHWARDEN_TEST_DISABLE_PROFILE_PROCESS_SCAN: "1",
 };
 let fakeTunnel = null;
 let fakeWatcher = null;
@@ -79,15 +87,15 @@ try {
     ready: false,
     pid: null,
     tool_profile: "chatgpt_direct",
-    tool_count: 14,
+    tool_count: 18,
     tools_ready: true,
   }), "utf8");
   writeFileSync(join(directRuntime, "tunnel-client.pid"), String(fakeTunnel.pid), "utf8");
-  writeFileSync(join(directRuntime, "tunnel-health-url.txt"), "http://127.0.0.1:8081", "utf8");
+  writeFileSync(join(directRuntime, "tunnel-health-url.txt"), directHealthUrl, "utf8");
   const legacyDirectPid = join(env.TEMP, "patchwarden-direct.pid");
   const legacyDirectUrl = join(env.TEMP, "patchwarden-direct-health.url");
   writeFileSync(legacyDirectPid, String(fakeTunnel.pid), "utf8");
-  writeFileSync(legacyDirectUrl, "http://127.0.0.1:8081", "utf8");
+  writeFileSync(legacyDirectUrl, directHealthUrl, "utf8");
 
   const desktopOwnerA = "0123456789abcdef0123456789abcdef";
   const desktopOwnerB = "fedcba9876543210fedcba9876543210";
@@ -209,11 +217,11 @@ Start-Sleep -Seconds 120
   }), "utf8");
   healthServer = spawn(
     process.execPath,
-    ["-e", "require('http').createServer((req,res)=>{res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({ok:true}))}).listen(8080,'127.0.0.1')"],
+    ["-e", `require('http').createServer((req,res)=>{res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({ok:true}))}).listen(${coreHealthPort},'127.0.0.1')`],
     { stdio: "ignore", windowsHide: true }
   );
   await delay(750);
-  if (healthServer.exitCode !== null) throw new Error("health fallback fixture could not listen on 127.0.0.1:8080");
+  if (healthServer.exitCode !== null) throw new Error(`health fallback fixture could not listen on ${coreHealthUrl}`);
   const coreStatusRaw = run(["status", "core", "-Json"]);
   const coreStatusValue = JSON.parse(coreStatusRaw);
   const coreStatus = Array.isArray(coreStatusValue) ? coreStatusValue[0] : coreStatusValue;

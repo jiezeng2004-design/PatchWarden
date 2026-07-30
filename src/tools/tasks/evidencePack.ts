@@ -52,7 +52,7 @@ export function exportTaskEvidencePack(input: { lineage_id: string; max_items?: 
   const lineage = getTaskLineage(lineageId, { max_items: maxItems });
   const packDir = resolve(config.workspaceRoot, ".patchwarden", "evidence-packs", lineageId);
   guardWorkspacePath(packDir, config.workspaceRoot);
-  mkdirSync(packDir, { recursive: true });
+  mkdirSync(packDir, { recursive: true, mode: 0o700 });
 
   const policySummary = readPolicySummary(lineage.repo_path);
   const catalog = safeCatalog();

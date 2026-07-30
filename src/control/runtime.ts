@@ -206,6 +206,15 @@ export interface StaleClassification {
   stale_reasons: string[];
 }
 
+export interface TaskObservability {
+  task_state: "task_stuck" | "queued" | "agent_running" | "verification_running" | "collecting_artifacts" | "awaiting_user_confirmation" | "terminal" | "active";
+  agent_state: "not_started" | "running" | "finished" | "unknown";
+  watcher_state: WatcherStatusSnapshot["status"];
+  connector_state: "not_observable_server_side";
+  current_command: string | null;
+  heartbeat_age_seconds: number | null;
+}
+
 export const TERMINAL_TASK_STATUSES = SHARED_TERMINAL_TASK_STATUSES;
 
 /**
@@ -271,9 +280,39 @@ export function classifyStaleTask(
   return { is_stale: reasons.length > 0, stale_reasons: reasons };
 }
 
-export function augmentTaskWithStale(task: TaskEntry, watcher: WatcherStatusSnapshot, nowMs = Date.now()): TaskEntry & StaleClassification {
+export function deriveTaskObservability(task: TaskEntry, watcher: WatcherStatusSnapshot, stale: StaleClassification, nowMs = Date.now()): TaskObservability {
+  const heartbeatMs = Date.parse(task.last_heartbeat_at || "");
+  const heartbeatAge = Number.isFinite(heartbeatMs) ? Math.max(0, Math.round((nowMs - heartbeatMs) / 1000)) : null;
+  const phase = String(task.phase || "");
+  const terminal = TERMINAL_TASK_STATUSES.has(task.status);
+  const taskState: TaskObservability["task_state"] = stale.is_stale
+    ? "task_stuck"
+    : task.acceptance_status === "blocked"
+      ? "awaiting_user_confirmation"
+      : terminal
+        ? "terminal"
+        : task.status === "pending"
+          ? "queued"
+          : /test|verification|runtime_validation/.test(phase)
+            ? "verification_running"
+            : phase === "collecting_artifacts"
+              ? "collecting_artifacts"
+              : /agent|running/.test(phase) || task.status === "running"
+                ? "agent_running"
+                : "active";
+  return {
+    task_state: taskState,
+    agent_state: terminal ? "finished" : task.status === "pending" ? "not_started" : taskState === "agent_running" ? "running" : "unknown",
+    watcher_state: watcher.status,
+    connector_state: "not_observable_server_side",
+    current_command: task.current_command,
+    heartbeat_age_seconds: heartbeatAge,
+  };
+}
+
+export function augmentTaskWithStale(task: TaskEntry, watcher: WatcherStatusSnapshot, nowMs = Date.now()): TaskEntry & StaleClassification & { observability: TaskObservability } {
   const cls = classifyStaleTask(task, watcher, nowMs);
-  return { ...task, is_stale: cls.is_stale, stale_reasons: cls.stale_reasons };
+  return { ...task, is_stale: cls.is_stale, stale_reasons: cls.stale_reasons, observability: deriveTaskObservability(task, watcher, cls, nowMs) };
 }
 
 export function listTasksForStatus(): StatusTasks {
@@ -419,6 +458,10 @@ export function reconstructTaskEntry(
         ? statusData.acceptance_status
         : "pending")
     : null;
+  const configuredVerifyCommands = Array.isArray(statusData.configured_verify_commands)
+    ? statusData.configured_verify_commands
+    : Array.isArray(statusData.verify_commands) ? statusData.verify_commands : [];
+  const executedVerifyCommands = Array.isArray(statusData.executed_verify_commands) ? statusData.executed_verify_commands : [];
   return {
     task_id: taskId,
     plan_id: String(statusData.plan_id || ""),
@@ -433,6 +476,24 @@ export function reconstructTaskEntry(
       : statusData.agent_failure_category
         ? String(statusData.agent_failure_category)
         : null,
+    agent_failure_category: typeof statusData.agent_failure_category === "string"
+      ? statusData.agent_failure_category
+      : null,
+    failure_source: typeof statusData.failure_source === "string" ? statusData.failure_source : null,
+    counts_against_agent: statusData.counts_against_agent === true,
+    fallback_eligible: statusData.fallback_eligible === true,
+    retryable: statusData.retryable === true,
+    lineage_id: typeof statusData.lineage_id === "string" ? statusData.lineage_id : null,
+    source_changes: Number((statusData.acceptance_report as Record<string, unknown> | undefined)?.source_changes || 0),
+    generated_changes: Number((statusData.acceptance_report as Record<string, unknown> | undefined)?.generated_changes || 0),
+    scope_violations: Number((statusData.acceptance_report as Record<string, unknown> | undefined)?.scope_violations || 0),
+    verification_progress: {
+      status: String(statusData.verify_status || "not_run"),
+      configured: configuredVerifyCommands.length,
+      executed: executedVerifyCommands.length,
+    },
+    completion_state: statusData.completion_state && typeof statusData.completion_state === "object" && !Array.isArray(statusData.completion_state) ? statusData.completion_state as Record<string, unknown> : null,
+    connector_state: "not_observable_server_side",
     provider_error_reference: typeof statusData.provider_error_reference === "string"
       && /^err_[A-Za-z0-9_-]{4,120}$/.test(statusData.provider_error_reference)
       ? statusData.provider_error_reference

@@ -3,7 +3,7 @@ import { strict as assert } from "node:assert";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
-import { guardPath, guardWorkspacePath } from "../../../security/pathGuard.js";
+import { guardPath, guardWorkspacePath, readValidatedFileSync } from "../../../security/pathGuard.js";
 import { PatchWardenError } from "../../../errors.js";
 
 describe("guardPath", () => {
@@ -139,6 +139,25 @@ describe("guardPath", () => {
     } finally {
       rmSync(target, { recursive: true, force: true });
     }
+  });
+
+  it("reads from the validated descriptor when the path identity remains stable", () => {
+    const path = join(tempDir, "stable.txt");
+    writeFileSync(path, "stable", "utf8");
+    const result = readValidatedFileSync(() => path);
+    assert.equal(result.content.toString("utf8"), "stable");
+  });
+
+  it("rejects a path identity swap after the descriptor is opened", () => {
+    const first = join(tempDir, "first.txt");
+    const second = join(tempDir, "second.txt");
+    writeFileSync(first, "first", "utf8");
+    writeFileSync(second, "second", "utf8");
+    let calls = 0;
+    assert.throws(
+      () => readValidatedFileSync(() => calls++ === 0 ? first : second),
+      (error: unknown) => error instanceof PatchWardenError && error.reason === "path_changed_during_read",
+    );
   });
 });
 

@@ -5,7 +5,7 @@
 </p>
 
 [![最新版本](https://img.shields.io/github/v/release/jiezeng2004-design/PatchWarden?label=release)](https://github.com/jiezeng2004-design/PatchWarden/releases/latest)
-[![Node.js >= 18](https://img.shields.io/badge/Node.js-%3E%3D18-339933.svg)](https://nodejs.org/)
+[![Node.js >= 20](https://img.shields.io/badge/Node.js-%3E%3D20-339933.svg)](https://nodejs.org/)
 [![Windows x64](https://img.shields.io/badge/Windows-x64-0078D4.svg)](https://github.com/jiezeng2004-design/PatchWarden/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -16,7 +16,7 @@ PatchWarden 将 ChatGPT 与本地 Codex CLI、Claude Code 或 OpenCode 等编程
 [下载最新 Windows 版本](https://github.com/jiezeng2004-design/PatchWarden/releases/latest) · [5 分钟上手](#5-分钟快速上手) · [连接 ChatGPT](#通过-secure-mcp-tunnel-连接-chatgpt) · [常见问题](#常见问题与排障)
 
 <p align="center">
-  <img src="./docs/assets/PatchWarden_Demo_Highlight.gif" width="800" alt="PatchWarden 53 秒工作流演示：在 ChatGPT 中规划，由本地 Agent 执行，再验证和审计结果">
+  <img src="https://raw.githubusercontent.com/jiezeng2004-design/PatchWarden/main/docs/assets/PatchWarden_Demo_Highlight.gif" width="800" alt="PatchWarden 53 秒工作流演示：在 ChatGPT 中规划，由本地 Agent 执行，再验证和审计结果">
 </p>
 
 <p align="center"><sub>53 秒真实工作流演示。API Key、Tunnel ID 和账号标识等敏感信息均已遮挡。</sub></p>
@@ -37,7 +37,7 @@ PatchWarden 将 ChatGPT 与本地 Codex CLI、Claude Code 或 OpenCode 等编程
 - Windows 10 或 11 x64。
 - 一个只包含允许 PatchWarden 访问项目的专用目录。
 - 至少一个已经安装并登录的本地 Agent：Codex CLI、Claude Code 或 OpenCode。
-- 从源码或 npm 运行时需要 Node.js 18 或更高版本；建议安装 Git，以生成可靠 Diff。
+- 从源码或 npm 运行时需要 Node.js 20 或更高版本；建议安装 Git，以生成可靠 Diff。
 
 后续连接 ChatGPT 还需要：
 
@@ -196,10 +196,21 @@ tool_count，并列出 invocation_ready=true 的 Agent。
 | `verification` | 独立运行已配置验证命令 | passed |
 | `changed_files_total` | 实际修改文件数 | 与批准范围一致 |
 | `out_of_scope_changes_total` | 批准范围外的改动 | `0` |
-| `audit` | 独立验收结论 | `ACCEPTED` |
+| `audit` | 机器独立审计结论 | `ACCEPTED` |
+| 本地 attestation | 人工核对当前证据后的权威验收 | 已签发且证据摘要未变化 |
 | 最终 lineage 状态 | 完整工作流结果 | `accepted` |
 
 只读冒烟测试中，`changed_files_total` 也应为 `0`。
+
+对新任务，`audit_task` 通过后仍需人在本机交互式终端确认。检查 `audit.json`、`changed-files.json`、验证结果和 Diff 后运行：
+
+```powershell
+patchwarden-attest <task_id> --accept
+```
+
+该命令要求真实 TTY，并把决定绑定到工作区外的本地 ledger 与当前证据摘要；仅修改任务目录中的 `acceptance.json` 或 `status.json` 不会产生权威验收。
+
+如果直接启用本地 HTTP MCP 传输（不经过 stdio Tunnel），必须先在可信父进程环境中配置 `PATCHWARDEN_OWNER_TOKEN`。匿名 `/healthz` 只返回最小状态，详细 health 与 `/mcp` 都要求 owner token。
 
 ## 常见问题与排障
 
@@ -249,6 +260,18 @@ Copy-Item .\examples\config.example.json .\patchwarden.config.json
 ```
 
 编辑 `patchwarden.config.json`，至少设置 `workspaceRoot`、`agents` 和 `allowedTestCommands`。本地配置不要提交到 Git。
+
+可用 `generatedPaths`（兼容 `generated_paths`）补充带生成物特征的 glob；仓库专属规则使用 `repoGeneratedPaths`。PatchWarden 仍会把已跟踪或未忽略的生成物列为待复核变化，不会用该配置隐藏异常修改。
+
+网页项目可在本地配置中显式启用 `runtimeValidation`（兼容 `runtime_validation`）。`startCommand` 必须与 `allowedTestCommands` 中的命令精确匹配，`baseUrl` 只允许字面量 loopback HTTP 地址（`127.0.0.1` 或 `[::1]`）。静态验证通过后，PatchWarden 使用系统 Edge/Chrome 检查配置的路由与视口，记录控制台错误、破图、横向溢出和截图，并在结束时仅关闭本次验证拥有的服务进程树。若端口已被占用会拒绝附着，避免误验收或停止外部服务。
+
+Direct 现在提供受限的文件创建、目录创建、移动和删除操作。每次操作仍会经过工作区边界、敏感文件名、链接/重解析点和确认策略检查；批量补丁在任一子补丁失败时保持原子性，并返回精确的补丁索引与原因。
+
+任务执行会先运行项目预检，并把失败归类为策略、范围、确认、Agent、验证、连接器或 Watcher 故障。`agentPriority`、`maxRetriesPerAgent`、`fallbackOn` 和 `doNotFallbackOn` 可控制有界重试与 Agent 回退；回退不会绕过策略、范围或确认，连接器/Watcher 故障也不会消耗 Agent 重试次数。连接器重试请复用稳定的 `request_id`，相同参数幂等复用，参数变化会拒绝复用。
+
+仓库可以通过 `.patchwarden/project-facts.json` 或根目录 `PROJECT_FACTS.json` 声明已核实的联系方式、域名、量化/采用声明、许可证与禁止声明。审计还会按识别到的 Next.js、Node.js、Python、Rust 或 Electron 项目运行框架级检查，真实解析 SVG/XML，并区分文档中的可执行命令与叙述示例。结果汇总到 `acceptance-report.json`；没有完成所需运行态验证时会明确标记 `manual_review_required=true`，不会自动进入可供用户验收状态。
+
+任务面板和高级控制台分别展示 task、Agent、Watcher 与 connector 状态、心跳年龄、当前命令、源码/生成物/范围计数、验证进度、Agent attempt 与路由/切换原因，避免把“Agent 已结束”误报为“任务已验收”。
 
 ```powershell
 $env:PATCHWARDEN_CONFIG = (Resolve-Path .\patchwarden.config.json)
