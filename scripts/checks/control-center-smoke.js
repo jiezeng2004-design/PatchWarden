@@ -451,8 +451,8 @@ async function testStaticFiles() {
     for (const marker of ["detectTunnel", "chooseTunnel", "enableDirectProfile", "proxyScope", "saveRuntime", "tunnelId", "runtimeKey", "provisionTunnel", "forgetCredential", "language"]) {
       if (!settings.body.includes(marker)) checks.push(`desktop settings missing runtime control: ${marker}`);
     }
-    if (!desktopBridge.body.includes("patchwardenApplyTheme") || !desktopBridge.body.includes("请求超过 10 秒")) {
-      checks.push("desktop bridge is missing renderer theme propagation or bounded loading timeout");
+    if (!desktopBridge.body.includes("patchwardenApplyTheme") || !desktopBridge.body.includes("GET_TIMEOUT_MS = 30000") || !desktopBridge.body.includes("control_center_timeout")) {
+      checks.push("desktop bridge is missing renderer theme propagation or the 30-second classified GET policy");
     }
 
     if (favicon.status !== 200) checks.push(`GET /favicon.ico -> status ${favicon.status}`);

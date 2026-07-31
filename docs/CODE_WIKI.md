@@ -1,7 +1,7 @@
 # PatchWarden Code Wiki
 
 > 本文档是对 PatchWarden 仓库的结构化代码导览，覆盖项目整体架构、主要模块职责、关键类与函数说明、依赖关系、运行方式，以及现有缺陷分析。
-> 源码版本：**v1.7.1** · Schema Epoch：`2026-07-26-v16` · 集成复核日期：2026-07-30 · License：MIT
+> 源码版本：**v1.7.2** · Schema Epoch：`2026-07-26-v16` · 集成复核日期：2026-07-31 · License：MIT
 
 ## 目录
 
@@ -279,7 +279,7 @@ PatchWarden/
 | --- | --- |
 | [src/config.ts](../src/config.ts) | 加载并校验 `patchwarden.config.json`，提供 `loadConfig`/`getConfig`/`getTasksDir`/`getPlansDir`/`resolveWorkspaceRoot`/`getRepoAllowedTestCommands`/`getRepoDirectAllowedCommands` 等路径解析；严格校验 `workspaceRoot`、`agents`、`allowedTestCommands`、`watcherStaleSeconds`、`toolProfile`、`tunnelProxy`、Direct 数值范围等字段；含 `normalizeRepoKey` 与 `comparablePath` 工具 |
 | [src/errors.ts](../src/errors.ts) | 定义 `PatchWardenError`（含 `reason`/`suggestion`/`blocked`/`details`）与 `errorPayload` 序列化 |
-| [src/version.ts](../src/version.ts) | 导出 `PATCHWARDEN_VERSION = "1.7.0"` 与 `TOOL_SCHEMA_EPOCH = "2026-07-26-v16"` |
+| [src/version.ts](../src/version.ts) | 导出 `PATCHWARDEN_VERSION = "1.7.2"` 与 `TOOL_SCHEMA_EPOCH = "2026-07-26-v16"` |
 | [src/logging.ts](../src/logging.ts) | `Logger` 类输出 stderr JSON 日志，记录 `audit`/`info`/`warn`/`error`；`logToolInvocation` 仅写参数 digest，不写原参数，并通过跨进程锁有界追加到 5 MiB；`installGlobalHandlers` 捕获未处理异常但不吞错 |
 
 ### 4.3 安全模块（src/security/）

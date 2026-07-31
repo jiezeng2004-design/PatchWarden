@@ -581,6 +581,7 @@ html.dark {
     let controlToken = null;
     let statusTimer = null;
     let currentRepoPath = ".";
+    let latestStatus = null;
 
     // ---------- Utilities ----------
     function $(id) { return document.getElementById(id); }
@@ -648,6 +649,14 @@ html.dark {
     function clearError() {
       const el = $('error-banner');
       if (el) el.classList.add('hidden');
+    }
+
+    function controlCenterErrorText(err) {
+      const code = err && err.code;
+      if (code === 'control_center_timeout') return 'Control Center connection timed out (30 seconds)';
+      if (code === 'control_center_unavailable') return 'Control Center is unavailable';
+      if (code === 'control_center_http_error') return 'Control Center returned an error';
+      return err && err.message ? err.message : 'Control Center connection failed';
     }
 
     function setSidebarStatus(kind, text) {
@@ -931,7 +940,11 @@ html.dark {
     // ---------- Network ----------
     async function fetchJson(url) {
       const res = await fetch(url);
-      if (!res.ok) throw new Error('HTTP ' + res.status + ' · ' + url);
+      if (!res.ok) {
+        const error = new Error('HTTP ' + res.status + ' - ' + url);
+        error.code = 'control_center_http_error';
+        throw error;
+      }
       return res.json();
     }
 
@@ -1573,11 +1586,12 @@ html.dark {
       body.innerHTML = html;
     }
 
-    async function refreshHealthScore() {
+    async function refreshHealthScore(statusOverride) {
       const card = $('health-score-card');
       if (!card) return;
       try {
-        const status = await fetchJson('/api/status');
+        const status = statusOverride || latestStatus;
+        if (!status) return;
         const score = calculateHealthScore(status);
         renderHealthScore(score);
       } catch (err) {
@@ -2008,6 +2022,8 @@ html.dark {
     async function refreshStatus() {
       try {
         const data = await fetchJson('/api/status');
+        latestStatus = data;
+        refreshHealthScore(data);
         clearError();
         renderServiceCard('core', 'PatchWarden Core (chatgpt_core)', data);
         renderServiceCard('direct', 'PatchWarden Direct (chatgpt_direct)', data);
@@ -2025,9 +2041,11 @@ html.dark {
           wsEl.textContent = data.workspace_root;
           wsEl.setAttribute('title', data.workspace_root);
         }
+        return data;
       } catch (err) {
-        showError('加载状态失败: ' + err.message);
-        setSidebarStatus('error', '状态获取失败');
+        showError('Control Center error: ' + controlCenterErrorText(err));
+        setSidebarStatus('error', 'Control Center unavailable');
+        return null;
       }
     }
 
@@ -2044,14 +2062,17 @@ html.dark {
     }
 
     async function refreshAll() {
-      await Promise.all([refreshStatus(), refreshTasks(), refreshLogs(), refreshEvents(), refreshLineages(), refreshProjectPolicy(), refreshReleaseStatus(), refreshEvidencePacks(), refreshStaleTasks(), refreshHealthScore()]);
+      const status = await refreshStatus();
+      if (!status) return false;
+      await Promise.all([refreshTasks(), refreshLogs(), refreshEvents(), refreshLineages(), refreshProjectPolicy(), refreshReleaseStatus(), refreshEvidencePacks(), refreshStaleTasks()]);
+      return true;
     }
 
     // ---------- Actions ----------
     async function handleAction(action, btnEl) {
       try {
         if (action === 'refresh') {
-          await Promise.all([refreshStatus(), refreshTasks(), refreshLineages(), refreshProjectPolicy(), refreshReleaseStatus(), refreshEvidencePacks(), refreshStaleTasks(), refreshHealthScore()]);
+          await refreshAll();
           return;
         }
 
@@ -2134,11 +2155,13 @@ html.dark {
         });
       }
 
-      loadRepos();
-      loadToken().then(function () {
+      refreshAll().then(function (statusReady) {
+        if (!statusReady) return;
+        loadRepos();
+        return loadToken().then(function () {
         auditSeeded = false;
         seenAuditKeys = new Set();
-        return refreshAll().then(function () {
+        return Promise.resolve(true).then(function () {
           // Seed audit keys after first load so existing audits don't all fire toasts.
           return refreshAuditForToasts();
         });
@@ -2146,10 +2169,10 @@ html.dark {
         showError('初始化失败: ' + err.message);
       });
 
+      });
+
       // Auto-refresh /api/status every 30s (no logs to avoid performance issues)
       statusTimer = setInterval(function () { refreshStatus(); }, 30000);
-      // Health score refresh (lightweight, reuses some endpoints) every 60s
-      setInterval(function () { refreshHealthScore(); }, 60000);
       // Refresh activity timeline every 60s
       setInterval(function () { refreshEvents(); }, 60000);
       // Audit toast polling: every 90s, best-effort

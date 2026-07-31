@@ -12,7 +12,7 @@ Remote facts checked again on 2026-07-30 after the v1.6.7 release completed.
 | Remote `main` | `4c8f66e0461d3460886bca8c3f17c3c4fbdc5e18` |
 | Annotated tag object | `b4ccc0012188c690a2a8482f46dea0648e176321` |
 | Tag peeled commit | `4c8f66e0461d3460886bca8c3f17c3c4fbdc5e18` |
-| Local `package.json` | `patchwarden@1.7.1` (unreleased candidate) |
+| Local `package.json` | `patchwarden@1.7.2` (unreleased candidate) |
 | GitHub latest release | `v1.7.0` |
 | GitHub release URL | https://github.com/jiezeng2004-design/PatchWarden/releases/tag/v1.7.0 |
 | GitHub release published at | `2026-07-28T10:21:44Z` |
@@ -27,7 +27,7 @@ Remote facts checked again on 2026-07-30 after the v1.6.7 release completed.
 | Open issues | 5 |
 | Open pull requests | 1 |
 
-Conclusion: the local source is preparing `v1.7.1`. The Git tag, GitHub
+Conclusion: the local source is preparing `v1.7.2`. The Git tag, GitHub
 Release, npm package version, and `dist-tags.latest` are independently verified
 at `v1.7.0`; this document does not claim that v1.7.1 has been published.
 

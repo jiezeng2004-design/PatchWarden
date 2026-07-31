@@ -104,6 +104,21 @@ describe("desktop UI contracts", () => {
     assert.doesNotMatch(dashboard, /watcherDownAndFailed|failedCount > 2/);
   });
 
+  it("loads live status before history and reuses it for the health score", () => {
+    const dashboard = read("ui/pages/dashboard.html");
+    const bridge = read("ui/desktop-bridge.js");
+    assert.equal((dashboard.match(/fetchJson\('\/api\/status'\)/g) || []).length, 1);
+    assert.match(dashboard, /const status = await refreshStatus\(\);/);
+    assert.match(dashboard, /latestStatus = data;\s+refreshHealthScore\(data\);/);
+    assert.match(dashboard, /if \(!status\) return false;/);
+    assert.ok(dashboard.indexOf("const status = await refreshStatus();") < dashboard.indexOf("await Promise.all([refreshTasks()"));
+    assert.match(dashboard, /if \(!statusReady\) return;/);
+    assert.match(dashboard, /showError\('Control Center error: ' \+ controlCenterErrorText\(err\)\)/);
+    assert.match(bridge, /control_center_timeout/);
+    assert.match(bridge, /control_center_unavailable/);
+    assert.match(bridge, /GET_TIMEOUT_MS = 30000/);
+  });
+
   it("keeps long-running history behind bounded list contracts", () => {
     const tasks = read("ui/pages/tasks.html");
     const sessions = read("ui/pages/direct-sessions.html");

@@ -1,5 +1,16 @@
 # PatchWarden CHANGELOG
 
+## v1.7.2 (2026-07-31)
+
+### Control Center and Glama synchronization
+
+- Reuse one Watcher snapshot for each lineage list request so a missing
+  heartbeat cannot trigger a repeated task-directory scan for every lineage.
+- Load live Control Center status before historical panels, reuse it for the
+  health score, and classify Desktop GET timeout and unavailable states.
+- Document the Glama Node 24 stdio entry, build commands, and the requirement
+  for no legacy required environment variables.
+
 ## v1.7.1 (Unreleased)
 
 > Local `1.7.1` candidate. This entry does not assert a GitHub or npm release.

@@ -155,8 +155,8 @@ lineage 的有界摘要，不含完整 rounds 详情或 warnings/errors 原文�
 
 ```json
 {
-  "patchwarden_version": "1.7.1",
-  "package_version": "1.7.1",
+  "patchwarden_version": "1.7.2",
+  "package_version": "1.7.2",
   "commit": "bc950a2",
   "node_version": "v20.11.0",
   "os": { "platform": "win32", "arch": "x64" },
