@@ -9,7 +9,7 @@ import { atomicWriteFileSync, atomicWriteJsonFileSync } from "../../utils/atomic
 import { withFileLockSync } from "../../utils/lockedJsonFile.js";
 import { sanitizeModelSelectionEvidence, type ModelSelectionEvidence } from "../../agents/modelSelection.js";
 import type { RiskRuleEvidence } from "../../security/riskEngine.js";
-import { readWatcherStatus } from "../../watcherStatus.js";
+import { readWatcherStatus, type WatcherStatusSnapshot } from "../../watcherStatus.js";
 import { buildConnectorRecoveryState, type ConnectorRecoveryState } from "../../runner/connectorRecovery.js";
 
 export type TaskLoopStopReason =
@@ -280,11 +280,16 @@ export function failInterruptedTaskLineage(lineageId: string, now = new Date()):
   });
 }
 
-export function toSafeTaskLineage(record: TaskLineageRecord, maxItems = 8): SafeTaskLineage {
+export function toSafeTaskLineage(
+  record: TaskLineageRecord,
+  maxItems = 8,
+  watcherSnapshot?: WatcherStatusSnapshot,
+): SafeTaskLineage {
   const rounds = record.rounds.slice(0, maxItems);
   const latest = record.rounds[record.rounds.length - 1];
   const directSessions = normalizeDirectSessions(record.direct_sessions);
   const requestId = truncate(String(record.request_id || record.lineage_id), 128);
+  const watcher = watcherSnapshot ?? readWatcherStatus(getConfig());
   return {
     lineage_id: record.lineage_id,
     request_id: requestId,
@@ -316,7 +321,7 @@ export function toSafeTaskLineage(record: TaskLineageRecord, maxItems = 8): Safe
       final_status: record.final_status,
       main_task: record.main_task,
       selected_agent: record.agent_routing?.selected_agent || null,
-      watcher: readWatcherStatus(getConfig()),
+      watcher,
     }),
     verification: {
       latest_status: latest?.verification_status || "not_available",

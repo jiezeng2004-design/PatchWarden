@@ -8,8 +8,12 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { type ServerResponse } from "node:http";
+import type { PatchWardenConfig } from "../../config.js";
 import { toSafeTaskLineage, type SafeTaskLineage, type TaskLineageRecord } from "../../tools/tasks/taskLineage.js";
 import { config, errorMessage, readJsonFileSafeUnder, sendJson } from "../shared.js";
+import { readWatcherStatus, type WatcherStatusSnapshot } from "../../watcherStatus.js";
+
+export type LineageWatcherReader = (config: PatchWardenConfig) => WatcherStatusSnapshot;
 
 interface LineageSummary {
   iterations: number;
@@ -51,18 +55,19 @@ function augmentLineageSummary(safe: SafeTaskLineage, record: TaskLineageRecord)
   };
 }
 
-export function handleLineages(res: ServerResponse): void {
+export function handleLineages(res: ServerResponse, watcherReader: LineageWatcherReader = readWatcherStatus): void {
   try {
     const root = join(config.workspaceRoot, ".patchwarden", "lineages");
     if (!existsSync(root)) {
       sendJson(res, 200, { lineages: [], total: 0, reason: null });
       return;
     }
+    const watcher = watcherReader(config);
     const lineages = readdirSync(root, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => readJsonFileSafeUnder<TaskLineageRecord>(root, join(entry.name, "lineage.json")))
       .filter((entry): entry is TaskLineageRecord => entry !== null)
-      .map((entry) => augmentLineageSummary(toSafeTaskLineage(entry, 6), entry))
+      .map((entry) => augmentLineageSummary(toSafeTaskLineage(entry, 6, watcher), entry))
       .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
       .slice(0, 50);
     sendJson(res, 200, { lineages, total: lineages.length, reason: null });
@@ -71,7 +76,11 @@ export function handleLineages(res: ServerResponse): void {
   }
 }
 
-export function handleLineageDetail(res: ServerResponse, lineageId: string): void {
+export function handleLineageDetail(
+  res: ServerResponse,
+  lineageId: string,
+  watcherReader: LineageWatcherReader = readWatcherStatus,
+): void {
   try {
     if (!/^[A-Za-z0-9_-]+$/.test(lineageId)) {
       sendJson(res, 400, { error: "Invalid lineage id" });
@@ -85,7 +94,8 @@ export function handleLineageDetail(res: ServerResponse, lineageId: string): voi
       sendJson(res, 404, { error: "Lineage not found" });
       return;
     }
-    sendJson(res, 200, augmentLineageSummary(toSafeTaskLineage(data, 20), data));
+    const watcher = watcherReader(config);
+    sendJson(res, 200, augmentLineageSummary(toSafeTaskLineage(data, 20, watcher), data));
   } catch (err) {
     sendJson(res, 200, { lineage_id: lineageId, error: errorMessage(err) });
   }

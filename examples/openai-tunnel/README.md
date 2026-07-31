@@ -38,7 +38,7 @@ Before the launcher starts the tunnel it performs a real MCP stdio handshake
 and requires the exact `chatgpt_core` manifest. Run
 `PatchWarden.cmd health` to see the version, profile, tool names, schema
 hash, process sources, and any mixed-version warnings. The check is read-only.
-The v1.7.1 Core manifest contains 26 tools. The enabled Direct manifest contains
+The v1.7.2 Core manifest contains 26 tools. The enabled Direct manifest contains
 19 tools. A different count or schema hash requires a Connector refresh and
 validation from a new ChatGPT conversation.
 

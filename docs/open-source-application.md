@@ -68,11 +68,11 @@ Remote snapshot checked on 2026-07-30:
 
 Local workspace facts, kept separate from the public snapshot:
 
-- Local source version in `package.json`: `1.7.1` (unreleased candidate)
+- Local source version in `package.json`: `1.7.2` (unreleased candidate)
 - Verified release commit: `69103b2b649e31ee2a8014f5d20616c5ad6b68ba`
 - Annotated tag object: `41b7f8393d79b058d8a6f42f29c44d7a152863ba`
 
-The local source is preparing `v1.7.1`; the independently verified GitHub
+The local source is preparing `v1.7.2`; the independently verified GitHub
 Release and npm `latest` are `v1.7.0`. This document does not claim that
 `v1.7.1` has been published.
 
