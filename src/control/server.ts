@@ -10,6 +10,7 @@
  * Entry point: `controlCenter.ts` imports `startServer()` from here.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { performance } from "node:perf_hooks";
 import { PATCHWARDEN_VERSION, TOOL_SCHEMA_EPOCH } from "../version.js";
 import { logger } from "../logging.js";
 import {
@@ -30,10 +31,22 @@ import {
   startArchivedTaskCleanupScheduler,
   type ArchivedTaskCleanupScheduler,
 } from "../tools/tasks/pruneArchivedTasks.js";
+import { clearControlDataCache } from "./dataCache.js";
 
 // ── Request router ────────────────────────────────────────────────
 
 async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const startedAt = performance.now();
+  const requestPath = String(req.url || "/").split(/[?#]/, 1)[0].slice(0, 240);
+  if (requestPath.startsWith("/api/")) {
+    res.once("finish", () => {
+      const durationMs = Math.round((performance.now() - startedAt) * 10) / 10;
+      if (durationMs < 250) return;
+      const context = { method: String(req.method || "GET").toUpperCase(), path: requestPath, status: res.statusCode, duration_ms: durationMs };
+      if (durationMs >= 2_000) logger.warn("[control-center] Slow API request", context);
+      else logger.info("[control-center] API request timing", context);
+    });
+  }
   res.setHeader(
     "Content-Security-Policy",
     "default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; form-action 'self'; connect-src 'self'; img-src 'self' data:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
@@ -108,7 +121,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     if (route.method !== method) continue;
     const match = pathname.match(route.pattern);
     if (!match) continue;
+    if (method === "POST") clearControlDataCache();
     await route.handler(res, match.slice(1));
+    if (method === "POST") clearControlDataCache();
     return;
   }
 
@@ -122,7 +137,7 @@ let archivedTaskCleanup: ArchivedTaskCleanupScheduler | null = null;
 
 export function startServer(): Server {
   archivedTaskCleanup?.stop();
-  archivedTaskCleanup = startArchivedTaskCleanupScheduler({ config });
+  archivedTaskCleanup = null;
   server = createServer((req, res) => {
     handleRequest(req, res).catch((err) => {
       if (!res.headersSent) {
@@ -154,6 +169,7 @@ export function startServer(): Server {
       url: formatted,
       version: PATCHWARDEN_VERSION,
     });
+    archivedTaskCleanup = startArchivedTaskCleanupScheduler({ config, initialDelayMs: 250 });
   });
 
   process.on("SIGINT", shutdown);
