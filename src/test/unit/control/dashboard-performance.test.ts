@@ -36,6 +36,8 @@ describe("Control Center dashboard performance contract", () => {
 
     const settledBatches = refreshAll.match(/Promise\.allSettled\(\[[\s\S]*?\]\)/g) || [];
     assert.ok(settledBatches.length >= 2, "historical panels should load in multiple bounded allSettled batches");
+    assert.match(refreshAll, /setTimeout\(resolvePromise, 0\)/, "background dashboards must advance between batches");
+    assert.doesNotMatch(refreshAll, /requestAnimationFrame/, "batch progress must not depend on a visible frame");
     const settledHistory = settledBatches.join("\n");
     for (const refresh of historicalRefreshes) {
       assert.ok(settledHistory.includes(refresh), `${refresh} should be isolated in an allSettled batch`);

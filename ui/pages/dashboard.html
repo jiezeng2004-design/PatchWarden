@@ -2065,7 +2065,7 @@ html.dark {
       const status = await refreshStatus();
       if (!status) return false;
       await Promise.allSettled([refreshTasks()]);
-      await new Promise(function (resolvePromise) { requestAnimationFrame(resolvePromise); });
+      await new Promise(function (resolvePromise) { setTimeout(resolvePromise, 0); });
       await Promise.allSettled([refreshLogs(), refreshEvents()]);
       await Promise.allSettled([refreshLineages(), refreshProjectPolicy()]);
       await Promise.allSettled([refreshReleaseStatus(), refreshEvidencePacks()]);

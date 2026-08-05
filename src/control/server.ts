@@ -31,7 +31,7 @@ import {
   startArchivedTaskCleanupScheduler,
   type ArchivedTaskCleanupScheduler,
 } from "../tools/tasks/pruneArchivedTasks.js";
-import { clearControlDataCache } from "./dataCache.js";
+import { runWithControlDataCacheInvalidation } from "./dataCache.js";
 
 // ── Request router ────────────────────────────────────────────────
 
@@ -121,9 +121,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     if (route.method !== method) continue;
     const match = pathname.match(route.pattern);
     if (!match) continue;
-    if (method === "POST") clearControlDataCache();
-    await route.handler(res, match.slice(1));
-    if (method === "POST") clearControlDataCache();
+    const runHandler = () => route.handler(res, match.slice(1));
+    if (method === "POST") await runWithControlDataCacheInvalidation(runHandler);
+    else await runHandler();
     return;
   }
 

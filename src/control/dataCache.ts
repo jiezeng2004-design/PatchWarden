@@ -57,3 +57,19 @@ export function getControlTaskSnapshot(
 export function clearControlDataCache(): void {
   cache.clear();
 }
+
+/**
+ * Invalidate read snapshots around state-changing Control Center handlers.
+ * The finally clear covers handlers that mutate state, repopulate a snapshot,
+ * and then fail before returning a response.
+ */
+export async function runWithControlDataCacheInvalidation<T>(
+  action: () => T | Promise<T>,
+): Promise<T> {
+  clearControlDataCache();
+  try {
+    return await action();
+  } finally {
+    clearControlDataCache();
+  }
+}

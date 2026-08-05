@@ -237,6 +237,10 @@ export function startArchivedTaskCleanupScheduler(
     }
 
     try {
+      // Node worker_threads resolves this file URL through the package's
+      // `type: module` boundary. Unlike Web Workers, WorkerOptions has no
+      // `type: "module"` switch; the production-path test below exercises the
+      // emitted ESM worker on every supported Node runtime.
       const worker = new Worker(new URL(import.meta.url), {
         workerData: { kind: "patchwarden-archived-task-cleanup", config },
       });
