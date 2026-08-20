@@ -8,6 +8,7 @@ import {
   statSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
 import { getConfig, getTasksDir, type PatchWardenConfig } from "../../config.js";
 import { logger } from "../../logging.js";
 import { isWatcherOwningTask } from "../../watcherStatus.js";
@@ -60,13 +61,14 @@ export interface PruneArchivedTasksOptions {
 }
 
 export interface ArchivedTaskCleanupScheduler {
-  runNow: () => ArchivedTaskCleanupReceipt | null;
+  runNow: () => boolean;
   stop: () => void;
 }
 
 export interface ArchivedTaskCleanupSchedulerOptions {
   config?: PatchWardenConfig;
   intervalMs?: number;
+  initialDelayMs?: number;
   runCleanup?: () => ArchivedTaskCleanupReceipt;
 }
 
@@ -198,41 +200,112 @@ export function startArchivedTaskCleanupScheduler(
   const intervalMs = options.intervalMs
     ?? positiveInteger(config.taskArchiveCleanupIntervalHours ?? 24, "taskArchiveCleanupIntervalHours") * HOUR_MS;
   if (!Number.isSafeInteger(intervalMs) || intervalMs < 1) throw new Error("intervalMs must be a positive integer");
+  const initialDelayMs = options.initialDelayMs ?? 250;
+  if (!Number.isSafeInteger(initialDelayMs) || initialDelayMs < 0) throw new Error("initialDelayMs must be a non-negative integer");
   let running = false;
   let stopped = false;
-  const runCleanup = options.runCleanup || (() => pruneArchivedTasks({ config }));
-  const runNow = (): ArchivedTaskCleanupReceipt | null => {
-    if (running || stopped) return null;
+  const reportResult = (result: ArchivedTaskCleanupReceipt): void => {
+    const context = {
+      ok: result.ok,
+      deleted_count: result.deleted_count,
+      deleted_bytes: result.deleted_bytes,
+      candidate_count: result.candidate_count,
+      deferred_count: result.deferred_count,
+    };
+    if (result.ok) logger.info("[task-history] Archived task cleanup completed", context);
+    else logger.warn("[task-history] Archived task cleanup stopped fail-closed", context);
+  };
+  const runNow = (): boolean => {
+    if (running || stopped) return false;
     running = true;
+
+    if (options.runCleanup) {
+      setImmediate(() => {
+        if (stopped) {
+          running = false;
+          return;
+        }
+        try {
+          reportResult(options.runCleanup!());
+        } catch (error) {
+          logger.warn("[task-history] Archived task cleanup failed", { error: errorMessage(error) });
+        } finally {
+          running = false;
+        }
+      });
+      return true;
+    }
+
     try {
-      const result = runCleanup();
-      const context = {
-        ok: result.ok,
-        deleted_count: result.deleted_count,
-        deleted_bytes: result.deleted_bytes,
-        candidate_count: result.candidate_count,
-        deferred_count: result.deferred_count,
+      // Node worker_threads resolves this file URL through the package's
+      // `type: module` boundary. Unlike Web Workers, WorkerOptions has no
+      // `type: "module"` switch; the production-path test below exercises the
+      // emitted ESM worker on every supported Node runtime.
+      const worker = new Worker(new URL(import.meta.url), {
+        workerData: { kind: "patchwarden-archived-task-cleanup", config },
+      });
+      worker.unref();
+      let settled = false;
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        running = false;
       };
-      if (result.ok) logger.info("[task-history] Archived task cleanup completed", context);
-      else logger.warn("[task-history] Archived task cleanup stopped fail-closed", context);
-      return result;
+      worker.once("message", (message: unknown) => {
+        if (isCleanupWorkerResult(message)) {
+          if (message.ok) reportResult(message.receipt);
+          else logger.warn("[task-history] Archived task cleanup failed", { error: message.error });
+        }
+        finish();
+      });
+      worker.once("error", (error) => {
+        logger.warn("[task-history] Archived task cleanup worker failed", { error: errorMessage(error) });
+        finish();
+      });
+      worker.once("exit", (code) => {
+        if (!settled && code !== 0) {
+          logger.warn("[task-history] Archived task cleanup worker exited", { code });
+        }
+        finish();
+      });
+      return true;
     } catch (error) {
-      logger.warn("[task-history] Archived task cleanup failed", { error: errorMessage(error) });
-      return null;
-    } finally {
       running = false;
+      logger.warn("[task-history] Archived task cleanup worker could not start", { error: errorMessage(error) });
+      return false;
     }
   };
-  runNow();
+  const startupTimer = setTimeout(runNow, initialDelayMs);
+  startupTimer.unref();
   const timer = setInterval(runNow, intervalMs);
   timer.unref();
   return {
     runNow,
     stop() {
       stopped = true;
+      clearTimeout(startupTimer);
       clearInterval(timer);
     },
   };
+}
+
+interface CleanupWorkerData {
+  kind: "patchwarden-archived-task-cleanup";
+  config: PatchWardenConfig;
+}
+
+type CleanupWorkerResult =
+  | { ok: true; receipt: ArchivedTaskCleanupReceipt }
+  | { ok: false; error: string };
+
+function isCleanupWorkerData(value: unknown): value is CleanupWorkerData {
+  return !!value && typeof value === "object"
+    && (value as { kind?: unknown }).kind === "patchwarden-archived-task-cleanup"
+    && !!(value as { config?: unknown }).config;
+}
+
+function isCleanupWorkerResult(value: unknown): value is CleanupWorkerResult {
+  return !!value && typeof value === "object" && typeof (value as { ok?: unknown }).ok === "boolean";
 }
 
 function evaluateTask(
@@ -427,4 +500,14 @@ function safeId(value: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+if (!isMainThread && isCleanupWorkerData(workerData)) {
+  let result: CleanupWorkerResult;
+  try {
+    result = { ok: true, receipt: pruneArchivedTasks({ config: workerData.config }) };
+  } catch (error) {
+    result = { ok: false, error: errorMessage(error) };
+  }
+  parentPort?.postMessage(result);
 }

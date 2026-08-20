@@ -75,13 +75,12 @@ describe("locked JSON file", () => {
     assert.deepEqual(readdirSync(root).filter((name) => name.includes(".release-")), []);
   });
 
-  it("throttles stale-owner probes while another process holds the lock", () => {
+  it("throttles stale-owner probes while another caller holds the lock", () => {
     const originalReadFileSync = fs.readFileSync;
+    const ownerPath = join(`${jsonFile}.lock`, "owner.json");
     let ownerReads = 0;
     fs.readFileSync = ((path: fs.PathOrFileDescriptor, options?: unknown) => {
-      if (String(path).endsWith("session.json.lock\\owner.json") || String(path).endsWith("state.json.lock\\owner.json")) {
-        ownerReads += 1;
-      }
+      if (String(path) === ownerPath) ownerReads += 1;
       return originalReadFileSync(path, options as never);
     }) as typeof fs.readFileSync;
     syncBuiltinESMExports();
@@ -98,6 +97,7 @@ describe("locked JSON file", () => {
       syncBuiltinESMExports();
     }
 
+    assert.ok(ownerReads >= 3, `expected periodic owner probes, received ${ownerReads}`);
     assert.ok(ownerReads <= 6, `expected bounded owner probes, received ${ownerReads}`);
     assert.equal(existsSync(`${jsonFile}.lock`), false);
   });

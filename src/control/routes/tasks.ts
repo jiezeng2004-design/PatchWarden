@@ -10,7 +10,6 @@
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { type ServerResponse } from "node:http";
-import { listAllTasks, listTasks } from "../../tools/tasks/listTasks.js";
 import { safeAudit, safeDiffSummary, safeResult, safeTestSummary } from "../../tools/diagnostics/safeViews.js";
 import { getTasksDir } from "../../config.js";
 import {
@@ -26,6 +25,7 @@ import {
 } from "../runtime.js";
 import { config, errorMessage, guardControlPath, readJsonFileSafe, readTextFileSafe, sendJson } from "../shared.js";
 import type { TaskHistoryState } from "../../tools/tasks/taskHistory.js";
+import { getControlTaskSnapshot } from "../dataCache.js";
 
 export interface TaskFilters {
   repo_path?: string;
@@ -47,7 +47,7 @@ export function handleTasks(res: ServerResponse, filters?: TaskFilters): void {
       : "active";
     // Control Center filters and cursor pagination must operate on the entire
     // history. The public MCP list_tasks response remains separately bounded.
-    const result = listAllTasks({ history_state: historyState });
+    const result = getControlTaskSnapshot(historyState);
     const watcher = result.watcher;
     const now = Date.now();
     let augmented = result.tasks.map((t) => augmentTaskWithStale(t, watcher, now));
@@ -185,10 +185,10 @@ export function staleExplanationFor(reasonCode: string): { explanation: string; 
 
 export function handleStaleTasks(res: ServerResponse): void {
   try {
-    const result = listTasks({ limit: 100 });
+    const result = getControlTaskSnapshot("active");
     const watcher = result.watcher;
     const now = Date.now();
-    const staleTasks = result.tasks
+    const staleTasks = result.tasks.slice(0, 100)
       .map((t) => augmentTaskWithStale(t, watcher, now))
       .filter((t) => t.is_stale)
       .map((t) => {

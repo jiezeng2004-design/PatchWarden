@@ -35,8 +35,51 @@ export interface SimpleProcessResult {
   stderrTruncated: boolean;
 }
 
+interface ChildExitEmitter {
+  once(event: "close", listener: (code: number | null) => void): unknown;
+  once(event: "error", listener: (error: Error) => void): unknown;
+}
+
+export interface OwnedChildExitResult {
+  exitCode: number | null;
+  spawnError: string | null;
+  timedOut: boolean;
+}
+
 const DEFAULT_MAX_STDOUT = 524288;
 const DEFAULT_MAX_STDERR = 131072;
+
+export function waitForOwnedChildExit(
+  child: ChildExitEmitter,
+  timeoutMs: number,
+  onTimeout: () => void,
+  fallbackMs = GRACEFUL_KILL_MS,
+): Promise<OwnedChildExitResult> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timedOut = false;
+    let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const finish = (exitCode: number | null, spawnError: string | null) => {
+      if (settled) return;
+      settled = true;
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+      resolve({ exitCode, spawnError: timedOut ? null : spawnError, timedOut });
+    };
+
+    child.once("close", (code) => finish(code, null));
+    child.once("error", (error) => finish(null, error.message));
+
+    timeoutTimer = setTimeout(() => {
+      if (settled) return;
+      timedOut = true;
+      fallbackTimer = setTimeout(() => finish(null, null), fallbackMs);
+      onTimeout();
+    }, timeoutMs);
+  });
+}
 
 export function runSimpleProcessSync(options: SimpleProcessOptions): SimpleProcessResult {
   const maxStdout = options.maxStdoutBytes ?? DEFAULT_MAX_STDOUT;
@@ -146,22 +189,6 @@ export async function runSimpleProcess(options: SimpleProcessOptions): Promise<S
   let stderrBuf = Buffer.alloc(0);
   let stdoutTruncated = false;
   let stderrTruncated = false;
-  let spawnError: string | null = null;
-  let timedOut = false;
-  let forceTimer: ReturnType<typeof setTimeout> | null = null;
-  let terminationStarted = false;
-
-  const requestTermination = (reason: "timeout" | "force", force: boolean) => {
-    if (terminationStarted) return;
-    terminationStarted = true;
-    if (reason === "timeout") timedOut = true;
-    if (force) {
-      forceKill(child);
-    } else {
-      gracefulKill(child);
-      forceTimer = setTimeout(() => forceKill(child), GRACEFUL_KILL_MS);
-    }
-  };
 
   child.stdout?.on("data", (chunk: Buffer) => {
     logCapture.append(options.stdoutPath, chunk);
@@ -193,24 +220,12 @@ export async function runSimpleProcess(options: SimpleProcessOptions): Promise<S
     }
   });
 
-  const timeoutTimer = setTimeout(() => requestTermination("timeout", true), options.timeoutMs);
+  const { exitCode, spawnError, timedOut } = await waitForOwnedChildExit(
+    child,
+    options.timeoutMs,
+    () => forceKill(child),
+  );
 
-  const exitCode = await new Promise<number | null>((resolveExit) => {
-    let settled = false;
-    const finish = (code: number | null) => {
-      if (settled) return;
-      settled = true;
-      resolveExit(code);
-    };
-    child.once("close", (code) => finish(code));
-    child.once("error", (error) => {
-      spawnError = error.message;
-      finish(null);
-    });
-  });
-
-  clearTimeout(timeoutTimer);
-  if (forceTimer) clearTimeout(forceTimer);
   logCapture.flush(exactRedactionValues);
   const stdout = redactProcessOutput(stdoutBuf.toString("utf-8"), exactRedactionValues);
   const stderr = redactProcessOutput(stderrBuf.toString("utf-8"), exactRedactionValues);
@@ -224,13 +239,6 @@ export async function runSimpleProcess(options: SimpleProcessOptions): Promise<S
     stdoutTruncated: stdoutTruncated || stdout.length > maxStdout,
     stderrTruncated: stderrTruncated || stderr.length > maxStderr,
   };
-}
-
-function gracefulKill(child: ChildProcess): void {
-  try {
-    if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGTERM");
-    else child.kill("SIGTERM");
-  } catch {} // cleanup failure is safe to ignore
 }
 
 function forceKill(child: ChildProcess): void {
