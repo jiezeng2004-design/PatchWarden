@@ -15,6 +15,7 @@ import {
   type SafeEvidencePack,
 } from "../../tools/tasks/evidencePack.js";
 import { errorMessage, sendJson, config } from "../shared.js";
+import { getCachedControlData } from "../dataCache.js";
 
 function augmentEvidencePackSummary(pack: SafeEvidencePack): SafeEvidencePack & {
   export_status: "exported" | "pending";
@@ -35,30 +36,33 @@ function augmentEvidencePackSummary(pack: SafeEvidencePack): SafeEvidencePack & 
 
 export function handleEvidencePacks(res: ServerResponse): void {
   try {
-    const list = listEvidencePacks({ max_items: 50 });
-    const packs = list.evidence_packs.map((pack) => augmentEvidencePackSummary(pack));
-    // Detect lineages that exist but have no exported evidence pack yet, so the
-    // dashboard can show an "Export evidence pack" action for the most recent one.
-    const lineagesRoot = join(config.workspaceRoot, ".patchwarden", "lineages");
-    let lineageCount = 0;
-    const exportedIds = new Set(packs.map((p) => p.lineage_id));
-    const pendingLineageIds: string[] = [];
-    if (existsSync(lineagesRoot)) {
-      const dirs = readdirSync(lineagesRoot, { withFileTypes: true }).filter((e) => e.isDirectory());
-      lineageCount = dirs.length;
-      for (const dir of dirs) {
-        if (!exportedIds.has(dir.name)) pendingLineageIds.push(dir.name);
+    const payload = getCachedControlData(`evidence-packs\u0000${config.workspaceRoot}`, () => {
+      const list = listEvidencePacks({ max_items: 50 });
+      const packs = list.evidence_packs.map((pack) => augmentEvidencePackSummary(pack));
+      // Detect lineages that exist but have no exported evidence pack yet, so the
+      // dashboard can show an "Export evidence pack" action for the most recent one.
+      const lineagesRoot = join(config.workspaceRoot, ".patchwarden", "lineages");
+      let lineageCount = 0;
+      const exportedIds = new Set(packs.map((p) => p.lineage_id));
+      const pendingLineageIds: string[] = [];
+      if (existsSync(lineagesRoot)) {
+        const dirs = readdirSync(lineagesRoot, { withFileTypes: true }).filter((e) => e.isDirectory());
+        lineageCount = dirs.length;
+        for (const dir of dirs) {
+          if (!exportedIds.has(dir.name)) pendingLineageIds.push(dir.name);
+        }
       }
-    }
-    sendJson(res, 200, {
-      evidence_packs: packs,
-      total: packs.length,
-      truncated: list.truncated,
-      has_lineages: lineageCount > 0,
-      lineage_count: lineageCount,
-      pending_lineage_ids: pendingLineageIds.slice(0, 20),
-      reason: null,
+      return {
+        evidence_packs: packs,
+        total: packs.length,
+        truncated: list.truncated,
+        has_lineages: lineageCount > 0,
+        lineage_count: lineageCount,
+        pending_lineage_ids: pendingLineageIds.slice(0, 20),
+        reason: null,
+      };
     });
+    sendJson(res, 200, payload);
   } catch (err) {
     sendJson(res, 200, { evidence_packs: [], total: 0, reason: errorMessage(err) });
   }

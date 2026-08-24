@@ -1,29 +1,49 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  buildChildEnvironment,
-  resolvePackageManagerInvocation,
-} from "../../dist/runner/processSecurity.js";
+import { runSimpleProcess } from "../../dist/runner/simpleProcess.js";
 
 const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
-const env = buildChildEnvironment({ cwd: root });
-const invocation = resolvePackageManagerInvocation(process.platform === "win32" ? "npm.cmd" : "npm", root, {
-  pathValue: env.PATH,
-});
-const result = spawnSync(invocation.command, [...invocation.argsPrefix, "pack", "--dry-run", "--json"], {
+const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+const npmPackTimeoutMs = 90_000;
+const result = await runSimpleProcess({
+  command: npm,
+  args: [
+    "pack",
+    "--dry-run",
+    "--json",
+    "--ignore-scripts",
+    "--prefer-offline",
+    "--offline",
+    "--fetch-retries=0",
+    "--fetch-timeout=15000",
+  ],
   cwd: root,
-  encoding: "utf8",
-  env,
-  shell: false,
-  windowsHide: true,
+  timeoutMs: npmPackTimeoutMs,
+  maxStdoutBytes: 4 * 1024 * 1024,
+  maxStderrBytes: 64 * 1024,
+  environmentOverrides: { npm_config_update_notifier: "false" },
 });
 
-if (result.status !== 0) {
-  process.stderr.write(result.stderr || result.stdout || result.error?.message || "npm pack --dry-run --json failed\n");
-  process.exit(result.status || 1);
+if (result.timedOut) {
+  console.error(`[package-manifest-check] npm pack --dry-run --json timed out after ${npmPackTimeoutMs / 1000}s.`);
+  process.exit(1);
+}
+
+if (result.spawnError !== null) {
+  console.error("[package-manifest-check] npm pack --dry-run --json failed to start (spawn error).");
+  process.exit(1);
+}
+
+if (result.exitCode === null) {
+  console.error("[package-manifest-check] npm pack --dry-run --json ended without an exit code.");
+  process.exit(1);
+}
+
+if (result.exitCode !== 0) {
+  console.error(`[package-manifest-check] npm pack --dry-run --json failed (exit code ${result.exitCode}).`);
+  process.exit(result.exitCode || 1);
 }
 
 let metadata;
@@ -76,8 +96,9 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
-// Direct Review adds nine production modules to the published runtime.
-const maxFiles = 410;
+// Direct Review plus the Control Center cache and supervised process modules
+// expand the published runtime while keeping the package surface bounded.
+const maxFiles = 412;
 const maxUnpackedBytes = 6 * 1024 * 1024;
 if (files.length > maxFiles || Number(packageMetadata.unpackedSize || 0) > maxUnpackedBytes) {
   console.error(`[package-manifest-check] Package budget exceeded: ${files.length}/${maxFiles} files, ${packageMetadata.unpackedSize}/${maxUnpackedBytes} unpacked bytes.`);

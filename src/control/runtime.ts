@@ -10,7 +10,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { get as httpGet } from "node:http";
-import { listTasks, type TaskEntry } from "../tools/tasks/listTasks.js";
+import { type TaskEntry } from "../tools/tasks/listTasks.js";
 import { listAgents, type AgentAvailability } from "../tools/workspace/listAgents.js";
 import { readWatcherStatus, type WatcherStatusSnapshot } from "../watcherStatus.js";
 import { resolveWorkspaceRoot } from "../config.js";
@@ -35,6 +35,7 @@ import {
   port,
   readJsonFileSafe,
 } from "./shared.js";
+import { getControlTaskSnapshot } from "./dataCache.js";
 
 // ── Health probing ────────────────────────────────────────────────
 
@@ -317,13 +318,13 @@ export function augmentTaskWithStale(task: TaskEntry, watcher: WatcherStatusSnap
 
 export function listTasksForStatus(): StatusTasks {
   try {
-    const result = listTasks({ limit: 100 });
+    const result = getControlTaskSnapshot("active");
     const watcher = result.watcher;
     const now = Date.now();
     let active = 0;
     let stale = 0;
     const staleTaskIds: string[] = [];
-    const augmented = result.tasks.map((t) => {
+    const augmented = result.tasks.slice(0, 100).map((t) => {
       const a = augmentTaskWithStale(t, watcher, now);
       if (t.status === "pending" || t.status === "running") active++;
       if (a.is_stale) {

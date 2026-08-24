@@ -166,24 +166,50 @@ describe("archived task retention", () => {
     assert.equal(existsSync(taskDir("task-delete-c")), true);
   });
 
-  it("runs once at startup, repeats on schedule, and stops cleanly", async () => {
+  it("defers startup cleanup so server bootstrap is never blocked, repeats on schedule, and stops cleanly", async () => {
     let runs = 0;
     const scheduler = startArchivedTaskCleanupScheduler({
       config,
-      intervalMs: 10,
+      intervalMs: 25,
+      initialDelayMs: 0,
       runCleanup() {
         runs += 1;
         return emptyReceipt();
       },
     });
-    assert.equal(runs, 1, "startup must run cleanup immediately");
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 35));
+    assert.equal(runs, 0, "scheduler construction must not run synchronous cleanup");
+    const startupDeadline = Date.now() + 500;
+    while (runs < 1 && Date.now() < startupDeadline) {
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
+    }
+    assert.ok(runs >= 1, "startup cleanup must run asynchronously");
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 75));
     assert.ok(runs >= 2, "scheduled cleanup must repeat");
     scheduler.stop();
     const stoppedAt = runs;
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
     assert.equal(runs, stoppedAt, "stop must clear the interval");
-    assert.equal(scheduler.runNow(), null, "stopped scheduler must not run manually");
+    assert.equal(scheduler.runNow(), false, "stopped scheduler must not run manually");
+  });
+
+  it("runs the production cleanup path in a worker without blocking the caller", async () => {
+    const startedAt = Date.now();
+    const scheduler = startArchivedTaskCleanupScheduler({
+      config,
+      initialDelayMs: 0,
+      intervalMs: 60_000,
+    });
+    assert.ok(Date.now() - startedAt < 100, "worker scheduling must return before cleanup runs");
+
+    const receiptPath = join(root, ".patchwarden", "history-cleanup", "latest.json");
+    const receiptLogPath = join(root, ".patchwarden", "history-cleanup", "history-cleanup.log");
+    const deadline = Date.now() + 5_000;
+    while ((!existsSync(receiptPath) || !existsSync(receiptLogPath)) && Date.now() < deadline) {
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+    scheduler.stop();
+    assert.equal(existsSync(receiptPath), true, "worker cleanup must produce its bounded receipt");
   });
 
   it("rejects a tasks root that could delete the workspace itself", () => {

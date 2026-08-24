@@ -11,10 +11,15 @@ import { join } from "node:path";
 import { type ServerResponse } from "node:http";
 import { getProjectPolicySummary } from "../../policy/projectPolicy.js";
 import { errorMessage, sendJson } from "../shared.js";
+import { getCachedControlData } from "../dataCache.js";
+
+function cachedProjectPolicy(repoPath: string) {
+  return getCachedControlData(`project-policy\u0000${repoPath}`, () => getProjectPolicySummary(repoPath || "."));
+}
 
 export function handleProjectPolicy(res: ServerResponse, repoPath: string): void {
   try {
-    sendJson(res, 200, getProjectPolicySummary(repoPath || "."));
+    sendJson(res, 200, cachedProjectPolicy(repoPath));
   } catch (err) {
     sendJson(res, 200, {
       repo_path: repoPath || ".",
@@ -26,7 +31,7 @@ export function handleProjectPolicy(res: ServerResponse, repoPath: string): void
 
 export function handleReleaseStatus(res: ServerResponse, repoPath: string): void {
   try {
-    const policy = getProjectPolicySummary(repoPath || ".");
+    const policy = cachedProjectPolicy(repoPath);
     const readiness = policy.release_readiness;
     const requiredCommands = readiness.required_commands.map((c) => ({
       command: c.command,

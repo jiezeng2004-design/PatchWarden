@@ -1,9 +1,53 @@
 import { strict as assert } from "node:assert";
+import { EventEmitter } from "node:events";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { runSimpleProcess, runSimpleProcessSync } from "../../../runner/simpleProcess.js";
+import {
+  runSimpleProcess,
+  runSimpleProcessSync,
+  waitForOwnedChildExit,
+} from "../../../runner/simpleProcess.js";
+
+describe("waitForOwnedChildExit", () => {
+  it("returns the child exit code when it closes normally", async () => {
+    const child = new EventEmitter();
+    let timeoutCalls = 0;
+    const resultPromise = waitForOwnedChildExit(child, 50, () => { timeoutCalls += 1; }, 10);
+
+    child.emit("close", 7);
+
+    assert.deepEqual(await resultPromise, {
+      exitCode: 7,
+      spawnError: null,
+      timedOut: false,
+    });
+    assert.equal(timeoutCalls, 0);
+  });
+
+  it("falls back when a timed-out child never closes or errors", async () => {
+    const child = new EventEmitter();
+    let timeoutCalls = 0;
+    let resolutions = 0;
+    const resultPromise = waitForOwnedChildExit(child, 5, () => { timeoutCalls += 1; }, 10);
+    void resultPromise.then(() => { resolutions += 1; });
+
+    const result = await resultPromise;
+
+    assert.deepEqual(result, {
+      exitCode: null,
+      spawnError: null,
+      timedOut: true,
+    });
+    assert.equal(timeoutCalls, 1);
+    assert.equal(resolutions, 1);
+
+    child.emit("close", 9);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(resolutions, 1);
+  });
+});
 
 describe("runSimpleProcessSync log append", () => {
   let root: string;

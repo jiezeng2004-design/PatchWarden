@@ -2064,7 +2064,12 @@ html.dark {
     async function refreshAll() {
       const status = await refreshStatus();
       if (!status) return false;
-      await Promise.all([refreshTasks(), refreshLogs(), refreshEvents(), refreshLineages(), refreshProjectPolicy(), refreshReleaseStatus(), refreshEvidencePacks(), refreshStaleTasks()]);
+      await Promise.allSettled([refreshTasks()]);
+      await new Promise(function (resolvePromise) { setTimeout(resolvePromise, 0); });
+      await Promise.allSettled([refreshLogs(), refreshEvents()]);
+      await Promise.allSettled([refreshLineages(), refreshProjectPolicy()]);
+      await Promise.allSettled([refreshReleaseStatus(), refreshEvidencePacks()]);
+      await Promise.allSettled([refreshStaleTasks()]);
       return true;
     }
 

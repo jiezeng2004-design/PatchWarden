@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { collectExactProxyValues, redactDiagnosticTail } from "../checks/package-install-smoke.js";
 
 const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const desktopRoot = join(root, "desktop");
@@ -13,6 +14,8 @@ const argv = process.argv.slice(2);
 const requireClean = argv.includes("--require-clean");
 const skipUiSmoke = argv.includes("--skip-ui-smoke");
 const withInstallers = argv.includes("--with-installers");
+const MAX_FAILURE_DIAGNOSTIC_CHARS = 16 * 1024;
+const exactRedactionValues = collectExactProxyValues(process.env);
 
 function option(name) {
   const index = argv.indexOf(name);
@@ -25,6 +28,10 @@ function json(path) {
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function diagnosticTail(value) {
+  return redactDiagnosticTail(value, exactRedactionValues, MAX_FAILURE_DIAGNOSTIC_CHARS);
 }
 
 function directoryStats(directory) {
@@ -54,7 +61,10 @@ function spawnSpec(command, args) {
 function capture(command, args, cwd = root) {
   const spec = spawnSpec(command, args);
   const result = spawnSync(spec.command, spec.args, { cwd, encoding: "utf8", windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
-  if (result.status !== 0) throw new Error(`${command} ${args.join(" ")} failed: ${result.stderr || result.stdout || result.error?.message || "unknown error"}`);
+  if (result.status !== 0) {
+    const failure = diagnosticTail(result.stderr || result.stdout || result.error?.message || "unknown error");
+    throw new Error(`${command} ${args.join(" ")} failed: ${failure}`);
+  }
   return String(result.stdout || "").trim();
 }
 
@@ -139,12 +149,18 @@ function run(name, command, args, cwd = root) {
   const result = spawnSync(spec.command, spec.args, { cwd, encoding: "utf8", windowsHide: true, maxBuffer: 128 * 1024 * 1024 });
   const stdout = String(result.stdout || "");
   const stderr = String(result.stderr || "");
-  if (stdout) process.stdout.write(stdout);
-  if (stderr) process.stderr.write(stderr);
+  if (stdout) process.stdout.write(diagnosticTail(stdout));
+  if (stderr) process.stderr.write(diagnosticTail(stderr));
   const check = { name, ok: result.status === 0, exit_code: result.status, duration_ms: Date.now() - started };
+  if (!check.ok) {
+    check.signal = result.signal || null;
+    check.error_code = result.error?.code || null;
+    check.stdout_tail = diagnosticTail(stdout);
+    check.stderr_tail = diagnosticTail(stderr);
+  }
   report.checks.push(check);
   saveReport();
-  if (!check.ok) throw new Error(`${name} failed with exit code ${result.status ?? "unknown"}: ${stderr || result.error?.message || "see command output"}`);
+  if (!check.ok) throw new Error(`${name} failed with exit code ${result.status ?? "unknown"}; failure diagnostics were saved in preflight-report.json.`);
   return stdout;
 }
 
@@ -154,8 +170,8 @@ try {
   run("build output contract", npmCommand, ["run", "check:build-output"]);
   const unitOutput = run("root unit tests", npmCommand, ["run", "test:unit"]);
   const desktopOutput = run("desktop tests", npmCommand, ["run", "desktop:test"]);
-  const packageOutput = run("npm package surface", npmCommand, ["run", "verify:package"]);
-  run("desktop staging", npmCommand, ["run", "desktop:stage"]);
+  const packageOutput = run("npm package surface", npmCommand, ["run", "verify:package:built"]);
+  run("desktop staging", npmCommand, ["--prefix", "desktop", "run", "stage"]);
   const electronTargets = withInstallers ? ["dir", "nsis", "zip"] : ["dir"];
   run("Electron single-pass package", npmCommand, ["exec", "electron-builder", "--", "--win", ...electronTargets, "--x64", `--config.directories.output=${outputRoot}`], desktopRoot);
 
@@ -229,9 +245,10 @@ try {
   }
   report.status = "passed";
 } catch (error) {
+  const safeError = diagnosticTail(error instanceof Error ? error.message : String(error));
   report.status = "failed";
-  report.error = error instanceof Error ? error.message : String(error);
-  throw error;
+  report.error = safeError;
+  throw new Error(safeError);
 } finally {
   if (isolatedRoot) rmSync(isolatedRoot, { recursive: true, force: true });
   report.finished_at = new Date().toISOString();

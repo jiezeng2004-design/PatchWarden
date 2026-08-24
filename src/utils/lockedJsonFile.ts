@@ -94,13 +94,15 @@ async function acquireLockAsync(path: string, options: LockedJsonOptions): Promi
   while (true) {
     if (tryCreateLock(lockPath, owner)) return { path: lockPath, owner };
     const now = Date.now();
-    if (now >= nextStaleProbeAt &&
-      removeStaleLock(lockPath, options.corruptLockStaleMs ?? 30_000) &&
-      tryCreateLock(lockPath, owner)
-    ) {
-      return { path: lockPath, owner };
+    if (now >= nextStaleProbeAt) {
+      nextStaleProbeAt = now + staleLockProbeIntervalMs;
+      if (
+        removeStaleLock(lockPath, options.corruptLockStaleMs ?? 30_000) &&
+        tryCreateLock(lockPath, owner)
+      ) {
+        return { path: lockPath, owner };
+      }
     }
-    nextStaleProbeAt = now + staleLockProbeIntervalMs;
     if (now >= deadline) {
       throw options.busyError?.() ?? new Error(`JSON file is busy: ${path}`);
     }
@@ -117,13 +119,15 @@ function acquireLock(path: string, options: LockedJsonOptions): AcquiredLock {
   while (true) {
     if (tryCreateLock(lockPath, owner)) return { path: lockPath, owner };
     const now = Date.now();
-    if (now >= nextStaleProbeAt &&
-      removeStaleLock(lockPath, options.corruptLockStaleMs ?? 30_000) &&
-      tryCreateLock(lockPath, owner)
-    ) {
-      return { path: lockPath, owner };
+    if (now >= nextStaleProbeAt) {
+      nextStaleProbeAt = now + staleLockProbeIntervalMs;
+      if (
+        removeStaleLock(lockPath, options.corruptLockStaleMs ?? 30_000) &&
+        tryCreateLock(lockPath, owner)
+      ) {
+        return { path: lockPath, owner };
+      }
     }
-    nextStaleProbeAt = now + staleLockProbeIntervalMs;
     if (now >= deadline) {
       throw options.busyError?.() ?? new Error(`JSON file is busy: ${path}`);
     }

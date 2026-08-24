@@ -111,7 +111,9 @@ describe("desktop UI contracts", () => {
     assert.match(dashboard, /const status = await refreshStatus\(\);/);
     assert.match(dashboard, /latestStatus = data;\s+refreshHealthScore\(data\);/);
     assert.match(dashboard, /if \(!status\) return false;/);
-    assert.ok(dashboard.indexOf("const status = await refreshStatus();") < dashboard.indexOf("await Promise.all([refreshTasks()"));
+    assert.ok(dashboard.indexOf("const status = await refreshStatus();") < dashboard.indexOf("await Promise.allSettled([refreshTasks()"));
+    assert.match(dashboard, /setTimeout\(resolvePromise, 0\)/);
+    assert.doesNotMatch(dashboard, /requestAnimationFrame\(resolvePromise\)/);
     assert.match(dashboard, /if \(!statusReady\) return;/);
     assert.match(dashboard, /showError\('Control Center error: ' \+ controlCenterErrorText\(err\)\)/);
     assert.match(bridge, /control_center_timeout/);

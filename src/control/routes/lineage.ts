@@ -11,6 +11,7 @@ import { type ServerResponse } from "node:http";
 import type { PatchWardenConfig } from "../../config.js";
 import { toSafeTaskLineage, type SafeTaskLineage, type TaskLineageRecord } from "../../tools/tasks/taskLineage.js";
 import { config, errorMessage, readJsonFileSafeUnder, sendJson } from "../shared.js";
+import { getCachedControlData } from "../dataCache.js";
 import { readWatcherStatus, type WatcherStatusSnapshot } from "../../watcherStatus.js";
 
 export type LineageWatcherReader = (config: PatchWardenConfig) => WatcherStatusSnapshot;
@@ -55,22 +56,26 @@ function augmentLineageSummary(safe: SafeTaskLineage, record: TaskLineageRecord)
   };
 }
 
-export function handleLineages(res: ServerResponse, watcherReader: LineageWatcherReader = readWatcherStatus): void {
+export function handleLineages(res: ServerResponse, watcherReader?: LineageWatcherReader): void {
   try {
-    const root = join(config.workspaceRoot, ".patchwarden", "lineages");
-    if (!existsSync(root)) {
-      sendJson(res, 200, { lineages: [], total: 0, reason: null });
-      return;
-    }
-    const watcher = watcherReader(config);
-    const lineages = readdirSync(root, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => readJsonFileSafeUnder<TaskLineageRecord>(root, join(entry.name, "lineage.json")))
-      .filter((entry): entry is TaskLineageRecord => entry !== null)
-      .map((entry) => augmentLineageSummary(toSafeTaskLineage(entry, 6, watcher), entry))
-      .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-      .slice(0, 50);
-    sendJson(res, 200, { lineages, total: lineages.length, reason: null });
+    const effectiveWatcherReader = watcherReader ?? readWatcherStatus;
+    const load = () => {
+      const root = join(config.workspaceRoot, ".patchwarden", "lineages");
+      if (!existsSync(root)) return { lineages: [], total: 0, reason: null };
+      const watcher = effectiveWatcherReader(config);
+      const lineages = readdirSync(root, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => readJsonFileSafeUnder<TaskLineageRecord>(root, join(entry.name, "lineage.json")))
+        .filter((entry): entry is TaskLineageRecord => entry !== null)
+        .map((entry) => augmentLineageSummary(toSafeTaskLineage(entry, 6, watcher), entry))
+        .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+        .slice(0, 50);
+      return { lineages, total: lineages.length, reason: null };
+    };
+    const payload = watcherReader === undefined
+      ? getCachedControlData(`lineages\u0000${config.workspaceRoot}`, load)
+      : load();
+    sendJson(res, 200, payload);
   } catch (err) {
     sendJson(res, 200, { lineages: [], total: 0, reason: errorMessage(err) });
   }

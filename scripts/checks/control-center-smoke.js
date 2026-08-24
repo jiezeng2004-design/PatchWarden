@@ -1390,12 +1390,25 @@ async function testControlCenterStatusApi() {
   }
 }
 
-function testArchivedTaskCleanupStartup() {
+async function testArchivedTaskCleanupStartup() {
   const name = "Archived task retention runs at startup without touching recent archives";
   const tasksDir = join(TEST_WORKSPACE, ".patchwarden", "tasks");
   const expiredDir = join(tasksDir, "task-archived-expired-smoke");
   const recentDir = join(tasksDir, "task-archived-recent-smoke");
   const receiptPath = join(TEST_WORKSPACE, ".patchwarden", "history-cleanup", "latest.json");
+  const deadline = Date.now() + 5000;
+  const receiptHasDeletedTask = () => {
+    if (!existsSync(receiptPath)) return false;
+    try {
+      const receipt = JSON.parse(readFileSync(receiptPath, "utf-8"));
+      return receipt.deleted_count === 1 && receipt.deleted?.[0]?.task_id === "task-archived-expired-smoke";
+    } catch {
+      return false;
+    }
+  };
+  while ((existsSync(expiredDir) || !receiptHasDeletedTask()) && Date.now() < deadline) {
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+  }
   const problems = [];
   if (existsSync(expiredDir)) problems.push("expired archived task was not deleted on startup");
   if (!existsSync(recentDir)) problems.push("recent archived task was deleted");
@@ -1940,7 +1953,7 @@ async function main() {
     await waitForServer();
     console.log(`[control-center-smoke] server ready at ${BASE_URL}`);
 
-    testArchivedTaskCleanupStartup();
+    await testArchivedTaskCleanupStartup();
     await testStaticFiles();
     await testLoopbackHostBoundary();
     await testPageNavigationRoutes();
