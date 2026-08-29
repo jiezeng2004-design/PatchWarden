@@ -123,11 +123,19 @@ ChatGPT Web 需要通过当前 OpenAI 支持的安全 MCP Tunnel / custom app �
 典型流程：
 
 1. 准备 `tunnel-client`；
-2. 创建专用 Core Tunnel；
-3. 使用具备对应 Tunnel 权限的 runtime key；
+2. 创建名为 `PatchWarden` 的专用 Core Tunnel；
+3. 使用具备 **Tunnels Read + Use** 权限的专用 runtime key；
 4. 在 PatchWarden 的 **设置 → MCP 与隧道** 中配置并验证；
-5. 在 ChatGPT Developer mode 中添加 PatchWarden；
+5. 在 ChatGPT Developer mode 中添加 PatchWarden，Authentication 选 **No Auth**；
 6. 保留适合你工作区风险等级的确认策略。
+
+连接时请保持这些边界：
+
+- 这个 runtime key 对应 `CONTROL_PLANE_API_KEY`，不是普通 `OPENAI_API_KEY`；
+- `OPENAI_ADMIN_KEY` 可以用于管理 Tunnel，但不应作为长期运行密钥；
+- 不要把 runtime key 填进 ChatGPT 的 Authentication 字段；
+- Direct 是可选的第二 Tunnel，只有需要 Direct 工具时才创建；
+- 如果直接启用本地 HTTP MCP（不经过 stdio Tunnel），必须先配置 `PATCHWARDEN_OWNER_TOKEN`。匿名 `/healthz` 只返回最小状态，详细 health 与 `/mcp` 都要求 owner token。
 
 > Tunnel runtime key 是运行连接所需的本地秘密，不要写进 README、Prompt、截图或 Git 仓库。
 
@@ -179,6 +187,7 @@ PatchWarden 的核心原则：**能力最小化 + 证据优先**。
 - 验证命令受允许列表限制；
 - Direct 工具应保持更严格的只读/独立验证定位；
 - 本地 HTTP MCP 的敏感接口要求 owner token；
+- 本地 HTTP MCP 的详细 health 与 `/mcp` 都要求 `PATCHWARDEN_OWNER_TOKEN`；
 - 日志、截图和诊断不应暴露 API Key / Tunnel ID /账号秘密；
 - 最终人工 attestation 绑定当前证据摘要，而不是只相信任务目录里的状态文件；
 - 对高风险操作，应继续保留人工确认。
