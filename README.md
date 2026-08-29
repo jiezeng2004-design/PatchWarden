@@ -135,6 +135,7 @@ ChatGPT Web 需要通过当前 OpenAI 支持的安全 MCP Tunnel / custom app �
 - `OPENAI_ADMIN_KEY` 可以用于管理 Tunnel，但不应作为长期运行密钥；
 - 不要把 runtime key 填进 ChatGPT 的 Authentication 字段；
 - Direct 是可选的第二 Tunnel，只有需要 Direct 工具时才创建；
+- Direct 不是只读通道。它提供受工作区边界、敏感路径和确认策略约束的文件编辑能力（包括补丁、创建、移动和删除）；只有明确需要时才启用，并保留人工确认；
 - 如果直接启用本地 HTTP MCP（不经过 stdio Tunnel），必须先配置 `PATCHWARDEN_OWNER_TOKEN`。匿名 `/healthz` 只返回最小状态，详细 health 与 `/mcp` 都要求 owner token。
 
 > Tunnel runtime key 是运行连接所需的本地秘密，不要写进 README、Prompt、截图或 Git 仓库。
@@ -174,7 +175,14 @@ ChatGPT Web 需要通过当前 OpenAI 支持的安全 MCP Tunnel / custom app �
 | verification | 真实验证命令是否通过 |
 | out-of-scope changes | 是否为 `0` |
 | audit | 独立审计是否接受 |
+| local attestation | 是否用 `patchwarden-attest` 对当前证据做了人工验收 |
 | final lineage | 整条工作流是否完整结束 |
+
+审计通过后，任务通常仍是 `ready_for_review`。权威验收需要在本地 TTY 执行：
+
+```text
+patchwarden-attest <task_id> --accept
+```
 
 PatchWarden 的目标不是让 Agent “更会说自己做对了”，而是让你能检查它到底做了什么。
 
@@ -186,6 +194,7 @@ PatchWarden 的核心原则：**能力最小化 + 证据优先**。
 - 不把任意本机路径默认暴露给远程模型；
 - 验证命令受允许列表限制；
 - Direct 工具应保持更严格的只读/独立验证定位；
+- Direct 是可选的受限编辑能力，不是只读验证通道；未启用 Direct 时不要在提示词里引用它；
 - 本地 HTTP MCP 的敏感接口要求 owner token；
 - 本地 HTTP MCP 的详细 health 与 `/mcp` 都要求 `PATCHWARDEN_OWNER_TOKEN`；
 - 日志、截图和诊断不应暴露 API Key / Tunnel ID /账号秘密；
