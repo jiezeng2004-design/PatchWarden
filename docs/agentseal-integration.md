@@ -147,4 +147,6 @@ AgentSeal 可读取这些文件，作为策略执行情况的回溯证据。
 - `docs/threat-model.md`：PatchWarden 安全契约与敏感文件清单。
 - `docs/evidence-pack-schema.md`：Evidence Pack v2 文件结构。
 - `docs/why-patchwarden.md`：PatchWarden 定位与动机。
-- 上游草稿 PR：https://github.com/getagentseal/agentseal/pull/35
+- 上游文档提案：https://github.com/getagentseal/agentseal/pull/35
+  （截至 2026-08-29 仍开放、已非草稿且可合并，但尚未获得维护者评审；
+  不应据此声称 AgentSeal 已正式接受或支持该模式。）

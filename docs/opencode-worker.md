@@ -149,3 +149,6 @@ PatchWarden 对 OpenCode worker 的约束包括：
 - `docs/evidence-pack-schema.md`：Evidence Pack v2 文件结构。
 - `docs/why-patchwarden.md`：external supervisor pattern 的定位。
 - `docs/openhands-worker.md`：类似的 worker 集成模式（OpenHands）。
+- 上游文档提案：https://github.com/anomalyco/opencode/pull/36168
+  （已于 2026-08-10 由陈旧/低互动自动清理关闭，未合并；
+  本文仅记录 PatchWarden 的本地集成模式，不代表 OpenCode 官方支持。）
