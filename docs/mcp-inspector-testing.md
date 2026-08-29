@@ -197,4 +197,6 @@ npx @modelcontextprotocol/inspector cli `
 - `docs/threat-model.md`：PatchWarden 安全契约与敏感文件清单。
 - `docs/evidence-pack-schema.md`：Evidence Pack v2 文件结构。
 - `docs/dashboard-overview.md`：Control Center 与 safe-first 概念。
-- 上游草稿 PR：https://github.com/modelcontextprotocol/inspector/pull/1635
+- 上游文档提案：https://github.com/modelcontextprotocol/inspector/pull/1635
+  （已于 2026-07-31 关闭、未合并；Inspector v1 仅接受安全修复。
+  若该文档缺口在 v2 中仍存在，应按维护者建议改为提交 v2 issue。）

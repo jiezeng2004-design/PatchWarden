@@ -179,3 +179,6 @@ PatchWarden 的安全边界对两者一视同仁。
 - `docs/evidence-pack-schema.md`：Evidence Pack v2 文件结构。
 - `docs/why-patchwarden.md`：external supervisor pattern 的定位。
 - `docs/opencode-worker.md`：类似的 worker 集成模式（OpenCode）。
+- 上游文档提案：https://github.com/OpenHands/OpenHands/pull/15222
+  （已于 2026-07-27 在仓库迁移期间关闭，未合并；后续仅询问过是否应转移到
+  `OpenHands/docs`，尚无维护者确认，因此本文不代表 OpenHands 官方集成。）
